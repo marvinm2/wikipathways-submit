@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Local registry / env
+*.db
+*.db-wal
+*.db-shm
+.env
+
+# MVP-1 scratch (real pathway data pulled for testing the validator)
+mvp1/pathways/

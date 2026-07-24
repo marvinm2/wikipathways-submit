@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>wikipathways-submit</title>
+  <style>
+    :root { --fg:#1b1f24; --muted:#57606a; --line:#d0d7de; --accent:#1f6feb; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; }
+    * { box-sizing: border-box; }
+    body { margin:0; font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; color:var(--fg); }
+    header { display:flex; align-items:center; gap:1.5rem; padding:.7rem 1.2rem; border-bottom:1px solid var(--line); }
+    header .brand { font-weight:700; text-decoration:none; color:var(--fg); }
+    header nav { display:flex; align-items:center; gap:1rem; margin-left:auto; }
+    header a { color:var(--accent); text-decoration:none; }
+    header .who { color:var(--muted); font-size:.9em; }
+    main { max-width:820px; margin:1.5rem auto; padding:0 1.2rem; }
+    h1 { font-size:1.4rem; } h2 { font-size:1.1rem; margin:.2rem 0; }
+    button { font:inherit; padding:.3rem .7rem; border:1px solid var(--line); border-radius:6px; background:#f6f8fa; cursor:pointer; }
+    button.primary, button.approve { background:var(--accent); color:#fff; border-color:var(--accent); }
+    code { background:#eff1f3; padding:.1em .35em; border-radius:4px; }
+    pre { background:#f6f8fa; border:1px solid var(--line); border-radius:6px; padding:.6rem; overflow:auto; white-space:pre-wrap; }
+    section.review { border:1px solid var(--line); border-radius:8px; padding:1rem; margin:1rem 0; }
+    ul.checklist { list-style:none; padding:0; }
+    ul.checklist li { display:flex; align-items:center; gap:.5rem; padding:.25rem 0; }
+    .state { font-size:.75em; text-transform:uppercase; padding:.1em .5em; border-radius:10px; border:1px solid var(--line); min-width:4.2em; text-align:center; }
+    .state.pass { color:var(--ok); border-color:var(--ok); }
+    .state.fail { color:var(--bad); border-color:var(--bad); }
+    .state.pending { color:var(--muted); }
+    .state.na { color:var(--muted); }
+    .req { color:var(--bad); }
+    small { color:var(--muted); font-weight:normal; }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="brand" href="/">🧬 wikipathways-submit</a>
+    <nav>
+      <a href="/">Submit</a>
+      <a href="/dashboard">Dashboard</a>
+      {% if login %}
+        <span class="who">@{{ login }}{% if is_curator %} · curator{% endif %}</span>
+        <button onclick="logout()">Logout</button>
+      {% else %}
+        <a href="/auth/login">Login with GitHub</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+  <script>
+    async function logout() { await fetch('/auth/logout', {method:'POST'}); location.href='/'; }
+    {% block script %}{% endblock %}
+  </script>
+</body>
+</html>

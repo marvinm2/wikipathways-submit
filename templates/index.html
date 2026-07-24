@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Submit a pathway</h1>
+{% if login %}
+  <p>Signed in as <strong>@{{ login }}</strong>. A PR will be opened on
+     <code>{{ repo }}</code> as you.</p>
+  <form id="submit-form">
+    <p><input type="file" id="file" accept=".gpml,.xml" required></p>
+    <button class="primary" type="submit">Submit new pathway</button>
+  </form>
+  <pre id="out" hidden></pre>
+{% else %}
+  <p><a href="/auth/login">Login with GitHub</a> to submit a pathway.</p>
+{% endif %}
+{% endblock %}
+
+{% block script %}
+  const form = document.getElementById('submit-form');
+  if (form) form.onsubmit = async (e) => {
+    e.preventDefault();
+    const file = document.getElementById('file').files[0];
+    const out = document.getElementById('out');
+    out.hidden = false; out.textContent = 'Submitting ' + file.name + ' …';
+    const fd = new FormData(); fd.append('file', file);
+    const r = await fetch('/api/submit', {method:'POST', body:fd});
+    const j = await r.json();
+    if (r.ok) {
+      out.innerHTML = '✅ Assigned <b>' + j.wpid + '</b> — opened PR ' +
+        '<a href="' + j.pr_url + '" target="_blank">#' + j.pr_number + '</a> ' +
+        '(<code>' + j.path + '</code>). See the <a href="/dashboard">dashboard</a>.';
+    } else {
+      out.textContent = 'Error ' + r.status + ': ' + JSON.stringify(j.detail);
+    }
+  };
+{% endblock %}

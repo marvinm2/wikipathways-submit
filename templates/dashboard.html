@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Curation queue</h1>
+{% if not login %}
+  <p><a href="/auth/login">Login</a> to review.</p>
+{% elif not reviews %}
+  <p>No open reviews.</p>
+{% endif %}
+
+{% for r in reviews %}
+<section class="review" data-pr="{{ r.pr_number }}">
+  <h2>WP{{ r.wpid }} — PR #{{ r.pr_number }}
+      <small>{{ r.kind }} by @{{ r.submitter }}{% if r.assigned_curator %} · assigned @{{ r.assigned_curator }}{% endif %}</small></h2>
+  <ul class="checklist">
+    {% for it in r.checklist %}
+    <li>
+      <span class="state {{ it.state }}">{{ it.state }}</span>
+      <span>{{ it.label }}{% if it.required %} <span class="req" title="required">*</span>{% endif %}</span>
+      {% if is_curator %}
+        <span style="margin-left:auto">
+          <button onclick="setItem({{ r.pr_number }}, '{{ it.key }}', 'pass')">pass</button>
+          <button onclick="setItem({{ r.pr_number }}, '{{ it.key }}', 'fail')">fail</button>
+          <button onclick="setItem({{ r.pr_number }}, '{{ it.key }}', 'na')">n/a</button>
+        </span>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% if is_curator %}
+    <button class="approve" onclick="approve({{ r.pr_number }})">Approve &amp; merge</button>
+  {% else %}
+    <small>Only curators can approve.</small>
+  {% endif %}
+  <pre class="msg" hidden></pre>
+</section>
+{% endfor %}
+{% endblock %}
+
+{% block script %}
+  async function setItem(pr, key, state) {
+    const fd = new FormData(); fd.append('key', key); fd.append('state', state);
+    const r = await fetch('/api/reviews/' + pr + '/checklist', {method:'POST', body:fd});
+    if (r.ok) location.reload();
+    else showMsg(pr, 'Error ' + r.status);
+  }
+  async function approve(pr) {
+    const r = await fetch('/api/reviews/' + pr + '/approve', {method:'POST'});
+    const j = await r.json();
+    if (r.ok) location.reload();
+    else showMsg(pr, 'Error ' + r.status + ': ' + JSON.stringify(j.detail));
+  }
+  function showMsg(pr, text) {
+    const el = document.querySelector('[data-pr="' + pr + '"] .msg');
+    el.hidden = false; el.textContent = text;
+  }
+{% endblock %}
