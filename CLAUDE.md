@@ -15,7 +15,7 @@ repos.
 - `mvp1/` + `fork-staging/` — MVP-1 PR-preview pipeline (two GitHub Actions workflows +
   `validate_pathway.py`), adversarially reviewed and hardened. Ships to a **fork** of
   `wikipathways-database`; `fork-staging/CHECKLIST.md` is the test procedure. See `mvp1/README.md`.
-- `app/` — the FastAPI app (MVP-2 → MVP-4). Implemented + tested (73 tests): the transactional
+- `app/` — the FastAPI app (MVP-2 → MVP-4). Implemented + tested (85 tests): the transactional
   registry (`app/wpid/` atomic allocator, `app/locks/` pathway check-out lock — both with
   threaded race tests), app-owned GPML naming/layout (`app/submit/gpml.py`), the `GitHubClient`
   abstraction (`app/github/` — ABC + `FakeGitHubClient` + httpx impl), the **submission service**
@@ -49,6 +49,13 @@ repos.
   The **dashboard/landing UI was redesigned** (issue #7, `templates/` + `static/app.{css,js}`,
   server-rendered Jinja + vanilla JS, served from `/static`): landing/submit stepper, curation
   queue with before/after preview slots, reviewer assignment, per-review detail page.
+  **Curator whitelist resolves from a GitHub Team** (issue #9, `app/curators.py`,
+  `WPSUBMIT_CURATOR_TEAM='org/slug'`): TTL-cached, fail-closed, `WPSUBMIT_CURATORS` list is the
+  fallback. **OAuth token is encrypted at rest** (issue #4, `app/auth/session_tokens.py`, Fernet)
+  and `SessionMiddleware` `https_only` is config-driven. **Cluster deployment is authored** (issue
+  #5, `Dockerfile` + `docker-entrypoint.sh` + `.github/workflows/{ci,docker-publish}.yml` +
+  `docker-compose.yml` + `docs/deployment.md`; image builds/boots, not yet deployed live).
+  **Remaining open issues: #6** (MVP-1 preview validated on a real runner) and **#8's TTL tuning**.
   Everything is verified against `FakeGitHubClient` (tests override `get_github_client`,
   `get_bot_client`/`get_bot_optional`, `get_current_user`); the OAuth + App token flows are
   tested via injected `httpx.MockTransport`.
