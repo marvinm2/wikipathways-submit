@@ -20,7 +20,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -33,6 +33,7 @@ from app.db import make_engine, make_session_factory
 from app.github import GitHubClient, GitHubError, HttpGitHubClient
 from app.locks import LockUnavailable, PathwayLockRegistry
 from app.models import Base, ReviewStatus
+from app.preview import PreviewService
 from app.review.service import (
     ChecklistIncomplete,
     CurationService,
@@ -46,6 +47,19 @@ from app.wpid.github_floor import github_wpid_floor
 
 _ROOT = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(_ROOT / "templates"))
+
+# Serve preview SVGs with script execution disabled (SVGs can carry <script>): a strict CSP plus
+# the sandbox directive neutralises them even if a viewer opens the URL directly.
+_SVG_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    "Cache-Control": "public, max-age=300",
+}
+_PREVIEW_PLACEHOLDER = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" role="img" '
+    b'aria-label="Preview unavailable"><rect width="200" height="120" fill="#f6f8f3"/>'
+    b'<text x="100" y="63" text-anchor="middle" font-family="sans-serif" font-size="11" '
+    b'fill="#7c8a82">Preview unavailable</text></svg>'
+)
 
 
 def get_current_user(request: Request) -> str:
@@ -153,13 +167,24 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             encryption_key=settings.token_encryption_key,
             session_secret=settings.session_secret,
         )
+
+        def bot_provider() -> GitHubClient | None:
+            return HttpGitHubClient(bot_app.installation_token()) if bot_app else None
+
         # Curator whitelist: a GitHub Team if WPSUBMIT_CURATOR_TEAM is set, else the config list.
         app.state.curators = make_curator_registry(
             team=settings.curator_team,
             config_logins=settings.curators,
-            bot_client_provider=lambda: (
-                HttpGitHubClient(bot_app.installation_token()) if bot_app else None
-            ),
+            bot_client_provider=bot_provider,
+        )
+        # Pathway preview (before/after render) read from the PR-preview artifact (issue #11).
+        app.state.preview = PreviewService(
+            bot_provider,
+            repo=settings.content_repo,
+            cache_dir=settings.preview_cache_dir,
+            workflow_file=settings.preview_workflow_file,
+            artifact_name=settings.preview_artifact_name,
+            ttl_seconds=settings.preview_cache_ttl_seconds,
         )
         app.state.allocator = WpidAllocator(
             session_factory,
@@ -220,17 +245,34 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "is_curator": request.app.state.curators.is_curator(login),
         }
 
-    def _review_view(r) -> dict:
+    def _review_view(request: Request, r) -> dict:
         """The per-review dict the templates consume (design §4.5) — enriched beyond the API model.
 
-        ``preview`` is the before/after render + validation artifact from the MVP-1 pipeline;
-        None until that artifact is wired in (issue #6/#7), so templates show a "generating" state.
+        ``preview`` mirrors the before/after render from the MVP-1 pipeline artifact (issue #11):
+        cheap status only here (no download); the SVG bytes stream from ``/previews/...`` when the
+        browser requests them. Only open reviews are checked — merged/closed cards lead with their
+        resolved banner.
         """
+        pr_url = f"https://github.com/{settings.content_repo}/pull/{r.pr_number}"
+        preview = None
+        if r.status == ReviewStatus.OPEN:
+            status = request.app.state.preview.status(r.pr_number)
+            if status == "ready":
+                preview = {
+                    "status": "ready",
+                    "before_svg_url": f"/previews/{r.pr_number}/before.svg",
+                    "after_svg_url": f"/previews/{r.pr_number}/after.svg",
+                    "datanodes_url": f"{pr_url}/files",
+                    "validation_url": f"{pr_url}/checks",
+                }
+            elif status == "failed":
+                preview = {"status": "failed"}
+            # 'pending' → leave None so the template shows the "generating" empty state
         return {
             **_detail(r).model_dump(),
             "wpid_str": f"WP{r.wpid}",
-            "pr_url": f"https://github.com/{settings.content_repo}/pull/{r.pr_number}",
-            "preview": None,
+            "pr_url": pr_url,
+            "preview": preview,
         }
 
     @app.get("/", response_class=HTMLResponse)
@@ -241,7 +283,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/dashboard", response_class=HTMLResponse)
     def dashboard(request: Request, status: ReviewStatus = ReviewStatus.OPEN):
-        reviews = [_review_view(r) for r in _curation(request).list_queue(status=status)]
+        reviews = [_review_view(request, r) for r in _curation(request).list_queue(status=status)]
         return templates.TemplateResponse(
             request,
             "dashboard.html",
@@ -254,6 +296,26 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    @app.get("/previews/{pr_number}/{side}.svg")
+    def preview_svg(request: Request, pr_number: int, side: str):
+        # Serve the before/after render from the cached PR-preview artifact (issue #11). SVGs are
+        # served with a locked-down CSP + sandbox so a hostile SVG can't run script if opened
+        # directly; the dashboard only ever loads them via <img> (which already can't run script).
+        if side not in ("before", "after"):
+            raise HTTPException(status_code=404, detail="unknown preview side")
+        try:
+            wpid = _curation(request).get(pr_number).wpid
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        path = request.app.state.preview.svg_path(pr_number, wpid, side)
+        if path is None:
+            # Missing side (e.g. a new pathway has no "before", or the render is unavailable):
+            # a placeholder keeps the frame intact instead of a broken-image icon.
+            return Response(
+                content=_PREVIEW_PLACEHOLDER, media_type="image/svg+xml", headers=_SVG_HEADERS
+            )
+        return FileResponse(path, media_type="image/svg+xml", headers=_SVG_HEADERS)
+
     @app.get("/dashboard/{pr_number}", response_class=HTMLResponse)
     def review_page(request: Request, pr_number: int):
         try:
@@ -265,7 +327,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "review_detail.html",
             {
                 **_page_ctx(request),
-                "review": _review_view(r),
+                "review": _review_view(request, r),
                 "curators": sorted(request.app.state.curators.members()),
                 "repo": settings.content_repo,
             },

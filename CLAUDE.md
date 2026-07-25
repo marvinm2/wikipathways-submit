@@ -15,7 +15,7 @@ repos.
 - `mvp1/` + `fork-staging/` — MVP-1 PR-preview pipeline (two GitHub Actions workflows +
   `validate_pathway.py`), adversarially reviewed and hardened. Ships to a **fork** of
   `wikipathways-database`; `fork-staging/CHECKLIST.md` is the test procedure. See `mvp1/README.md`.
-- `app/` — the FastAPI app (MVP-2 → MVP-4). Implemented + tested (85 tests): the transactional
+- `app/` — the FastAPI app (MVP-2 → MVP-4). Implemented + tested (96 tests): the transactional
   registry (`app/wpid/` atomic allocator, `app/locks/` pathway check-out lock — both with
   threaded race tests), app-owned GPML naming/layout (`app/submit/gpml.py`), the `GitHubClient`
   abstraction (`app/github/` — ABC + `FakeGitHubClient` + httpx impl), the **submission service**
@@ -42,6 +42,14 @@ repos.
   + finalises the reservation (MERGED if merged, returned to the pool if closed unmerged) +
   terminalises the review — idempotent, so a PR closed *outside* the app no longer waits for the
   TTL. TTL tuning against real behaviour remains open.
+  **The before/after pathway preview is wired** (issue #11, `app/preview/`): the app reads the
+  SVGs the PR-preview workflow uploads as a run artifact (via the bot's Actions read), extracts
+  `WP<id>-after.svg`/`WP<id>.svg` (after, prefers the dedicated `-after`) + `WP<id>-before.svg`
+  (before), caches them, and serves them at `GET /previews/{pr}/{before,after}.svg` (locked-down
+  CSP + sandbox so a hostile SVG can't run script). `_review_view` fills the dashboard `preview`
+  slot from a cheap `PreviewService.status()`; bytes stream lazily. The renderer is external:
+  `fork-staging` adds a **PinPath** (`drawGPML`) render step producing before+after SVGs
+  (authored, **not yet validated on a live runner** — that's #6).
   **Alembic is wired** (issue #2): `migrations/` + `alembic.ini`; `create_all` now runs **only**
   for SQLite dev, Postgres deploys run `alembic upgrade head` (`docs/migrations.md`); a test
   asserts zero drift between the migration and the models. Checklist/assign endpoints are now

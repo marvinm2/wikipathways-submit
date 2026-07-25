@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     # a Docker secret in production. Absent → POST /webhooks/github returns 503.
     github_webhook_secret: str | None = None
 
+    # Pathway preview (before/after render, issue #11). The app reads the SVGs the PR-preview
+    # workflow uploads as a run artifact and serves them to the dashboard. Needs the bot identity
+    # (Actions read); without it, previews stay in the "generating" state.
+    preview_workflow_file: str = "pr-preview.yml"
+    preview_artifact_name: str = "pr-preview"
+    preview_cache_dir: str = "./preview-cache"
+    preview_cache_ttl_seconds: int = 60
+
     # Per-user OAuth (submitter identity, scaffolding-plan §3). Absent → auth routes 503.
     github_oauth_client_id: str | None = None
     github_oauth_client_secret: str | None = None

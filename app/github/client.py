@@ -91,6 +91,23 @@ class GitHubClient(ABC):
     def list_team_members(self, org: str, team_slug: str) -> list[str]:
         """Return the logins of the members of ``org/team_slug`` (curator whitelist, issue #9)."""
 
+    @abstractmethod
+    def pr_preview_status(
+        self, repo: str, pr_number: int, *, workflow_file: str, artifact_name: str
+    ) -> str:
+        """State of the PR-preview render for ``pr_number`` (issue #11), *without* downloading it.
+
+        One of: ``"pending"`` (workflow not run / still running), ``"ready"`` (completed
+        successfully with the preview artifact present), ``"failed"`` (run failed / artifact
+        missing), ``"absent"`` (no such PR). Cheap: no artifact bytes are transferred.
+        """
+
+    @abstractmethod
+    def download_pr_preview_zip(
+        self, repo: str, pr_number: int, *, workflow_file: str, artifact_name: str
+    ) -> bytes | None:
+        """Download the PR-preview artifact zip for ``pr_number``, or None if not available."""
+
 
 class FakeGitHubClient(GitHubClient):
     """In-memory GitHubClient for tests. Records every mutation; can simulate failures.
@@ -106,6 +123,7 @@ class FakeGitHubClient(GitHubClient):
         existing_files: dict[str, str] | None = None,
         fail_on: set[str] | None = None,
         team_members: dict[str, list[str]] | None = None,
+        previews: dict[int, dict] | None = None,
     ) -> None:
         # {(repo, branch): sha}
         self.branches: dict[tuple[str, str], str] = {}
@@ -126,6 +144,8 @@ class FakeGitHubClient(GitHubClient):
         self.comments: dict[tuple[str, int], dict[str, str]] = {}
         # {"org/team-slug": [login, ...]}
         self.team_members = dict(team_members or {})
+        # {pr_number: {"status": str, "zip": bytes | None}} — PR-preview artifact (issue #11).
+        self.previews = dict(previews or {})
         self.fail_on = fail_on or set()
         self._next_pr = 1
 
@@ -204,6 +224,18 @@ class FakeGitHubClient(GitHubClient):
     def list_team_members(self, org: str, team_slug: str) -> list[str]:
         self._maybe_fail("list_team_members")
         return list(self.team_members.get(f"{org}/{team_slug}", []))
+
+    def pr_preview_status(
+        self, repo: str, pr_number: int, *, workflow_file: str, artifact_name: str
+    ) -> str:
+        self._maybe_fail("pr_preview_status")
+        return self.previews.get(pr_number, {}).get("status", "absent")
+
+    def download_pr_preview_zip(
+        self, repo: str, pr_number: int, *, workflow_file: str, artifact_name: str
+    ) -> bytes | None:
+        self._maybe_fail("download_pr_preview_zip")
+        return self.previews.get(pr_number, {}).get("zip")
 
 
 @dataclass
@@ -353,3 +385,59 @@ class HttpGitHubClient(GitHubClient):
                 break
             page += 1
         return members
+
+    def _latest_preview_run(self, repo: str, pr_number: int, workflow_file: str):
+        """Return (status, run_id) for the newest preview run on the PR's head SHA.
+
+        status ∈ pending|success|failed|absent; run_id is None unless the run completed OK.
+        """
+        pr = self._client.get(f"/repos/{repo}/pulls/{pr_number}")
+        if pr.status_code == 404:
+            return "absent", None
+        self._raise_for(pr, f"get_pull({pr_number})")
+        head_sha = pr.json()["head"]["sha"]
+        runs = self._client.get(
+            f"/repos/{repo}/actions/workflows/{workflow_file}/runs",
+            params={"head_sha": head_sha, "per_page": 1},
+        )
+        self._raise_for(runs, "list_workflow_runs")
+        items = runs.json().get("workflow_runs", [])
+        if not items:
+            return "pending", None
+        run = items[0]
+        if run.get("status") != "completed":
+            return "pending", None
+        if run.get("conclusion") != "success":
+            return "failed", None
+        return "success", run["id"]
+
+    def _preview_artifact_id(self, repo: str, run_id: int, artifact_name: str) -> int | None:
+        resp = self._client.get(f"/repos/{repo}/actions/runs/{run_id}/artifacts")
+        self._raise_for(resp, f"list_run_artifacts({run_id})")
+        for art in resp.json().get("artifacts", []):
+            if art.get("name") == artifact_name and not art.get("expired"):
+                return art["id"]
+        return None
+
+    def pr_preview_status(
+        self, repo: str, pr_number: int, *, workflow_file: str, artifact_name: str
+    ) -> str:
+        status, run_id = self._latest_preview_run(repo, pr_number, workflow_file)
+        if status != "success":
+            return {"absent": "absent", "pending": "pending"}.get(status, "failed")
+        return "ready" if self._preview_artifact_id(repo, run_id, artifact_name) else "failed"
+
+    def download_pr_preview_zip(
+        self, repo: str, pr_number: int, *, workflow_file: str, artifact_name: str
+    ) -> bytes | None:
+        status, run_id = self._latest_preview_run(repo, pr_number, workflow_file)
+        if status != "success":
+            return None
+        artifact_id = self._preview_artifact_id(repo, run_id, artifact_name)
+        if artifact_id is None:
+            return None
+        resp = self._client.get(
+            f"/repos/{repo}/actions/artifacts/{artifact_id}/zip", follow_redirects=True
+        )
+        self._raise_for(resp, f"download_artifact({artifact_id})")
+        return resp.content
