@@ -15,7 +15,7 @@ repos.
 - `mvp1/` + `fork-staging/` — MVP-1 PR-preview pipeline (two GitHub Actions workflows +
   `validate_pathway.py`), adversarially reviewed and hardened. Ships to a **fork** of
   `wikipathways-database`; `fork-staging/CHECKLIST.md` is the test procedure. See `mvp1/README.md`.
-- `app/` — the FastAPI app (MVP-2 → MVP-4). Implemented + tested (50 tests): the transactional
+- `app/` — the FastAPI app (MVP-2 → MVP-4). Implemented + tested (85 tests): the transactional
   registry (`app/wpid/` atomic allocator, `app/locks/` pathway check-out lock — both with
   threaded race tests), app-owned GPML naming/layout (`app/submit/gpml.py`), the `GitHubClient`
   abstraction (`app/github/` — ABC + `FakeGitHubClient` + httpx impl), the **submission service**
@@ -29,10 +29,36 @@ repos.
   **GitHub OAuth is wired** (`app/auth/`, `/auth/login|callback|logout|me`): writes act as the
   logged-in user (`get_current_user` reads the session, never a form field), and endpoints return
   **401** when not logged in. Configure it per `docs/oauth-setup.md` (register a GitHub OAuth App,
-  set `WPSUBMIT_*` env vars). **Not yet wired:** the GitHub App (bot) identity for merge/comment
-  — currently the curator's own OAuth token merges — and Alembic migrations (dev uses `create_all`).
-  Everything is verified against `FakeGitHubClient` (tests override `get_github_client` +
-  `get_current_user`); the OAuth flow itself is tested via an injected `httpx.MockTransport`.
+  set `WPSUBMIT_*` env vars).
+  **GitHub App (bot) identity is wired** (`app/auth/github_app.py`, issue #1): RS256 JWT →
+  cached installation token; the **merge** (`approve_and_merge`) and the **read-only PR mirror
+  comment** (`render_mirror_comment` / `upsert_issue_comment`, best-effort — swallows both
+  `GitHubError` and `httpx.HTTPError` so a comment blip never fails an already-merged action)
+  run as the bot via `get_bot_client` (503 if unconfigured) / `get_bot_optional`, never a
+  curator's personal token. The bot's installation token also feeds the WPID floor when no
+  `WPSUBMIT_GITHUB_TOKEN` is set (issue #3). Configure per `docs/github-app-setup.md`.
+  **The GitHub webhook is wired** (issue #8): `POST /webhooks/github` verifies HMAC-SHA256
+  (`WPSUBMIT_GITHUB_WEBHOOK_SECRET`) and, on a `pull_request` `closed` event, releases the lock
+  + finalises the reservation (MERGED if merged, returned to the pool if closed unmerged) +
+  terminalises the review — idempotent, so a PR closed *outside* the app no longer waits for the
+  TTL. TTL tuning against real behaviour remains open.
+  **Alembic is wired** (issue #2): `migrations/` + `alembic.ini`; `create_all` now runs **only**
+  for SQLite dev, Postgres deploys run `alembic upgrade head` (`docs/migrations.md`); a test
+  asserts zero drift between the migration and the models. Checklist/assign endpoints are now
+  curator-gated (403 for non-curators), matching approve.
+  The **dashboard/landing UI was redesigned** (issue #7, `templates/` + `static/app.{css,js}`,
+  server-rendered Jinja + vanilla JS, served from `/static`): landing/submit stepper, curation
+  queue with before/after preview slots, reviewer assignment, per-review detail page.
+  **Curator whitelist resolves from a GitHub Team** (issue #9, `app/curators.py`,
+  `WPSUBMIT_CURATOR_TEAM='org/slug'`): TTL-cached, fail-closed, `WPSUBMIT_CURATORS` list is the
+  fallback. **OAuth token is encrypted at rest** (issue #4, `app/auth/session_tokens.py`, Fernet)
+  and `SessionMiddleware` `https_only` is config-driven. **Cluster deployment is authored** (issue
+  #5, `Dockerfile` + `docker-entrypoint.sh` + `.github/workflows/{ci,docker-publish}.yml` +
+  `docker-compose.yml` + `docs/deployment.md`; image builds/boots, not yet deployed live).
+  **Remaining open issues: #6** (MVP-1 preview validated on a real runner) and **#8's TTL tuning**.
+  Everything is verified against `FakeGitHubClient` (tests override `get_github_client`,
+  `get_bot_client`/`get_bot_optional`, `get_current_user`); the OAuth + App token flows are
+  tested via injected `httpx.MockTransport`.
 
 ### Commands
 

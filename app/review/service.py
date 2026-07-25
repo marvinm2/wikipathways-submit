@@ -7,16 +7,54 @@ completes the lifecycle — promoting the WPID reservation to MERGED and releasi
 """
 from __future__ import annotations
 
-from collections.abc import Iterable
-
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.github import GitHubClient
+from app.curators import CuratorRegistry
+from app.github import GitHubClient, GitHubError
 from app.locks import PathwayLockRegistry
 from app.models import Review, ReviewStatus, utcnow
 from app.review.checklist import ChecklistState, is_complete, is_valid_key
 from app.wpid import WpidAllocator
+
+#: Hidden token embedded in the mirror comment so we update the same one instead of spamming.
+MIRROR_MARKER = "<!-- wikipathways-submit:mirror -->"
+
+_STATE_ICON = {"pass": "✅", "fail": "❌", "na": "➖", "pending": "⬜"}
+
+
+def render_mirror_comment(review: Review, repo: str) -> str:
+    """Render the read-only PR mirror comment (design §4.5): checklist + approval state.
+
+    Approval always flows through the app, so this comment is a *mirror* — it tells GitHub-native
+    reviewers the current state and points them back to the dashboard to act.
+    """
+    lines = [
+        MIRROR_MARKER,
+        f"### 🧬 WikiPathways curation — WP{review.wpid}",
+        "",
+        f"**Status:** `{review.status.value}` · **Submitter:** @{review.submitter} · "
+        f"**Kind:** {review.kind}"
+        + (f" · **Assigned:** @{review.assigned_curator}" if review.assigned_curator else ""),
+        "",
+        "| | Check | |",
+        "|---|---|---|",
+    ]
+    for item in review.checklist:
+        req = " *(required)*" if item.get("required") else ""
+        icon = _STATE_ICON.get(item.get("state", "pending"), "⬜")
+        note = f" — {item['note']}" if item.get("note") else ""
+        lines.append(f"| {icon} | {item['label']}{req}{note} | `{item.get('state', 'pending')}` |")
+    if review.approved_by:
+        lines += ["", f"**Approved & merged by** @{review.approved_by}."]
+    lines += [
+        "",
+        "> This comment is **read-only** and auto-generated. Review and approve in the "
+        "curation dashboard — approval flows through the app so this comment and the dashboard "
+        "cannot disagree.",
+    ]
+    return "\n".join(lines)
 
 
 class ReviewNotFound(RuntimeError):
@@ -38,19 +76,41 @@ class CurationService:
         github: GitHubClient | None,
         *,
         repo: str,
-        curators: Iterable[str],
+        curators: CuratorRegistry,
         allocator: WpidAllocator | None = None,
         locks: PathwayLockRegistry | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._github = github
         self._repo = repo
-        self._curators = set(curators)
+        self._curators = curators
         self._allocator = allocator
         self._locks = locks
 
     def is_curator(self, user: str) -> bool:
-        return user in self._curators
+        return self._curators.is_curator(user)
+
+    def _maybe_mirror(self, review: Review) -> None:
+        """Best-effort: sync the read-only PR mirror comment via the bot client.
+
+        Never fail the primary action on a comment hiccup — the app dashboard is the source of
+        truth; the mirror is a convenience for GitHub-native reviewers.
+        """
+        if self._github is None:
+            return
+        try:
+            self._github.upsert_issue_comment(
+                self._repo,
+                review.pr_number,
+                render_mirror_comment(review, self._repo),
+                marker=MIRROR_MARKER,
+            )
+        except (GitHubError, httpx.HTTPError):
+            # Both API status errors (GitHubError) AND transport failures (httpx: connect
+            # refused, timeout, DNS) — raised by the real client *before* _raise_for runs — must
+            # be swallowed. The merge/PR has already happened; a comment hiccup must not surface
+            # as a 500 on an action that already succeeded.
+            pass
 
     def register(self, *, pr_number: int, wpid: int, submitter: str, kind: str) -> Review:
         """Create the review row for a freshly opened submission PR (idempotent by PR number)."""
@@ -62,6 +122,7 @@ class CurationService:
                 )
                 s.add(review)
                 s.commit()
+            self._maybe_mirror(review)
             return review
 
     def list_queue(self, *, status: ReviewStatus = ReviewStatus.OPEN) -> list[Review]:
@@ -86,6 +147,7 @@ class CurationService:
                 raise ReviewNotFound(f"no review for PR #{pr_number}")
             review.assigned_curator = curator
             s.commit()
+            self._maybe_mirror(review)
             return review
 
     def set_checklist_item(
@@ -107,10 +169,11 @@ class CurationService:
                     item["note"] = note
             review.checklist = checklist
             s.commit()
+            self._maybe_mirror(review)
             return review
 
     def approve_and_merge(self, pr_number: int, curator: str) -> Review:
-        if curator not in self._curators:
+        if not self._curators.is_curator(curator):
             raise NotACurator(f"{curator} is not on the curator whitelist")
         if self._github is None:
             raise RuntimeError("no GitHub client configured for merge")
@@ -140,4 +203,40 @@ class CurationService:
             review.approved_by = curator
             review.merged_at = utcnow()
             s.commit()
+            self._maybe_mirror(review)
+            return review
+
+    def handle_pr_closed(self, pr_number: int, *, merged: bool) -> Review | None:
+        """React to a PR closed/merged **outside** the app (webhook, issue #8).
+
+        Frees the pathway lock, finalises the WPID reservation (permanent if merged, returned to
+        the pool if closed unmerged), and moves the review to a terminal state. Idempotent: a
+        duplicate delivery — or the webhook for a merge the app itself performed — is a no-op
+        because the review is already terminal. Returns None if the PR isn't one we track.
+        """
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            if review is None:
+                return None
+            if review.status in (ReviewStatus.MERGED, ReviewStatus.CLOSED):
+                return review
+            wpid = review.wpid
+
+        # Lock always frees; the reservation is promoted (merged) or returned to the pool (closed).
+        # release() no-ops on a MERGED/absent reservation, so this is safe for update PRs too.
+        if self._locks is not None:
+            self._locks.release(wpid, "webhook", force=True)
+        if self._allocator is not None:
+            if merged:
+                self._allocator.mark_merged(wpid, pr_number=pr_number)
+            else:
+                self._allocator.release(wpid)
+
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            review.status = ReviewStatus.MERGED if merged else ReviewStatus.CLOSED
+            if merged:
+                review.merged_at = utcnow()
+            s.commit()
+            self._maybe_mirror(review)
             return review

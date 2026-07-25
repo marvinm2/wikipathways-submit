@@ -76,6 +76,21 @@ class GitHubClient(ABC):
     def merge_pull_request(self, repo: str, pr_number: int, *, method: str = "squash") -> None:
         """Merge a PR. Raises GitHubError if the merge is not allowed."""
 
+    @abstractmethod
+    def upsert_issue_comment(
+        self, repo: str, issue_number: int, body: str, *, marker: str
+    ) -> None:
+        """Post ``body`` as an issue/PR comment, or update the existing one carrying ``marker``.
+
+        ``marker`` is a hidden token (an HTML comment) embedded in the body so the app keeps a
+        single read-only *mirror* comment in sync instead of spamming the PR on every update.
+        A privileged (bot) operation — the mirror must not be attributed to the submitter.
+        """
+
+    @abstractmethod
+    def list_team_members(self, org: str, team_slug: str) -> list[str]:
+        """Return the logins of the members of ``org/team_slug`` (curator whitelist, issue #9)."""
+
 
 class FakeGitHubClient(GitHubClient):
     """In-memory GitHubClient for tests. Records every mutation; can simulate failures.
@@ -90,6 +105,7 @@ class FakeGitHubClient(GitHubClient):
         default_branches: dict[str, str] | None = None,
         existing_files: dict[str, str] | None = None,
         fail_on: set[str] | None = None,
+        team_members: dict[str, list[str]] | None = None,
     ) -> None:
         # {(repo, branch): sha}
         self.branches: dict[tuple[str, str], str] = {}
@@ -106,6 +122,10 @@ class FakeGitHubClient(GitHubClient):
         self.files: dict[tuple[str, str, str], tuple[str, str, str | None]] = {}
         self.pulls: list[PullRequest] = []
         self.merged: set[int] = set()
+        # {(repo, issue_number): {marker: body}} — one comment per marker (upsert semantics).
+        self.comments: dict[tuple[str, int], dict[str, str]] = {}
+        # {"org/team-slug": [login, ...]}
+        self.team_members = dict(team_members or {})
         self.fail_on = fail_on or set()
         self._next_pr = 1
 
@@ -175,6 +195,16 @@ class FakeGitHubClient(GitHubClient):
         self._maybe_fail("merge_pull_request")
         self.merged.add(pr_number)
 
+    def upsert_issue_comment(
+        self, repo: str, issue_number: int, body: str, *, marker: str
+    ) -> None:
+        self._maybe_fail("upsert_issue_comment")
+        self.comments.setdefault((repo, issue_number), {})[marker] = body
+
+    def list_team_members(self, org: str, team_slug: str) -> list[str]:
+        self._maybe_fail("list_team_members")
+        return list(self.team_members.get(f"{org}/{team_slug}", []))
+
 
 @dataclass
 class HttpGitHubClient(GitHubClient):
@@ -186,11 +216,13 @@ class HttpGitHubClient(GitHubClient):
 
     token: str
     base_url: str = _GITHUB_API
+    transport: httpx.BaseTransport | None = None  # injection seam for tests
     _client: httpx.Client = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._client = httpx.Client(
             base_url=self.base_url,
+            transport=self.transport,
             headers={
                 "Authorization": f"Bearer {self.token}",
                 "Accept": "application/vnd.github+json",
@@ -279,3 +311,45 @@ class HttpGitHubClient(GitHubClient):
             f"/repos/{repo}/pulls/{pr_number}/merge", json={"merge_method": method}
         )
         self._raise_for(resp, f"merge_pull_request({pr_number})")
+
+    def upsert_issue_comment(
+        self, repo: str, issue_number: int, body: str, *, marker: str
+    ) -> None:
+        # Find our existing mirror comment (first page is plenty — the PR won't have hundreds).
+        resp = self._client.get(
+            f"/repos/{repo}/issues/{issue_number}/comments", params={"per_page": 100}
+        )
+        self._raise_for(resp, f"list_comments({issue_number})")
+        existing_id: int | None = None
+        for comment in resp.json():
+            if marker in (comment.get("body") or ""):
+                existing_id = comment["id"]
+                break
+        if existing_id is not None:
+            resp = self._client.patch(
+                f"/repos/{repo}/issues/comments/{existing_id}", json={"body": body}
+            )
+            self._raise_for(resp, f"update_comment({existing_id})")
+        else:
+            resp = self._client.post(
+                f"/repos/{repo}/issues/{issue_number}/comments", json={"body": body}
+            )
+            self._raise_for(resp, f"create_comment({issue_number})")
+
+    def list_team_members(self, org: str, team_slug: str) -> list[str]:
+        members: list[str] = []
+        page = 1
+        while True:
+            resp = self._client.get(
+                f"/orgs/{org}/teams/{team_slug}/members",
+                params={"per_page": 100, "page": page},
+            )
+            self._raise_for(resp, f"list_team_members({org}/{team_slug})")
+            batch = resp.json()
+            if not batch:
+                break
+            members.extend(m["login"] for m in batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return members
