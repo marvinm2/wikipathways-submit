@@ -11,6 +11,7 @@
   <div class="shell">
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header">
+     <div class="site-header__inner">
       <a class="site-header__brand" href="/">
         <svg class="site-header__mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <circle cx="5" cy="6" r="2.4" stroke="currentColor" stroke-width="1.6"/>
@@ -33,10 +34,13 @@
           <a href="/auth/login">Log in with GitHub</a>
         {% endif %}
       </nav>
+     </div>
     </header>
 
     <main id="main">
-      {% block content %}{% endblock %}
+      <div class="container">
+        {% block content %}{% endblock %}
+      </div>
     </main>
 
     <footer class="site-footer">

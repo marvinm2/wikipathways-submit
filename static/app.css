@@ -39,6 +39,7 @@
 
   --focus: #2f6fd6;
 
+  --container: 1080px;
   --radius-s: 6px;
   --radius-m: 10px;
   --radius-l: 18px;
@@ -126,15 +127,21 @@ button { font: inherit; }
 .shell { min-height: 100vh; display: flex; flex-direction: column; }
 
 .site-header {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.85rem 1.5rem;
+  padding: 0.85rem 0;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
   position: sticky;
   top: 0;
   z-index: 20;
+}
+.site-header__inner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  max-width: var(--container);
+  margin: 0 auto;
+  width: 100%;
+  padding: 0 1.5rem;   /* match .container so the brand lines up with page content */
 }
 .site-header__brand {
   display: flex;
@@ -183,11 +190,10 @@ button { font: inherit; }
 
 main { flex: 1; }
 .container {
-  max-width: 900px;
+  max-width: var(--container);
   margin: 0 auto;
   padding: 2.2rem 1.5rem 4rem;
 }
-.container--wide { max-width: 1080px; }
 
 .site-footer {
   border-top: 1px solid var(--line);
@@ -681,7 +687,7 @@ main { flex: 1; }
   background: var(--surface);
   color: var(--ink);
 }
-.review-card__actions .btn--approve { flex: 1 1 220px; width: auto; }
+.review-card__actions .btn--approve { flex: 0 0 auto; width: auto; margin-left: auto; }
 .review-card__readonly { color: var(--ink-faint); font-size: 0.85rem; margin: 1.1rem 0 0; }
 
 .review-card__resolved {
