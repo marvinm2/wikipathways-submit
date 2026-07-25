@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% from "dashboard.html" import review_card %}
+{% block title %}{{ review.wpid_str }} &middot; PR #{{ review.pr_number }} &mdash; wikipathways-submit{% endblock %}
+
+{% block content %}
+<a class="breadcrumb" href="/dashboard">
+  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3L4 8l6 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  Back to queue
+</a>
+
+{% if not login %}
+  <p><a href="/auth/login">Log in</a> to review this submission.</p>
+{% else %}
+  <p class="lede">Reviewing PR #{{ review.pr_number }} against <code>{{ repo }}</code>.</p>
+  {{ review_card(review, is_curator, curators, expanded=True) }}
+{% endif %}
+{% endblock %}

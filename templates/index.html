@@ -1,35 +1,85 @@
 {% extends "base.html" %}
-{% block content %}
-<h1>Submit a pathway</h1>
-{% if login %}
-  <p>Signed in as <strong>@{{ login }}</strong>. A PR will be opened on
-     <code>{{ repo }}</code> as you.</p>
-  <form id="submit-form">
-    <p><input type="file" id="file" accept=".gpml,.xml" required></p>
-    <button class="primary" type="submit">Submit new pathway</button>
-  </form>
-  <pre id="out" hidden></pre>
-{% else %}
-  <p><a href="/auth/login">Login with GitHub</a> to submit a pathway.</p>
-{% endif %}
-{% endblock %}
+{% block title %}wikipathways-submit — submit a pathway{% endblock %}
 
-{% block script %}
-  const form = document.getElementById('submit-form');
-  if (form) form.onsubmit = async (e) => {
-    e.preventDefault();
-    const file = document.getElementById('file').files[0];
-    const out = document.getElementById('out');
-    out.hidden = false; out.textContent = 'Submitting ' + file.name + ' …';
-    const fd = new FormData(); fd.append('file', file);
-    const r = await fetch('/api/submit', {method:'POST', body:fd});
-    const j = await r.json();
-    if (r.ok) {
-      out.innerHTML = '✅ Assigned <b>' + j.wpid + '</b> — opened PR ' +
-        '<a href="' + j.pr_url + '" target="_blank">#' + j.pr_number + '</a> ' +
-        '(<code>' + j.path + '</code>). See the <a href="/dashboard">dashboard</a>.';
-    } else {
-      out.textContent = 'Error ' + r.status + ': ' + JSON.stringify(j.detail);
-    }
-  };
+{% block content %}
+{% if not login %}
+<section class="hero">
+  <svg class="hero__graphic" viewBox="0 0 200 200" fill="none" aria-hidden="true">
+    <circle cx="40" cy="35" r="7" stroke="currentColor" stroke-width="2"/>
+    <circle cx="150" cy="55" r="7" stroke="currentColor" stroke-width="2"/>
+    <circle cx="100" cy="110" r="9" stroke="currentColor" stroke-width="2"/>
+    <circle cx="30" cy="150" r="6" stroke="currentColor" stroke-width="2"/>
+    <circle cx="165" cy="150" r="6" stroke="currentColor" stroke-width="2"/>
+    <circle cx="105" cy="185" r="5" stroke="currentColor" stroke-width="2"/>
+    <path d="M46 40L94 104M144 60L106 105M100 119L36 145M106 118L160 145M100 119L104 178M40 156L100 119" stroke="currentColor" stroke-width="1.6"/>
+  </svg>
+
+  <span class="hero__eyebrow reveal">Front door for wikipathways-database</span>
+  <h1 class="reveal">Submit and curate pathways &mdash; without touching git.</h1>
+  <p class="hero__lede reveal">
+    Upload a GPML file. The app assigns the WPID, names and lays out the file the way the
+    database expects, and opens a real pull request on <code>{{ repo }}</code> as you.
+    Curators get a dashboard with a before/after render and a structured checklist &mdash;
+    approving it merges the PR.
+  </p>
+  <div class="hero__cta reveal">
+    <a class="btn btn--github" href="/auth/login">
+      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.7-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+      Log in with GitHub
+    </a>
+    <span class="hero__cta-note">Free, uses your existing GitHub account &mdash; no new password.</span>
+  </div>
+</section>
+
+<ul class="steps">
+  <li>
+    <h3>Upload your GPML</h3>
+    <p>Drop in a <code>.gpml</code> file. No local clone, no branch naming to get right.</p>
+  </li>
+  <li>
+    <h3>We open the pull request</h3>
+    <p>The app assigns the WPID, writes the file to its expected path, and opens the PR under your name.</p>
+  </li>
+  <li>
+    <h3>Curators review and merge</h3>
+    <p>A checklist-driven dashboard replaces manual GitHub review &mdash; approving it merges automatically.</p>
+  </li>
+</ul>
+
+{% else %}
+<h1>Submit a pathway</h1>
+<p class="lede">
+  Signed in as <strong>@{{ login }}</strong>. Submitting opens a pull request on
+  <code>{{ repo }}</code>, attributed to your GitHub account.
+</p>
+
+<div class="stepper-flow">
+  <form id="validate-form" class="step-card">
+    <span class="step-card__eyebrow">Step 1 &middot; Validate</span>
+    <h2>Check your file before it becomes a pull request</h2>
+    <p class="hint">We'll parse the GPML, confirm the organism, and show where it will be saved.</p>
+    <div class="file-field">
+      <input type="file" id="file-input" accept=".gpml,.xml" required aria-describedby="file-hint">
+    </div>
+    <span id="file-hint" class="visually-hidden">Accepts .gpml or .xml pathway files</span>
+    <button type="submit" id="validate-btn" class="btn btn--primary">Validate &amp; preview</button>
+
+    <dl class="preview-card" id="preview-card" hidden>
+      <dt>Name</dt><dd id="preview-name">&mdash;</dd>
+      <dt>Organism</dt><dd id="preview-organism">&mdash;</dd>
+      <dt>Embedded WPID</dt><dd id="preview-wpid">&mdash;</dd>
+      <dt>Will save to</dt><dd id="preview-path">&mdash;</dd>
+    </dl>
+  </form>
+
+  <form id="submit-step" class="step-card" data-disabled="true">
+    <span class="step-card__eyebrow">Step 2 &middot; Submit</span>
+    <h2>Open the pull request</h2>
+    <p class="hint">Uses the file you validated above. This creates a real PR on <code>{{ repo }}</code>.</p>
+    <button type="submit" id="submit-btn" class="btn btn--primary" disabled>Submit new pathway</button>
+
+    <div class="result-card" id="result-card" hidden></div>
+  </form>
+</div>
+{% endif %}
 {% endblock %}

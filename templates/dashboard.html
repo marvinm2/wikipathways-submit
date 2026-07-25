@@ -1,56 +1,156 @@
 {% extends "base.html" %}
+{% block title %}wikipathways-submit — curation queue{% endblock %}
+
+{% macro state_icon(state) %}
+  {% if state == 'pass' %}<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  {% elif state == 'fail' %}<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  {% elif state == 'na' %}<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 8h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  {% else %}<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.6"/></svg>
+  {% endif %}
+{% endmacro %}
+
+{% macro preview_frame(label, url, alt) %}
+<figure class="preview__frame">
+  <figcaption>{{ label }}</figcaption>
+  {% if url %}
+    <img src="{{ url }}" alt="{{ alt }}" loading="lazy">
+  {% else %}
+    <div class="preview__empty">
+      <span class="preview__dots" aria-hidden="true"><span></span><span></span><span></span></span>
+      Rendering&hellip;
+    </div>
+  {% endif %}
+</figure>
+{% endmacro %}
+
+{% macro review_card(r, is_curator, curators, expanded=False) %}
+<article class="review-card{% if expanded %} review-card--expanded{% endif %}" data-pr="{{ r.pr_number }}" data-status="{{ r.status }}">
+  <div class="review-card__head">
+    <div class="tag-wpid{% if expanded %} tag-wpid--lg{% endif %}">
+      <span class="tag-wpid__dot" aria-hidden="true"></span>
+      <span class="tag-wpid__id">{{ r.wpid_str }}</span>
+    </div>
+    <div class="review-card__meta">
+      <span class="badge badge--{{ r.kind }}">{{ 'New pathway' if r.kind == 'new' else 'Update' }}</span>
+      <span class="badge badge--{{ r.status }}">{{ r.status }}</span>
+      <a class="review-card__pr" href="{{ r.pr_url }}" target="_blank" rel="noopener">PR #{{ r.pr_number }}</a>
+    </div>
+    {% if not expanded %}
+    <a class="review-card__expand" href="/dashboard/{{ r.pr_number }}" aria-label="Open full review for {{ r.wpid_str }}">
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3h7v7M13 3L3 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </a>
+    {% endif %}
+  </div>
+
+  <p class="review-card__submitter">
+    Submitted by <strong>@{{ r.submitter }}</strong>{% if r.assigned_curator %} &middot; assigned to <strong>@{{ r.assigned_curator }}</strong>{% endif %}
+  </p>
+
+  <div class="preview">
+    {% if r.kind == 'update' %}
+      {{ preview_frame('Before', r.preview.before_svg_url if r.preview and r.preview.status == 'ready' else None, 'Pathway diagram before this change') }}
+      <div class="preview__edge" aria-hidden="true">
+        <svg viewBox="0 0 32 16" fill="none"><path class="edge-flow" d="M1 8h22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 3l7 5-7 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      {{ preview_frame('After', r.preview.after_svg_url if r.preview and r.preview.status == 'ready' else None, 'Pathway diagram after this change') }}
+    {% else %}
+      <figure class="preview__frame preview__frame--solo">
+        <figcaption>Preview</figcaption>
+        {% if r.preview and r.preview.status == 'ready' and r.preview.after_svg_url %}
+          <img src="{{ r.preview.after_svg_url }}" alt="Rendered pathway diagram" loading="lazy">
+        {% elif r.preview and r.preview.status == 'failed' %}
+          <div class="preview__failed">Render failed &mdash; check the PR for details.</div>
+        {% else %}
+          <div class="preview__empty">
+            <span class="preview__dots" aria-hidden="true"><span></span><span></span><span></span></span>
+            Preview generating&hellip;
+          </div>
+        {% endif %}
+      </figure>
+    {% endif %}
+  </div>
+
+  {% if not r.preview or r.preview.status == 'pending' %}
+    <p class="review-card__links"><a href="{{ r.pr_url }}" target="_blank" rel="noopener">Watch render progress on the PR &rarr;</a></p>
+  {% elif r.preview.status == 'ready' %}
+    <p class="review-card__links">
+      {% if r.preview.datanodes_url %}<a href="{{ r.preview.datanodes_url }}">Data nodes</a>{% endif %}
+      {% if r.preview.validation_url %}<a href="{{ r.preview.validation_url }}">Validation report</a>{% endif %}
+    </p>
+  {% endif %}
+
+  <div class="checklist">
+    <h3 class="checklist__title">Curation checklist</h3>
+    <ul>
+      {% for it in r.checklist %}
+      <li class="checklist__item" data-key="{{ it.key }}" data-required="{{ 'true' if it.required else 'false' }}">
+        <span class="state-pill state-pill--{{ it.state }}" data-state="{{ it.state }}">{{ state_icon(it.state) }} {{ it.state }}</span>
+        <span class="checklist__label">{{ it.label }}{% if it.required %}<span class="req" aria-label="required">&bull;</span>{% endif %}</span>
+        {% if it.note %}<span class="checklist__note">{{ it.note }}</span>{% endif %}
+        {% if is_curator and r.status == 'open' %}
+        <span class="checklist__controls" role="group" aria-label="Set state for {{ it.label }}">
+          <button type="button" class="chip-btn chip-btn--pass" data-state="pass" aria-pressed="{{ 'true' if it.state == 'pass' else 'false' }}">Pass</button>
+          <button type="button" class="chip-btn chip-btn--fail" data-state="fail" aria-pressed="{{ 'true' if it.state == 'fail' else 'false' }}">Fail</button>
+          <button type="button" class="chip-btn chip-btn--na" data-state="na" aria-pressed="{{ 'true' if it.state == 'na' else 'false' }}">N/A</button>
+        </span>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  {% if r.status == 'merged' %}
+    <p class="review-card__resolved review-card__resolved--merged">Merged{% if r.approved_by %} &middot; approved by @{{ r.approved_by }}{% endif %}</p>
+  {% elif r.status == 'closed' %}
+    <p class="review-card__resolved review-card__resolved--closed">Closed without merging</p>
+  {% elif is_curator %}
+    {% set blocking = r.checklist | selectattr('required') | rejectattr('state', 'equalto', 'pass') | list %}
+    <div class="review-card__actions">
+      <label class="assign">
+        <span>Assign to</span>
+        <select class="assign__select">
+          <option value="">Unassigned</option>
+          {% for c in curators %}
+          <option value="{{ c }}"{% if r.assigned_curator == c %} selected{% endif %}>@{{ c }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="button" class="btn btn--approve"{% if blocking %} aria-disabled="true" disabled{% endif %}>
+        Approve &amp; merge
+      </button>
+    </div>
+  {% else %}
+    <p class="review-card__readonly">Only curators can update the checklist, assign a reviewer, or approve.</p>
+  {% endif %}
+</article>
+{% endmacro %}
+
 {% block content %}
 <h1>Curation queue</h1>
+<p class="lede">Reviewing pull requests against <code>{{ repo }}</code>.</p>
+
 {% if not login %}
-  <p><a href="/auth/login">Login</a> to review.</p>
-{% elif not reviews %}
-  <p>No open reviews.</p>
-{% endif %}
+  <p><a href="/auth/login">Log in</a> to review pathway submissions.</p>
+{% else %}
+  <nav class="queue-filter" aria-label="Filter by status">
+    {% set current = request.query_params.get('status', 'open') if request else 'open' %}
+    <a href="/dashboard?status=open"{% if current == 'open' %} aria-current="page"{% endif %}>Open</a>
+    <a href="/dashboard?status=merged"{% if current == 'merged' %} aria-current="page"{% endif %}>Merged</a>
+    <a href="/dashboard?status=closed"{% if current == 'closed' %} aria-current="page"{% endif %}>Closed</a>
+  </nav>
 
-{% for r in reviews %}
-<section class="review" data-pr="{{ r.pr_number }}">
-  <h2>WP{{ r.wpid }} — PR #{{ r.pr_number }}
-      <small>{{ r.kind }} by @{{ r.submitter }}{% if r.assigned_curator %} · assigned @{{ r.assigned_curator }}{% endif %}</small></h2>
-  <ul class="checklist">
-    {% for it in r.checklist %}
-    <li>
-      <span class="state {{ it.state }}">{{ it.state }}</span>
-      <span>{{ it.label }}{% if it.required %} <span class="req" title="required">*</span>{% endif %}</span>
-      {% if is_curator %}
-        <span style="margin-left:auto">
-          <button onclick="setItem({{ r.pr_number }}, '{{ it.key }}', 'pass')">pass</button>
-          <button onclick="setItem({{ r.pr_number }}, '{{ it.key }}', 'fail')">fail</button>
-          <button onclick="setItem({{ r.pr_number }}, '{{ it.key }}', 'na')">n/a</button>
-        </span>
-      {% endif %}
-    </li>
-    {% endfor %}
-  </ul>
-  {% if is_curator %}
-    <button class="approve" onclick="approve({{ r.pr_number }})">Approve &amp; merge</button>
+  {% if not reviews %}
+    <div class="empty-state">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="3.5" stroke="currentColor" stroke-width="1.6"/><circle cx="17" cy="9" r="3.5" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="18" r="3.5" stroke="currentColor" stroke-width="1.6"/><path d="M9.7 8.8L15 9.6M9.2 9.9l2 6.2M15.5 12l-2.3 3.9" stroke="currentColor" stroke-width="1.6"/></svg>
+      <h2>The queue is empty</h2>
+      <p>Nothing is waiting on review right now.</p>
+    </div>
   {% else %}
-    <small>Only curators can approve.</small>
+    <div class="review-list">
+      {% for r in reviews %}
+        {{ review_card(r, is_curator, curators) }}
+      {% endfor %}
+    </div>
   {% endif %}
-  <pre class="msg" hidden></pre>
-</section>
-{% endfor %}
-{% endblock %}
-
-{% block script %}
-  async function setItem(pr, key, state) {
-    const fd = new FormData(); fd.append('key', key); fd.append('state', state);
-    const r = await fetch('/api/reviews/' + pr + '/checklist', {method:'POST', body:fd});
-    if (r.ok) location.reload();
-    else showMsg(pr, 'Error ' + r.status);
-  }
-  async function approve(pr) {
-    const r = await fetch('/api/reviews/' + pr + '/approve', {method:'POST'});
-    const j = await r.json();
-    if (r.ok) location.reload();
-    else showMsg(pr, 'Error ' + r.status + ': ' + JSON.stringify(j.detail));
-  }
-  function showMsg(pr, text) {
-    const el = document.querySelector('[data-pr="' + pr + '"] .msg');
-    el.hidden = false; el.textContent = text;
-  }
+{% endif %}
 {% endblock %}

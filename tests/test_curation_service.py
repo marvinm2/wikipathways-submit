@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from app.github import FakeGitHubClient, GitHubError
@@ -117,6 +118,44 @@ def test_approve_merges_and_completes_lifecycle(session_factory, allocator, lock
         assert s.get(WpidReservation, wpid).status == ReservationStatus.MERGED
     # Pathway lock released.
     assert not locks.is_locked(wpid)
+
+
+def test_mirror_comment_is_best_effort(session_factory):
+    # A comment failure must not sink the primary action (register / checklist / approve).
+    gh = FakeGitHubClient(fail_on={"upsert_issue_comment"})
+    svc = _service(session_factory, github=gh)
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")  # does not raise
+    svc.set_checklist_item(1, "render_ok", "pass")  # does not raise
+    assert svc.get(1).status == ReviewStatus.OPEN
+    assert gh.comments == {}  # nothing recorded because every upsert failed
+
+
+class _TransportFailingClient(FakeGitHubClient):
+    """A bot client whose comment API fails at the transport layer (not a GitHubError)."""
+
+    def upsert_issue_comment(self, repo, issue_number, body, *, marker):
+        raise httpx.ConnectError("connection refused")
+
+
+def test_mirror_comment_swallows_transport_errors(session_factory, allocator, locks):
+    # A network blip talking to the comments API must NOT fail an action that already succeeded.
+    gh = _TransportFailingClient()
+    svc = _service(session_factory, github=gh, allocator=allocator, locks=locks)
+    wpid = allocator.allocate("bob")
+    locks.acquire(wpid, "bob")
+    svc.register(pr_number=7, wpid=wpid, submitter="bob", kind="new")  # does not raise
+    _complete_required(svc, 7)
+    review = svc.approve_and_merge(7, "curator")  # merge succeeded; mirror failed silently
+    assert review.status == ReviewStatus.MERGED
+    assert gh.merged == {7}
+
+
+def test_mirror_comment_written_when_bot_present(session_factory):
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    svc.register(pr_number=3, wpid=5639, submitter="bob", kind="new")
+    body = gh.comments[(REPO, 3)]["<!-- wikipathways-submit:mirror -->"]
+    assert "WP5639" in body and "read-only" in body
 
 
 def test_approve_does_not_mutate_state_if_merge_fails(session_factory, allocator, locks):

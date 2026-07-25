@@ -28,6 +28,19 @@ class Settings(BaseSettings):
     #: Floor used when no token is configured (local dev). Real deployments read GitHub.
     dev_wpid_floor: int = 0
 
+    # GitHub App (bot) identity, scaffolding-plan §3 — privileged merge + mirror comment, and
+    # (when no github_token is set) the WPID floor read. The private key comes from a Docker
+    # secret: prefer github_app_private_key_path (a mounted secret file) over an inline PEM.
+    # All absent → merge/approve routes 503; mirror comments are skipped.
+    github_app_id: str | None = None
+    github_app_installation_id: str | None = None
+    github_app_private_key: str | None = None
+    github_app_private_key_path: str | None = None
+
+    # Shared secret for verifying inbound GitHub webhooks (issue #8) — the App's webhook secret,
+    # a Docker secret in production. Absent → POST /webhooks/github returns 503.
+    github_webhook_secret: str | None = None
+
     # Per-user OAuth (submitter identity, scaffolding-plan §3). Absent → auth routes 503.
     github_oauth_client_id: str | None = None
     github_oauth_client_secret: str | None = None

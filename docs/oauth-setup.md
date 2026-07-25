@@ -84,6 +84,6 @@ could spoof); `get_github_client` builds an `HttpGitHubClient` from `gh_token`.
   encrypting the token at rest; and set `https_only=True` on the session middleware behind TLS.
 - The design (scaffolding-plan §3) also calls for a **GitHub App (bot)** identity for privileged
   cross-cutting actions — merging to satisfy branch protection, posting the preview comment.
-  Right now the **curator's own OAuth token** performs the merge (works if the curator has write
-  access). Adding the GitHub App is the natural next hardening step and decouples merge/comment
-  from any individual's token.
+  **This is now implemented** (`app/auth/github_app.py`): the merge and the read-only mirror
+  comment run as the bot, decoupled from any curator's personal token. Configure it per
+  [`github-app-setup.md`](github-app-setup.md); until then, approval returns **503**.
