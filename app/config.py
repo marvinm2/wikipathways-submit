@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     oauth_scope: str = "public_repo read:user"
     # Signs the session cookie holding the user token. MUST be overridden in production.
     session_secret: str = "dev-insecure-change-me"
+    # Set True behind TLS so the session cookie is only sent over HTTPS (issue #4).
+    session_https_only: bool = False
+    # Encrypts the OAuth token at rest inside the session (issue #4). A Fernet key; if unset a
+    # key is derived from session_secret. Set/rotate independently in production.
+    token_encryption_key: str | None = None
 
     @property
     def content_repo_owner(self) -> str:

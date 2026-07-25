@@ -26,7 +26,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.auth import GitHubApp, GithubOAuth, OAuthError
+from app.auth import GitHubApp, GithubOAuth, OAuthError, TokenCipher, TokenCipherError
 from app.config import Settings
 from app.curators import make_curator_registry
 from app.db import make_engine, make_session_factory
@@ -62,9 +62,17 @@ def get_current_user(request: Request) -> str:
 
 def get_github_client(request: Request) -> GitHubClient:
     """Build a GitHub client acting as the logged-in user (their OAuth token). 401 if absent."""
-    token = request.session.get("gh_token")
-    if not token:
+    encrypted = request.session.get("gh_token")
+    if not encrypted:
         raise HTTPException(status_code=401, detail="not authenticated — GET /auth/login")
+    try:
+        token = request.app.state.token_cipher.decrypt(encrypted)
+    except TokenCipherError as exc:
+        # Key rotated / tampered cookie: force a fresh login rather than 500.
+        request.session.clear()
+        raise HTTPException(
+            status_code=401, detail="session expired — please log in again"
+        ) from exc
     return HttpGitHubClient(token)
 
 
@@ -141,6 +149,10 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings
         app.state.session_factory = session_factory
         app.state.bot_app = bot_app
+        app.state.token_cipher = TokenCipher(
+            encryption_key=settings.token_encryption_key,
+            session_secret=settings.session_secret,
+        )
         # Curator whitelist: a GitHub Team if WPSUBMIT_CURATOR_TEAM is set, else the config list.
         app.state.curators = make_curator_registry(
             team=settings.curator_team,
@@ -182,7 +194,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app = FastAPI(title="wikipathways-submit", version="0.0.1", lifespan=lifespan)
-    app.add_middleware(SessionMiddleware, secret_key=settings.session_secret, https_only=False)
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.session_secret,
+        https_only=settings.session_https_only,
+        same_site="lax",
+    )
     app.mount(
         "/static",
         StaticFiles(directory=str(_ROOT / "static"), check_dir=False),
@@ -281,7 +298,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             login = oauth.get_login(token)
         except OAuthError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        request.session["gh_token"] = token
+        # Store the token encrypted at rest — the signed cookie is readable, encryption is not.
+        request.session["gh_token"] = request.app.state.token_cipher.encrypt(token)
         request.session["gh_login"] = login
         return RedirectResponse("/", status_code=302)
 
