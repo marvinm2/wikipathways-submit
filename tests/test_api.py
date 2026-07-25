@@ -403,6 +403,85 @@ def test_webhook_is_idempotent(tmp_path):
         assert c.get(f"/api/reviews/{pr}").json()["status"] == "merged"
 
 
+# -- pathway preview serving (issue #11) ----------------------------------------------------
+
+import zipfile  # noqa: E402
+
+
+def _preview_zip(wpid, *, before=True):
+    import io
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(f"WP{wpid}/WP{wpid}.svg", b"<svg>after</svg>")
+        if before:
+            zf.writestr(f"WP{wpid}/WP{wpid}-before.svg", b"<svg>before</svg>")
+    return buf.getvalue()
+
+
+def test_preview_route_serves_svgs(tmp_path):
+    from app.github import FakeGitHubClient
+    from app.preview import PreviewService
+
+    app, current = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()["pr_number"]  # assigns WP5637
+
+        preview_fake = FakeGitHubClient(
+            previews={pr: {"status": "ready", "zip": _preview_zip(5637)}}
+        )
+        app.state.preview = PreviewService(
+            lambda: preview_fake,
+            repo=app.state.settings.content_repo,
+            cache_dir=tmp_path / "pc",
+            workflow_file="pr-preview.yml",
+            artifact_name="pr-preview",
+        )
+
+        after = c.get(f"/previews/{pr}/after.svg")
+        assert after.status_code == 200
+        assert after.headers["content-type"].startswith("image/svg+xml")
+        assert b"after" in after.content
+        assert "sandbox" in after.headers.get("content-security-policy", "")
+
+        before = c.get(f"/previews/{pr}/before.svg")
+        assert before.status_code == 200 and b"before" in before.content
+
+        # Unknown side → 404; unknown PR → 404.
+        assert c.get(f"/previews/{pr}/sideways.svg").status_code == 404
+        assert c.get("/previews/999999/after.svg").status_code == 404
+
+
+def test_preview_missing_side_serves_placeholder(tmp_path):
+    from app.github import FakeGitHubClient
+    from app.preview import PreviewService
+
+    app, current = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()["pr_number"]
+        # New pathway → after only, no before.
+        preview_fake = FakeGitHubClient(
+            previews={pr: {"status": "ready", "zip": _preview_zip(5637, before=False)}}
+        )
+        app.state.preview = PreviewService(
+            lambda: preview_fake,
+            repo=app.state.settings.content_repo,
+            cache_dir=tmp_path / "pc",
+            workflow_file="pr-preview.yml",
+            artifact_name="pr-preview",
+        )
+        r = c.get(f"/previews/{pr}/before.svg")
+        assert r.status_code == 200 and b"Preview unavailable" in r.content
+
+
 # -- OAuth flow ----------------------------------------------------------------------------
 
 

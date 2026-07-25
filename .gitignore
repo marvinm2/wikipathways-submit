@@ -14,3 +14,6 @@ __pycache__/
 
 # MVP-1 scratch (real pathway data pulled for testing the validator)
 mvp1/pathways/
+
+# preview render cache (issue #11)
+preview-cache/
