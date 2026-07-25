@@ -1,0 +1,14 @@
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.db-shm
+*.db-wal
+.env
+.pytest_cache/
+.ruff_cache/
+tests/
+mvp1/pathways/
+fork-staging/
+*.egg-info/

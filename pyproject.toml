@@ -24,6 +24,9 @@ dev = [
     "ruff>=0.5",
     "cryptography>=42.0",         # generate a throwaway RSA key in the GitHub App tests
 ]
+postgres = [
+    "psycopg[binary]>=3.1",       # PostgreSQL driver for the production datastore
+]
 
 [build-system]
 requires = ["hatchling"]
