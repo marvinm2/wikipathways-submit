@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from app.curators import ConfigCurators
 from app.github import FakeGitHubClient, GitHubError
 from app.locks import PathwayLockRegistry
 from app.models import ReservationStatus, ReviewStatus, WpidReservation
@@ -33,7 +34,12 @@ def locks(session_factory):
 
 def _service(session_factory, github=None, allocator=None, locks=None) -> CurationService:
     return CurationService(
-        session_factory, github, repo=REPO, curators=CURATORS, allocator=allocator, locks=locks
+        session_factory,
+        github,
+        repo=REPO,
+        curators=ConfigCurators(CURATORS),
+        allocator=allocator,
+        locks=locks,
     )
 
 

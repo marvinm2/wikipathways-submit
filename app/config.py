@@ -19,7 +19,11 @@ class Settings(BaseSettings):
     pathway_lock_ttl_days: int = 3
 
     # Curator whitelist (~20 people, design §4.5). Only these may approve-that-merges.
-    # Env: WPSUBMIT_CURATORS='["alice","bob"]' (JSON list).
+    # Preferred: resolve from a GitHub Team, WPSUBMIT_CURATOR_TEAM='org/team-slug' (issue #9) —
+    # curator management then happens on GitHub, not in a redeploy (needs the App's org
+    # Members:read permission). If unset, falls back to the static WPSUBMIT_CURATORS list
+    # (JSON, e.g. '["alice","bob"]'), which is also used for tests / local dev.
+    curator_team: str | None = None
     curators: list[str] = []
 
     # Bot/reader identity for server-side GitHub reads (the WPID floor). Distinct from the

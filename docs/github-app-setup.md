@@ -37,6 +37,12 @@ GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App*
 | Pull requests | Read and write | merge PRs on approval |
 | Issues | Read and write | post/update the read-only mirror comment (PR comments are issue comments) |
 
+**Organization permissions** (only if you resolve curators from a GitHub Team — issue #9):
+
+| Permission | Access | Why |
+|---|---|---|
+| Members | Read-only | list the curator team's members (`WPSUBMIT_CURATOR_TEAM`) |
+
 Create the App, then:
 
 1. **Generate a private key** → downloads a `.pem`. Keep it out of the repo.
@@ -76,6 +82,21 @@ WPID, the App sends webhooks to `POST /webhooks/github`:
 - Locks and reservations also auto-expire by TTL (`WPSUBMIT_PATHWAY_LOCK_TTL_DAYS` default 3,
   `WPSUBMIT_WPID_RESERVATION_TTL_DAYS` default 14) — the webhook just makes the common case
   prompt instead of waiting for the TTL. Tune the TTLs against real submitter behaviour.
+
+## Curator whitelist (issue #9)
+
+Who may approve-that-merges is resolved from a **GitHub Team** (the chosen mechanism):
+
+```bash
+WPSUBMIT_CURATOR_TEAM=wikipathways/curators   # org/team-slug
+```
+
+Membership is fetched via the bot (needs the org **Members: read** permission above) and cached
+for 5 minutes; add or remove a curator by changing team membership on GitHub — no redeploy.
+Resolution is **fail-closed**: if GitHub can't be reached and nothing is cached, nobody is a
+curator (a stale cache is preferred over locking everyone out). If `WPSUBMIT_CURATOR_TEAM` is
+unset, the app falls back to the static `WPSUBMIT_CURATORS` JSON list (used for tests / local dev
+without the bot).
 
 ## 3. On the cluster (secret handling)
 

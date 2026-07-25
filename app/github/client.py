@@ -87,6 +87,10 @@ class GitHubClient(ABC):
         A privileged (bot) operation — the mirror must not be attributed to the submitter.
         """
 
+    @abstractmethod
+    def list_team_members(self, org: str, team_slug: str) -> list[str]:
+        """Return the logins of the members of ``org/team_slug`` (curator whitelist, issue #9)."""
+
 
 class FakeGitHubClient(GitHubClient):
     """In-memory GitHubClient for tests. Records every mutation; can simulate failures.
@@ -101,6 +105,7 @@ class FakeGitHubClient(GitHubClient):
         default_branches: dict[str, str] | None = None,
         existing_files: dict[str, str] | None = None,
         fail_on: set[str] | None = None,
+        team_members: dict[str, list[str]] | None = None,
     ) -> None:
         # {(repo, branch): sha}
         self.branches: dict[tuple[str, str], str] = {}
@@ -119,6 +124,8 @@ class FakeGitHubClient(GitHubClient):
         self.merged: set[int] = set()
         # {(repo, issue_number): {marker: body}} — one comment per marker (upsert semantics).
         self.comments: dict[tuple[str, int], dict[str, str]] = {}
+        # {"org/team-slug": [login, ...]}
+        self.team_members = dict(team_members or {})
         self.fail_on = fail_on or set()
         self._next_pr = 1
 
@@ -193,6 +200,10 @@ class FakeGitHubClient(GitHubClient):
     ) -> None:
         self._maybe_fail("upsert_issue_comment")
         self.comments.setdefault((repo, issue_number), {})[marker] = body
+
+    def list_team_members(self, org: str, team_slug: str) -> list[str]:
+        self._maybe_fail("list_team_members")
+        return list(self.team_members.get(f"{org}/{team_slug}", []))
 
 
 @dataclass
@@ -324,3 +335,21 @@ class HttpGitHubClient(GitHubClient):
                 f"/repos/{repo}/issues/{issue_number}/comments", json={"body": body}
             )
             self._raise_for(resp, f"create_comment({issue_number})")
+
+    def list_team_members(self, org: str, team_slug: str) -> list[str]:
+        members: list[str] = []
+        page = 1
+        while True:
+            resp = self._client.get(
+                f"/orgs/{org}/teams/{team_slug}/members",
+                params={"per_page": 100, "page": page},
+            )
+            self._raise_for(resp, f"list_team_members({org}/{team_slug})")
+            batch = resp.json()
+            if not batch:
+                break
+            members.extend(m["login"] for m in batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return members

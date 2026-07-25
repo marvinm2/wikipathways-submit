@@ -28,6 +28,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth import GitHubApp, GithubOAuth, OAuthError
 from app.config import Settings
+from app.curators import make_curator_registry
 from app.db import make_engine, make_session_factory
 from app.github import GitHubClient, GitHubError, HttpGitHubClient
 from app.locks import LockUnavailable, PathwayLockRegistry
@@ -140,6 +141,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings
         app.state.session_factory = session_factory
         app.state.bot_app = bot_app
+        # Curator whitelist: a GitHub Team if WPSUBMIT_CURATOR_TEAM is set, else the config list.
+        app.state.curators = make_curator_registry(
+            team=settings.curator_team,
+            config_logins=settings.curators,
+            bot_client_provider=lambda: (
+                HttpGitHubClient(bot_app.installation_token()) if bot_app else None
+            ),
+        )
         app.state.allocator = WpidAllocator(
             session_factory,
             _make_floor_provider(settings, bot_app),
@@ -167,7 +176,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             st.session_factory,
             github,
             repo=settings.content_repo,
-            curators=settings.curators,
+            curators=st.curators,
             allocator=st.allocator,
             locks=st.locks,
         )
@@ -191,7 +200,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return {
             "request": request,
             "login": login,
-            "is_curator": bool(login) and login in settings.curators,
+            "is_curator": request.app.state.curators.is_curator(login),
         }
 
     def _review_view(r) -> dict:
@@ -222,7 +231,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             {
                 **_page_ctx(request),
                 "reviews": reviews,
-                "curators": settings.curators,
+                "curators": sorted(request.app.state.curators.members()),
                 "repo": settings.content_repo,
                 "status": status.value,
             },
@@ -240,7 +249,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             {
                 **_page_ctx(request),
                 "review": _review_view(r),
-                "curators": settings.curators,
+                "curators": sorted(request.app.state.curators.members()),
                 "repo": settings.content_repo,
             },
         )
@@ -282,7 +291,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return {
             "authenticated": bool(login),
             "login": login,
-            "is_curator": login in settings.curators,
+            "is_curator": request.app.state.curators.is_curator(login),
         }
 
     @app.post("/auth/logout")
@@ -398,7 +407,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         bot: GitHubClient | None = Depends(get_bot_optional),
     ):
         # Only curators mutate review state (design §4.5); non-curators get a read-only view.
-        if actor not in settings.curators:
+        if not request.app.state.curators.is_curator(actor):
             raise HTTPException(status_code=403, detail=f"{actor} is not a curator")
         try:
             r = _curation(request, bot).set_checklist_item(pr_number, key, state, note)
@@ -416,7 +425,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         actor: str = Depends(get_current_user),
         bot: GitHubClient | None = Depends(get_bot_optional),
     ):
-        if actor not in settings.curators:
+        if not request.app.state.curators.is_curator(actor):
             raise HTTPException(status_code=403, detail=f"{actor} is not a curator")
         try:
             r = _curation(request, bot).assign(pr_number, curator)
@@ -450,7 +459,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         request: Request, wpid: int, curator: str = Depends(get_current_user)
     ) -> dict[str, bool]:
         # Curator override (design §4.3): restricted to the curator whitelist.
-        if curator not in settings.curators:
+        if not request.app.state.curators.is_curator(curator):
             raise HTTPException(status_code=403, detail=f"{curator} is not a curator")
         released = request.app.state.locks.release(wpid, curator, force=True)
         return {"released": released}

@@ -7,12 +7,11 @@ completes the lifecycle — promoting the WPID reservation to MERGED and releasi
 """
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.curators import CuratorRegistry
 from app.github import GitHubClient, GitHubError
 from app.locks import PathwayLockRegistry
 from app.models import Review, ReviewStatus, utcnow
@@ -77,19 +76,19 @@ class CurationService:
         github: GitHubClient | None,
         *,
         repo: str,
-        curators: Iterable[str],
+        curators: CuratorRegistry,
         allocator: WpidAllocator | None = None,
         locks: PathwayLockRegistry | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._github = github
         self._repo = repo
-        self._curators = set(curators)
+        self._curators = curators
         self._allocator = allocator
         self._locks = locks
 
     def is_curator(self, user: str) -> bool:
-        return user in self._curators
+        return self._curators.is_curator(user)
 
     def _maybe_mirror(self, review: Review) -> None:
         """Best-effort: sync the read-only PR mirror comment via the bot client.
@@ -174,7 +173,7 @@ class CurationService:
             return review
 
     def approve_and_merge(self, pr_number: int, curator: str) -> Review:
-        if curator not in self._curators:
+        if not self._curators.is_curator(curator):
             raise NotACurator(f"{curator} is not on the curator whitelist")
         if self._github is None:
             raise RuntimeError("no GitHub client configured for merge")
