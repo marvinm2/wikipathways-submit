@@ -296,6 +296,11 @@ jobs:
       - name: Install PinPath
         if: steps.changed.outputs.count != '0'
         continue-on-error: true
+        env:
+          # remotes reads GITHUB_PAT for the GitHub API (fetching DESCRIPTION etc.). Without it
+          # the unauthenticated 60-req/hr limit is easily hit → "cannot open URL .../DESCRIPTION".
+          # github.token is the workflow's default read-only token (safe; cannot push).
+          GITHUB_PAT: ${{ github.token }}
         run: |
           # PinPath is not on the Bioconductor *release* yet — install from GitHub. BiocManager
           # resolves the Bioconductor deps, but its GitHub install path needs `remotes` present.
