@@ -78,6 +78,9 @@ jobs:
             echo "__EOF__"
             echo "count=${#files[@]}"
             echo "orgs_key=${orgs_key}"
+            echo "orgs<<__ORGS__"
+            printf '%s\n' "${orgs[@]:-}" | sort -u
+            echo "__ORGS__"
           } >> "$GITHUB_OUTPUT"
 
       - name: Initialize preview dir
@@ -127,6 +130,7 @@ jobs:
           key: meta-data-action-1.1.4
 
       - name: Cache BridgeDb derby files
+        id: cacheBridge
         if: steps.changed.outputs.count != '0'
         uses: actions/cache@v5
         with:
@@ -136,6 +140,24 @@ jobs:
             ./*.bridge
           key: bridge-files-${{ steps.changed.outputs.orgs_key }}
           restore-keys: bridge-files-
+
+      - name: Install BridgeDb files (cache miss)
+        # Mirrors on_gpml_change.yml's "Install all bridge files" — DOWNLOADS the .bridge derby
+        # for the touched organism(s). configGenerator alone only writes gdb.config; without this
+        # download meta-data-action fails (NoSuchFileException Hs_Derby_*.bridge) and the render
+        # produces no SVG. Only runs on a cache miss.
+        if: steps.changed.outputs.count != '0' && steps.cacheBridge.outputs.cache-hit != 'true'
+        env:
+          ORGS: ${{ steps.changed.outputs.orgs }}
+        run: |
+          set -uo pipefail
+          while IFS= read -r org; do
+            [ -z "$org" ] && continue
+            echo "::group::BridgeDb $org"
+            scripts/meta-data-action/configGenerator.sh "$org" || echo "::warning::configGenerator failed for $org"
+            scripts/meta-data-action/installDependencies.sh "$org" || echo "::warning::installDependencies failed for $org"
+            echo "::endgroup::"
+          done <<< "$ORGS"
 
       - name: Install meta-data-action
         if: steps.changed.outputs.count != '0'
@@ -252,27 +274,43 @@ jobs:
       # app prefers. Plain render (no data overlay) → no Bioconductor annotation DB needed.
       # Cost note: the first run installs PinPath + deps (minutes); the R-packages cache amortises
       # subsequent runs. If this proves too heavy for every PR, split it into its own workflow.
+      # All PinPath steps are continue-on-error: they are a best-effort enhancement. If PinPath
+      # can't install or render, the gpmlconverter WP<id>.svg still ships as the app's "after"
+      # and the run stays green — the preview must never be sunk by the experimental renderer.
       - name: Setup R (PinPath)
         if: steps.changed.outputs.count != '0'
+        continue-on-error: true
         uses: r-lib/actions/setup-r@v2
         with:
+          r-version: "4.4.2"   # pin a RELEASE R so BiocManager uses a released Bioc (not devel 3.23)
           use-public-rspm: true
 
       - name: Cache R packages
         if: steps.changed.outputs.count != '0'
+        continue-on-error: true
         uses: actions/cache@v4
         with:
           path: ${{ env.R_LIBS_USER }}
-          key: r-pinpath-${{ runner.os }}-v1
+          key: r-pinpath-${{ runner.os }}-r4.4.2-v2
 
       - name: Install PinPath
         if: steps.changed.outputs.count != '0'
+        continue-on-error: true
+        env:
+          # remotes reads GITHUB_PAT for the GitHub API (fetching DESCRIPTION etc.). Without it
+          # the unauthenticated 60-req/hr limit is easily hit → "cannot open URL .../DESCRIPTION".
+          # github.token is the workflow's default read-only token (safe; cannot push).
+          GITHUB_PAT: ${{ github.token }}
         run: |
-          Rscript -e 'if (!requireNamespace("BiocManager", quietly=TRUE)) install.packages("BiocManager", repos="https://cloud.r-project.org")' \
-                  -e 'BiocManager::install("PinPath", ask=FALSE, update=FALSE)'
+          # PinPath is not on the Bioconductor *release* yet — install from GitHub. BiocManager
+          # resolves the Bioconductor deps, but its GitHub install path needs `remotes` present.
+          Rscript -e 'install.packages(c("remotes","BiocManager"), repos="https://cloud.r-project.org")' \
+                  -e 'BiocManager::install("SyNUM-lab/PinPath", ask=FALSE, update=FALSE)' \
+                  -e 'library(PinPath); cat("PinPath OK\n")'
 
       - name: Render before/after with PinPath
         if: steps.changed.outputs.count != '0'
+        continue-on-error: true
         env:
           FILES: ${{ steps.changed.outputs.files }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

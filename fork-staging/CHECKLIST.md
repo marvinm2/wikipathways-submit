@@ -77,6 +77,29 @@ real runner — validate:**
       SVGs (needs the bot identity configured for Actions read — see `docs/github-app-setup.md`).
 - [ ] Compare PinPath vs `gpmlconverter` render fidelity and decide which is the default "after".
 
+## Validated on a real runner (2026-07-25/26, marvinm2/wikipathways-database)
+
+Ran the pipeline on a WP554 edit PR (fork PR #3). What we learned + fixed:
+
+- ✅ **Plumbing works end-to-end:** `pull_request` → `pr-preview.yml` → `pr-preview` artifact →
+  `pr-preview-comment.yml` sticky comment. The validation correctly reported
+  `❌ Rendered SVG — render step produced no SVG` when the render failed (the pipeline's job).
+- ✅ **gpmlconverter renders without the assets-repo SSH keys** (open question resolved).
+- 🔧 **BridgeDb `.bridge` must be downloaded, not just cached.** `configGenerator.sh` only writes
+  `gdb.config`; without `installDependencies.sh` the derby is missing →
+  `NoSuchFileException Hs_Derby_*.bridge` → meta-data-action fails → no datanodes → no render.
+  **Fixed:** added the "Install BridgeDb files (cache miss)" step. Metadata now generates.
+- ⚠️ **gpmlconverter's SVG render is blocked by upstream HTTP 400s** — it calls an external
+  per-node service that floods `Server responded with status code 400`. Not fixable from here;
+  it's an upstream gpmlconverter/service issue. **PinPath (local R render, no Chrome) sidesteps it.**
+- 🔧 **PinPath install** needed three fixes, applied in order across runs: (1) install from GitHub
+  (`SyNUM-lab/PinPath`), not Bioconductor release; (2) pin a **release R** (`4.4.2`) so BiocManager
+  doesn't pick unreleased Bioc 3.23; (3) install `remotes` first; (4) authenticate the GitHub API
+  with `GITHUB_PAT: ${{ github.token }}` (unauthenticated `remotes` hit the 60-req/hr limit:
+  `cannot open URL .../DESCRIPTION`). All four are in `pr-preview.yml`. **Not yet confirmed green**
+  — the next run should show whether PinPath then compiles + renders. Re-run by pushing any change
+  to a gpml on a PR branch that has the current `pr-preview.yml`.
+
 ## Before proposing upstream
 
 - [ ] Confirm the **meta-data-action v1.1.4** invocation matches the live `metadata` job (mirrored,
