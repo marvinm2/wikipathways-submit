@@ -92,13 +92,26 @@ Ran the pipeline on a WP554 edit PR (fork PR #3). What we learned + fixed:
 - ⚠️ **gpmlconverter's SVG render is blocked by upstream HTTP 400s** — it calls an external
   per-node service that floods `Server responded with status code 400`. Not fixable from here;
   it's an upstream gpmlconverter/service issue. **PinPath (local R render, no Chrome) sidesteps it.**
-- 🔧 **PinPath install** needed three fixes, applied in order across runs: (1) install from GitHub
-  (`SyNUM-lab/PinPath`), not Bioconductor release; (2) pin a **release R** (`4.4.2`) so BiocManager
-  doesn't pick unreleased Bioc 3.23; (3) install `remotes` first; (4) authenticate the GitHub API
-  with `GITHUB_PAT: ${{ github.token }}` (unauthenticated `remotes` hit the 60-req/hr limit:
-  `cannot open URL .../DESCRIPTION`). All four are in `pr-preview.yml`. **Not yet confirmed green**
-  — the next run should show whether PinPath then compiles + renders. Re-run by pushing any change
-  to a gpml on a PR branch that has the current `pr-preview.yml`.
+- 🔧 **PinPath install** needed a sequence of fixes, applied in order across runs: (1) install from
+  GitHub (`SyNUM-lab/PinPath`), not Bioconductor release; (2) install `remotes` first; (3)
+  authenticate the GitHub API with `GITHUB_PAT: ${{ github.token }}` (unauthenticated `remotes` hit
+  the 60-req/hr limit: `cannot open URL .../DESCRIPTION`); (4) **use current-release R, not a 4.4.x
+  pin.** An earlier `4.4.2` pin (chosen to avoid devel Bioc 3.23) failed `R CMD build` with
+  `ERROR: this R is version 4.4.2, package 'PinPath' requires R >= 4.6.0` — PinPath's `devel` branch
+  (v0.99.4, its only branch, no release tag) hard-requires **R ≥ 4.6.0**. Bumped to
+  `r-version: "release"` (R 4.6.x now → the *released* Bioc 3.23, paired with R 4.6 since April
+  2026, so the devel-Bioc concern is moot). Cache key bumped to `r-pinpath-...-rrelease-v3`.
+  - ✅ **The `GITHUB_PAT` fix is confirmed working** (run 30214373998, 2026-07-26): the rate-limit
+    error is gone; PinPath downloaded and all its Bioconductor deps (AnnotationDbi, ggraph,
+    BiocFileCache, …) resolved + installed. The install now reaches `R CMD build` and only failed on
+    the R-version requirement above — which fix (4) addresses.
+  - ⏳ **The R-release fix is authored but not yet confirmed green on a runner.** After pushing the
+    fix to the fork's `main`, rapid PR close/reopen/push churn appears to have throttled GitHub's
+    scheduling of the `pull_request` `pr-preview.yml` (runs stopped registering while the native
+    `pull_request_target` workflow kept firing). Re-validate with **one** calm push of any gpml
+    change to a PR branch, then confirm PinPath compiles + `WP<id>-after.svg`/`-before.svg` are
+    non-empty in the `pr-preview` artifact. (These PinPath steps live only in `fork-staging`, not
+    `mvp1/` — they stay experimental here until this render is confirmed, then backport to `mvp1`.)
 
 ## Before proposing upstream
 

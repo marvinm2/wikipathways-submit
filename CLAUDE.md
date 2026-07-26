@@ -49,7 +49,9 @@ repos.
   CSP + sandbox so a hostile SVG can't run script). `_review_view` fills the dashboard `preview`
   slot from a cheap `PreviewService.status()`; bytes stream lazily. The renderer is external:
   `fork-staging` adds a **PinPath** (`drawGPML`) render step producing before+after SVGs
-  (authored, **not yet validated on a live runner** — that's #6).
+  (**validated on a real runner** 2026-07-26, fork PR #4 — #6 closed: needs `GITHUB_PAT` for the
+  GitHub install and R `release` since PinPath v0.99.x requires R ≥ 4.6.0; PinPath runs before
+  validation and its `-after.svg` counts as the render, since gpmlconverter's SVG is upstream-broken).
   **Alembic is wired** (issue #2): `migrations/` + `alembic.ini`; `create_all` now runs **only**
   for SQLite dev, Postgres deploys run `alembic upgrade head` (`docs/migrations.md`); a test
   asserts zero drift between the migration and the models. Checklist/assign endpoints are now
@@ -63,7 +65,8 @@ repos.
   and `SessionMiddleware` `https_only` is config-driven. **Cluster deployment is authored** (issue
   #5, `Dockerfile` + `docker-entrypoint.sh` + `.github/workflows/{ci,docker-publish}.yml` +
   `docker-compose.yml` + `docs/deployment.md`; image builds/boots, not yet deployed live).
-  **Remaining open issues: #6** (MVP-1 preview validated on a real runner) and **#8's TTL tuning**.
+  **Remaining open issues: #8's TTL tuning** (needs real submitter data) and **#14** (clickable
+  data nodes in the preview — properties pop-up/side panel from the pvjson + `-datanodes.tsv`).
   Everything is verified against `FakeGitHubClient` (tests override `get_github_client`,
   `get_bot_client`/`get_bot_optional`, `get_current_user`); the OAuth + App token flows are
   tested via injected `httpx.MockTransport`.
