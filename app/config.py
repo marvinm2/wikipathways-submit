@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     # (design problem #1: never merge a pathway whose render/validation hasn't run green).
     require_preview_check: bool = True
 
+    # Public URL of this app, e.g. https://curator.wikipathways.org. Used to link a GitHub
+    # reviewer from the mirror comment to the dashboard page holding the before/after render —
+    # CI produces no image, so that page is the only place the render exists. Unset (local dev)
+    # → the comment carries no link rather than a link to somebody's localhost.
+    app_base_url: str = ""
+
     # Per-user OAuth (submitter identity, scaffolding-plan §3). Absent → auth routes 503.
     github_oauth_client_id: str | None = None
     github_oauth_client_secret: str | None = None

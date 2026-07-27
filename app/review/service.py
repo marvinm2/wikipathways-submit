@@ -27,11 +27,14 @@ MIRROR_MARKER = "<!-- wikipathways-submit:mirror -->"
 _CHECKLIST_WRITE_RETRIES = 10
 
 
-def render_mirror_comment(review: Review, repo: str) -> str:
+def render_mirror_comment(review: Review, repo: str, *, base_url: str = "") -> str:
     """Render the read-only PR mirror comment (design §4.5): checklist + approval state.
 
     Approval always flows through the app, so this comment is a *mirror* — it tells GitHub-native
     reviewers the current state and points them back to the dashboard to act.
+
+    ``base_url`` is the app's public URL. When set, the comment links to the review page — the
+    only place the before/after render exists, since CI publishes tables and pvjson but no image.
     """
     lines = [
         MIRROR_MARKER,
@@ -51,6 +54,12 @@ def render_mirror_comment(review: Review, repo: str) -> str:
         lines.append(f"| {item['label']}{req}{note} | `{item.get('state', 'pending')}` |")
     if review.approved_by:
         lines += ["", f"**Approved & merged by** @{review.approved_by}."]
+    if base_url:
+        lines += [
+            "",
+            f"**Before/after render:** {base_url.rstrip('/')}/dashboard/{review.pr_number} — "
+            "the pathway is drawn in the app; this PR carries only the validation tables.",
+        ]
     lines += [
         "",
         "> This comment is **read-only** and auto-generated. Review and approve in the "
@@ -89,6 +98,7 @@ class CurationService:
         require_preview_check: bool = False,
         preview_workflow_file: str = "",
         preview_artifact_name: str = "",
+        app_base_url: str = "",
     ) -> None:
         self._session_factory = session_factory
         self._github = github
@@ -99,6 +109,7 @@ class CurationService:
         self._require_preview_check = require_preview_check
         self._preview_workflow_file = preview_workflow_file
         self._preview_artifact_name = preview_artifact_name
+        self._app_base_url = app_base_url
 
     def is_curator(self, user: str) -> bool:
         return self._curators.is_curator(user)
@@ -115,7 +126,7 @@ class CurationService:
             self._github.upsert_issue_comment(
                 self._repo,
                 review.pr_number,
-                render_mirror_comment(review, self._repo),
+                render_mirror_comment(review, self._repo, base_url=self._app_base_url),
                 marker=MIRROR_MARKER,
             )
         except (GitHubError, httpx.HTTPError):

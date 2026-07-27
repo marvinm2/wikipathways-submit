@@ -72,7 +72,7 @@
         {% if r.preview and r.preview.status == 'ready' and r.preview.after_svg_url %}
           {{ zoomable(r.preview.after_svg_url, 'Rendered pathway diagram') }}
         {% elif r.preview and r.preview.status == 'failed' %}
-          <div class="preview__failed">Render failed. Check the PR for details.</div>
+          <div class="preview__failed">Could not draw this pathway from its GPML.</div>
         {% else %}
           <div class="preview__empty">
             <span class="preview__dots" aria-hidden="true"><span></span><span></span><span></span></span>
@@ -84,7 +84,7 @@
   </div>
 
   {% if not r.preview or r.preview.status == 'pending' %}
-    <p class="review-card__links"><a href="{{ r.pr_url }}" target="_blank" rel="noopener">Watch render progress on the PR &rarr;</a></p>
+    <p class="review-card__links"><a href="{{ r.pr_url }}" target="_blank" rel="noopener">Open the pull request &rarr;</a></p>
   {% elif r.preview.status == 'ready' %}
     <p class="review-card__links">
       {% if r.preview.datanodes_url %}<a href="{{ r.preview.datanodes_url }}">Data nodes on GitHub</a>{% endif %}

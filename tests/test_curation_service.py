@@ -33,7 +33,9 @@ def locks(session_factory):
     return PathwayLockRegistry(session_factory)
 
 
-def _service(session_factory, github=None, allocator=None, locks=None) -> CurationService:
+def _service(
+    session_factory, github=None, allocator=None, locks=None, app_base_url=""
+) -> CurationService:
     return CurationService(
         session_factory,
         github,
@@ -41,6 +43,7 @@ def _service(session_factory, github=None, allocator=None, locks=None) -> Curati
         curators=ConfigCurators(CURATORS),
         allocator=allocator,
         locks=locks,
+        app_base_url=app_base_url,
     )
 
 
@@ -321,6 +324,25 @@ def test_mirror_comment_written_when_bot_present(session_factory):
     # House style: no decorative emoji beyond the bot marker.
     for emoji in ("🧬", "✅", "❌", "➖", "⬜"):
         assert emoji not in body
+
+
+def test_mirror_comment_links_to_the_render_when_a_public_url_is_set(session_factory):
+    # CI publishes no image, so the mirror comment is the only thing that can point a
+    # GitHub-native reviewer at where the before/after render actually lives.
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh, app_base_url="https://curator.example.org/")
+    svc.register(pr_number=3, wpid=5639, submitter="bob", kind="new")
+    body = gh.comments[(REPO, 3)]["<!-- wikipathways-submit:mirror -->"]
+    assert "https://curator.example.org/dashboard/3" in body
+
+
+def test_mirror_comment_omits_the_render_link_without_a_public_url(session_factory):
+    # Local dev: better no link than one pointing at somebody's localhost.
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    svc.register(pr_number=3, wpid=5639, submitter="bob", kind="new")
+    body = gh.comments[(REPO, 3)]["<!-- wikipathways-submit:mirror -->"]
+    assert "Before/after render:" not in body
 
 
 def test_approve_does_not_mutate_state_if_merge_fails(session_factory, allocator, locks):

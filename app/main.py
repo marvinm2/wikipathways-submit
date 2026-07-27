@@ -228,6 +228,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             require_preview_check=settings.require_preview_check,
             preview_workflow_file=settings.preview_workflow_file,
             preview_artifact_name=settings.preview_artifact_name,
+            app_base_url=settings.app_base_url,
         )
 
     def _fetch_base_gpml(github: GitHubClient, path: str) -> bytes | None:
