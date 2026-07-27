@@ -621,6 +621,22 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return _detail(r)
 
+    @app.post("/api/reviews/{pr_number}/request-changes", response_model=ReviewDetail)
+    def request_changes(
+        request: Request,
+        pr_number: int,
+        note: str = Form(""),
+        actor: str = Depends(get_current_user),
+        bot: GitHubClient | None = Depends(get_bot_optional),
+    ):
+        if not request.app.state.curators.is_curator(actor):
+            raise HTTPException(status_code=403, detail=f"{actor} is not a curator")
+        try:
+            r = _curation(request, bot).request_changes(pr_number, actor, note)
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _detail(r)
+
     @app.post("/api/reviews/{pr_number}/approve", response_model=ReviewDetail)
     def approve_review(
         request: Request,

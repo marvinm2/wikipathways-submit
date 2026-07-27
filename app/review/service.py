@@ -155,6 +155,10 @@ class CurationService:
                 )
                 s.add(review)
                 s.commit()
+            elif review.status == ReviewStatus.CHANGES_REQUESTED:
+                # A re-upload after changes were requested puts it back in the review queue.
+                review.status = ReviewStatus.OPEN
+                s.commit()
             self._maybe_mirror(review)
             return review
 
@@ -197,6 +201,28 @@ class CurationService:
             self._github.request_pr_reviewer(self._repo, pr_number, curator)
         except (GitHubError, httpx.HTTPError):
             pass
+
+    def request_changes(self, pr_number: int, curator: str, note: str = "") -> Review:
+        """Ask the submitter to revise: move the review to CHANGES_REQUESTED and post the note as a
+        PR comment so it reaches them on GitHub. The lock/reservation stay held — the PR is still
+        open and a re-upload re-opens the review (see ``register``). Comment is best-effort."""
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            if review is None:
+                raise ReviewNotFound(f"no review for PR #{pr_number}")
+            review.status = ReviewStatus.CHANGES_REQUESTED
+            s.commit()
+            if self._github is not None:
+                body = f"**Changes requested** by @{curator}."
+                if note.strip():
+                    body += f"\n\n{note.strip()}"
+                body += "\n\nRe-upload to revise — it reuses this PR and re-opens the review."
+                try:
+                    self._github.create_issue_comment(self._repo, pr_number, body)
+                except (GitHubError, httpx.HTTPError):
+                    pass
+            self._maybe_mirror(review)
+            return review
 
     def set_checklist_item(
         self, pr_number: int, key: str, state: str, note: str = ""

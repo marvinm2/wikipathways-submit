@@ -187,6 +187,31 @@ def test_pathway_info_reports_presence(tmp_path):
         assert missing["exists"] is False and missing["wpid"] == "WP9999"
 
 
+def test_request_changes_endpoint(tmp_path):
+    app, current = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()["pr_number"]
+
+        # A non-curator cannot request changes.
+        assert c.post(f"/api/reviews/{pr}/request-changes", data={"note": "x"}).status_code == 403
+
+        current["user"] = "curator"
+        r = c.post(f"/api/reviews/{pr}/request-changes", data={"note": "Annotate the nodes."})
+        assert r.status_code == 200
+        assert r.json()["status"] == "changes_requested"
+        # It leaves the open queue and shows under changes_requested.
+        assert c.get("/api/reviews").json() == []
+        cr = c.get("/api/reviews?status=changes_requested").json()
+        assert [x["pr_number"] for x in cr] == [pr]
+        # The note went out as a PR comment.
+        comments = app.state._fake.issue_comments[(app.state.settings.content_repo, pr)]
+        assert any("Annotate the nodes." in b for b in comments)
+
+
 def test_dashboard_end_to_end(tmp_path):
     app, current = _authed_app(tmp_path, curators=["curator"])
     with TestClient(app) as c:

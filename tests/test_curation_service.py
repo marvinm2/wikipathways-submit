@@ -135,6 +135,29 @@ def test_assign_swallows_review_request_failure(session_factory):
     assert gh.review_requests == {}
 
 
+def test_request_changes_sets_status_and_posts_comment(session_factory):
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
+    review = svc.request_changes(1, "curator", note="Annotate the AKT1 node.")
+    assert review.status == ReviewStatus.CHANGES_REQUESTED
+    comments = gh.issue_comments[(REPO, 1)]
+    assert len(comments) == 1
+    assert "Changes requested" in comments[0]
+    assert "@curator" in comments[0]
+    assert "Annotate the AKT1 node." in comments[0]
+
+
+def test_reupload_after_changes_requested_reopens_review(session_factory):
+    svc = _service(session_factory)  # no github → comment step is skipped
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
+    svc.request_changes(1, "curator")
+    assert svc.get(1).status == ReviewStatus.CHANGES_REQUESTED
+    # A re-upload re-registers the same PR → back into the review queue.
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="update")
+    assert svc.get(1).status == ReviewStatus.OPEN
+
+
 def _gated_service(session_factory, github):
     return CurationService(
         session_factory,

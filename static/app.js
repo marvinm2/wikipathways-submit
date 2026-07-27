@@ -274,6 +274,39 @@
           approveBtn.textContent = originalLabel;
           toast('Could not reach the server. Try again.', 'error');
         });
+      return;
+    }
+
+    var changesBtn = e.target.closest('.btn--changes');
+    if (changesBtn) {
+      var panel = changesBtn.closest('.review-card').querySelector('.changes-panel');
+      if (panel) {
+        panel.hidden = !panel.hidden;
+        if (!panel.hidden) { var ta = panel.querySelector('.changes-note'); if (ta) ta.focus(); }
+      }
+      return;
+    }
+
+    var sendBtn = e.target.closest('.btn--changes-send');
+    if (sendBtn) {
+      var card3 = sendBtn.closest('.review-card');
+      var pr3 = card3.getAttribute('data-pr');
+      var noteEl = card3.querySelector('.changes-note');
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Sending…';
+      postForm('/api/reviews/' + pr3 + '/request-changes', { note: noteEl ? noteEl.value : '' })
+        .then(function (res) {
+          sendBtn.disabled = false;
+          sendBtn.textContent = 'Send request';
+          if (!res.ok) { toast(describeError(res.status, res.body), 'error'); return; }
+          toast('Changes requested.', 'success');
+          setTimeout(function () { location.reload(); }, 600);
+        })
+        .catch(function () {
+          sendBtn.disabled = false;
+          sendBtn.textContent = 'Send request';
+          toast('Could not reach the server. Try again.', 'error');
+        });
     }
   });
 

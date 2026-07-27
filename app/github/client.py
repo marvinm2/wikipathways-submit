@@ -77,6 +77,10 @@ class GitHubClient(ABC):
         """Open a PR from ``head`` into ``base`` and return it."""
 
     @abstractmethod
+    def create_issue_comment(self, repo: str, issue_number: int, body: str) -> None:
+        """Post a new comment on an issue/PR (not upserted) — e.g. a curator's change request."""
+
+    @abstractmethod
     def request_pr_reviewer(self, repo: str, pr_number: int, reviewer: str) -> None:
         """Request ``reviewer`` as a reviewer on the PR (mirrors an app-side assignment).
 
@@ -170,6 +174,8 @@ class FakeGitHubClient(GitHubClient):
         self.closed: set[int] = set()
         # {pr_number: [reviewer, ...]} — reviewers requested via request_pr_reviewer.
         self.review_requests: dict[int, list[str]] = {}
+        # {(repo, issue_number): [body, ...]} — plain comments posted via create_issue_comment.
+        self.issue_comments: dict[tuple[str, int], list[str]] = {}
         # {(repo, issue_number): {marker: body}} — one comment per marker (upsert semantics).
         self.comments: dict[tuple[str, int], dict[str, str]] = {}
         # {"org/team-slug": [login, ...]}
@@ -249,6 +255,10 @@ class FakeGitHubClient(GitHubClient):
         self._next_pr += 1
         self.pulls.append(pr)
         return pr
+
+    def create_issue_comment(self, repo: str, issue_number: int, body: str) -> None:
+        self._maybe_fail("create_issue_comment")
+        self.issue_comments.setdefault((repo, issue_number), []).append(body)
 
     def request_pr_reviewer(self, repo: str, pr_number: int, reviewer: str) -> None:
         self._maybe_fail("request_pr_reviewer")
@@ -401,6 +411,12 @@ class HttpGitHubClient(GitHubClient):
         self._raise_for(resp, "open_pull_request")
         data = resp.json()
         return PullRequest(number=data["number"], html_url=data["html_url"], head_branch=head)
+
+    def create_issue_comment(self, repo: str, issue_number: int, body: str) -> None:
+        resp = self._client.post(
+            f"/repos/{repo}/issues/{issue_number}/comments", json={"body": body}
+        )
+        self._raise_for(resp, f"create_issue_comment({issue_number})")
 
     def request_pr_reviewer(self, repo: str, pr_number: int, reviewer: str) -> None:
         resp = self._client.post(
