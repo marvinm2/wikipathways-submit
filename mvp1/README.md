@@ -26,13 +26,13 @@ what a curator actually needs to review:
 | Job | Produces | In review subset? |
 |---|---|---|
 | `changed-gpmls` | list of changed GPMLs (via `git diff`) | logic reused (adapted to PR base..head) |
-| `metadata` | `-info.json`, `-datanodes.tsv` (Java `meta-data-action` + BridgeDb) | ✅ datanodes table |
-| `pubmed` | `-bibliography.tsv` (Node `generate-references`) | ✅ references |
-| `json-svg` | `.svg`, `.json`, `-thumb.png` (Node `gpmlconverter`, puppeteer) | ✅ **the render** |
-| `frontmatter` | `.md` | ➖ optional, not a review artifact |
-| `author-list` | author profiles → jekyll repo | ❌ side-repo push |
-| `homology-conversion` | homolog GPMLs → homology repo | ❌ side-repo push |
-| `sync-site-repo-*` | site content → jekyll repo | ❌ side-repo push |
+| `metadata` | `-info.json`, `-datanodes.tsv` (Java `meta-data-action` + BridgeDb) | yes — datanodes table |
+| `pubmed` | `-bibliography.tsv` (Node `generate-references`) | yes — references |
+| `json-svg` | `.svg`, `.json`, `-thumb.png` (Node `gpmlconverter`, puppeteer) | yes — the render |
+| `frontmatter` | `.md` | optional, not a review artifact |
+| `author-list` | author profiles → jekyll repo | no — side-repo push |
+| `homology-conversion` | homolog GPMLs → homology repo | no — side-repo push |
+| `sync-site-repo-*` | site content → jekyll repo | no — side-repo push |
 
 Key discoveries that shaped the design:
 
@@ -64,7 +64,7 @@ through Java/Node converters. So:
   `pull-requests: write`, downloads the artifact, and posts one **sticky** comment. It never
   checks out or runs PR code — it only reads `comment.md` + `pr-number.txt`.
 
-⚠️ **Do not "simplify" this into a single `pull_request_target` job that checks out PR head.**
+**Do not "simplify" this into a single `pull_request_target` job that checks out PR head.**
 That runs untrusted code with a write token — a well-known GitHub Actions vulnerability. The
 two-workflow split is deliberate.
 

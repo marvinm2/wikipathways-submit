@@ -94,7 +94,7 @@ jobs:
           echo pass > preview/status.txt
           {
             echo "<!-- wikipathways-pr-preview -->"
-            echo "## 🧬 WikiPathways PR preview"
+            echo "## WikiPathways PR preview"
             echo
             echo "No renderable GPML changes in this PR."
           } > preview/comment.md
@@ -318,19 +318,18 @@ jobs:
               fail) overall=fail ;;
               warn) [ "$overall" = pass ] && overall=warn ;;
             esac
-            case "$st" in fail) ic="❌";; warn) ic="⚠️";; *) ic="✅";; esac
 
             for ext in -datanodes.tsv -bibliography.tsv -refs.tsv -info.json; do
               [ -e "pathways/$wpid/$wpid$ext" ] && cp "pathways/$wpid/$wpid$ext" "preview/$wpid/"
             done
             full+="$(cat "preview/$wpid/validation.md")"$'\n\n'
-            rollup+="- $ic \`$wpid\` — ${st^^}"$'\n'
+            rollup+="- \`$wpid\`: ${st^^}"$'\n'
           done <<< "$FILES"
 
           echo "$overall" > preview/status.txt
 
           header="<!-- wikipathways-pr-preview -->
-          ## 🧬 WikiPathways PR preview
+          ## WikiPathways PR preview
 
           Generated review artifacts for the changed pathway(s). Full render + tables are in the **pr-preview** artifact on this run.
           "
