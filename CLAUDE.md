@@ -192,8 +192,9 @@ Marvin has decided three things that the current code does not do yet, written u
    pipeline (`1_on_pull_request` → `2_after_pr_processed` → `3a_approved`/`3b_rejected`,
    dispatched by an `accepted` label), not the personal fork.
 
-Two questions block the work: what exactly the placeholder is (`pathways/WP1/` is a real pathway;
-the sandbox suggests `WP0001`), and how the branch name stays unique per submission.
+Settled: the placeholder is **`WP0001`**, and the branch carries a **timestamp** for uniqueness
+(proposed `WP0001_<username>_<YYYYMMDD-HHMMSS>`). Still open: who renames the file at approval,
+how we sit alongside the sandbox's own pipeline, and what replaces the `pending_new` lookup.
 
 ## Open decisions (still unresolved — scaffolding-plan §0, proposal §9)
 
