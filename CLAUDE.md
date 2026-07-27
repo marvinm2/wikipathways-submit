@@ -179,6 +179,22 @@ GlusterFS-backed data at `/mnt/gluster/docker/<service>/data`, **no node pinning
 Docker secrets (never in the repo). The app needs a GitHub App identity installed on
 `wikipathways-database` with contents RW, pull_requests RW, and issues/comments RW.
 
+## Next direction (2026-07-27) — read before changing the submission flow
+
+Marvin has decided three things that the current code does not do yet, written up in
+**`docs/next-wpid-on-approval.md`** (start there):
+
+1. A new pathway always gets its own branch named from the **submitter + a placeholder WPID**,
+   not from an app-assigned id.
+2. The **real WPID is assigned only on approval**, which removes the reservation race by
+   construction and shrinks `app/wpid/`.
+3. The target repo becomes **`wikipathways/sandbox-wp-db`**, which already has its own PR
+   pipeline (`1_on_pull_request` → `2_after_pr_processed` → `3a_approved`/`3b_rejected`,
+   dispatched by an `accepted` label), not the personal fork.
+
+Two questions block the work: what exactly the placeholder is (`pathways/WP1/` is a real pathway;
+the sandbox suggests `WP0001`), and how the branch name stays unique per submission.
+
 ## Open decisions (still unresolved — scaffolding-plan §0, proposal §9)
 
 - Final repo name (`wikipathways-curator` vs `wikipathways-submit` vs `pathway-portal`).
