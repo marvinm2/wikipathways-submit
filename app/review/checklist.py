@@ -94,20 +94,6 @@ def _auto_naming(m) -> AutoResult:
     return AutoResult(ChecklistState.PASS.value, "WPID and file layout are assigned by the app.")
 
 
-def _auto_description(m) -> AutoResult:
-    missing = []
-    if not m.name:
-        missing.append("title")
-    if not (m.description or "").strip():
-        missing.append("description")
-    if missing:
-        return AutoResult(
-            ChecklistState.PENDING.value,
-            f"No {', '.join(missing)} — confirm this is intentional.",
-        )
-    return AutoResult(ChecklistState.PASS.value, "Title and description are present.")
-
-
 def _auto_ontology(m) -> AutoResult:
     if m.ontology_tags:
         return AutoResult(ChecklistState.PASS.value, f"{len(m.ontology_tags)} ontology tag(s).")
@@ -166,11 +152,12 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
     ChecklistItemDef(
         "naming_ok", "WPID and file layout are correct", required=True, auto_check=_auto_naming
     ),
+    # "Meaningful" is a human judgement — no auto_check. Still scoped out of updates that leave
+    # the title and description unchanged.
     ChecklistItemDef(
         "description_ok",
         "Title and description are meaningful",
         required=True,
-        auto_check=_auto_description,
         relevant_for_update=_rel_description,
     ),
     ChecklistItemDef(
