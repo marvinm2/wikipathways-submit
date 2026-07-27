@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Insulin signaling (demo)" Organism="Homo sapiens">
+  <Graphics BoardWidth="620.0" BoardHeight="560.0" />
+
+  <DataNode TextLabel="INS" Type="GeneProduct">
+    <Graphics CenterX="240.0" CenterY="80.0" Width="120.0" Height="34.0" Color="1a5276" />
+    <Xref Database="Ensembl" ID="ENSG00000254647" />
+  </DataNode>
+
+  <DataNode TextLabel="INSR" Type="GeneProduct">
+    <Graphics CenterX="240.0" CenterY="200.0" Width="120.0" Height="34.0" Color="1a5276" />
+    <Xref Database="Ensembl" ID="ENSG00000171105" />
+  </DataNode>
+
+  <DataNode TextLabel="AKT1" Type="GeneProduct">
+    <Graphics CenterX="240.0" CenterY="320.0" Width="120.0" Height="34.0" Color="1a5276" />
+    <Xref Database="Ensembl" ID="ENSG00000142208" />
+  </DataNode>
+
+  <DataNode TextLabel="FOXO1" Type="GeneProduct">
+    <Graphics CenterX="240.0" CenterY="440.0" Width="120.0" Height="34.0" Color="1a5276" />
+    <Xref Database="Ensembl" ID="ENSG00000150907" />
+  </DataNode>
+
+  <DataNode TextLabel="Glucose" Type="Metabolite">
+    <Graphics CenterX="440.0" CenterY="320.0" Width="120.0" Height="34.0" Color="7d6608" FillColor="fef9e7" />
+    <Xref Database="ChEBI" ID="CHEBI:17234" />
+  </DataNode>
+
+  <Interaction>
+    <Graphics>
+      <Point X="240.0" Y="97.0" />
+      <Point X="240.0" Y="183.0" ArrowHead="Arrow" />
+    </Graphics>
+  </Interaction>
+
+  <Interaction>
+    <Graphics>
+      <Point X="240.0" Y="217.0" />
+      <Point X="240.0" Y="303.0" ArrowHead="Arrow" />
+    </Graphics>
+  </Interaction>
+
+  <Interaction>
+    <Graphics>
+      <Point X="240.0" Y="337.0" />
+      <Point X="240.0" Y="423.0" ArrowHead="Arrow" />
+    </Graphics>
+  </Interaction>
+
+  <Interaction>
+    <Graphics>
+      <Point X="300.0" Y="320.0" />
+      <Point X="380.0" Y="320.0" ArrowHead="mim-catalysis" />
+    </Graphics>
+  </Interaction>
+</Pathway>

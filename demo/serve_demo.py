@@ -1,0 +1,136 @@
+"""Run the app locally against a real GitHub fork, authenticated as you.
+
+    submit a new pathway  ->  approve & merge in the dashboard  ->  update that same pathway
+
+By default this talks to the **real** GitHub API as your own account and opens **real** pull
+requests on your fork (``marvinm2/wikipathways-database``). Auth is your existing GitHub CLI
+token; no OAuth App or GitHub App registration is needed. Because the app's OAuth login flow
+needs a registered OAuth App, we skip it and inject your token directly — the identity, the API
+calls, and the PRs are all real.
+
+    .venv/bin/python demo/serve_demo.py         # real mode (opens real PRs on the fork)
+    WPSUBMIT_DEMO_FAKE=1 .venv/bin/python demo/serve_demo.py   # offline, in-memory fake
+
+Environment overrides:
+    WPSUBMIT_DEMO_TOKEN   GitHub token to use (default: `gh auth token`)
+    WPSUBMIT_DEMO_USER    your login          (default: `gh api user --jq .login`)
+    WPSUBMIT_DEMO_REPO    target repo         (default: marvinm2/wikipathways-database)
+
+Real mode makes real changes on the fork (branches, PRs, and — on approve — a merge into the
+fork's main). It is your fork, so that is fine; the README explains how to clean up afterwards.
+"""
+from __future__ import annotations
+
+import os
+import pathlib
+import subprocess
+import tempfile
+
+import uvicorn
+from starlette.requests import Request
+from starlette.responses import RedirectResponse
+
+from app.config import Settings
+from app.github import FakeGitHubClient, HttpGitHubClient
+from app.main import (
+    build_app,
+    get_bot_client,
+    get_bot_optional,
+    get_current_user,
+    get_github_client,
+)
+
+BRANCH = "main"
+
+
+def _gh(*args: str) -> str:
+    return subprocess.check_output(["gh", *args], text=True).strip()
+
+
+def _real_config():
+    token = os.environ.get("WPSUBMIT_DEMO_TOKEN") or _gh("auth", "token")
+    user = os.environ.get("WPSUBMIT_DEMO_USER") or _gh("api", "user", "--jq", ".login")
+    repo = os.environ.get("WPSUBMIT_DEMO_REPO", "marvinm2/wikipathways-database")
+    return token, user, repo
+
+
+class _MergingFake(FakeGitHubClient):
+    """Offline fallback: like the test fake, but a merge promotes the PR's file onto main so the
+    update step afterwards finds the pathway on the base branch (real GitHub does this for free)."""
+
+    def merge_pull_request(self, repo: str, pr_number: int, *, method: str = "squash") -> None:
+        super().merge_pull_request(repo, pr_number, method=method)
+        pr = next((p for p in self.pulls if p.number == pr_number), None)
+        if pr is None:
+            return
+        for (r, branch, path), (content, _msg, sha) in list(self.files.items()):
+            if r == repo and branch == pr.head_branch:
+                self.existing_files[(r, path)] = sha
+                self.existing_contents[(r, path)] = content
+
+
+def make_demo_app():
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="wpsubmit-demo-"))
+    fake_mode = os.environ.get("WPSUBMIT_DEMO_FAKE") == "1"
+
+    if fake_mode:
+        user, repo, token = "demo-curator", "wikipathways/wikipathways-database", None
+    else:
+        token, user, repo = _real_config()
+
+    settings = Settings(
+        _env_file=None,  # ignore any local .env so the demo is self-contained
+        database_url=f"sqlite:///{tmp / 'registry.db'}",
+        content_repo=repo,
+        default_branch=BRANCH,
+        # In real mode the WPID floor is read from the fork's tree (a fresh, non-colliding id).
+        # In fake mode there is no repo to read, so use a static floor.
+        github_token=token if not fake_mode else None,
+        dev_wpid_floor=5636,
+        curators=[user],
+        preview_cache_dir=str(tmp / "preview-cache"),
+        session_secret="demo-only-not-secret",
+    )
+    app = build_app(settings)
+
+    if fake_mode:
+        client = _MergingFake(default_branches={f"{repo}#{BRANCH}": "demobase0000000"})
+        provider = lambda: client  # noqa: E731
+    else:
+        # A fresh real client per request (mirrors how the app builds one per user request).
+        provider = lambda: HttpGitHubClient(token)  # noqa: E731
+
+    # One identity for everything: your token acts as submitter and as the "bot" (merge + mirror
+    # comment). On your own fork you can merge your own PRs, so this is enough for the demo.
+    app.dependency_overrides[get_github_client] = provider
+    app.dependency_overrides[get_bot_optional] = provider
+    app.dependency_overrides[get_bot_client] = provider
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    @app.get("/demo/login")
+    def demo_login(request: Request):
+        request.session["gh_login"] = user  # satisfies the landing-page "signed in" gate
+        return RedirectResponse("/", status_code=303)
+
+    @app.get("/demo/logout")
+    def demo_logout(request: Request):
+        request.session.clear()
+        return RedirectResponse("/", status_code=303)
+
+    app.state._demo = {"user": user, "repo": repo, "fake": fake_mode}
+    return app
+
+
+app = make_demo_app()
+
+if __name__ == "__main__":
+    info = app.state._demo
+    mode = "FAKE (offline, in-memory)" if info["fake"] else "REAL GitHub"
+    print("\n  wikipathways-submit demo")
+    print(f"  mode : {mode}")
+    print(f"  as   : @{info['user']}")
+    print(f"  repo : {info['repo']}")
+    if not info["fake"]:
+        print("  NOTE : submitting/approving opens and merges REAL pull requests on that fork.")
+    print("  open : http://127.0.0.1:8000/demo/login\n")
+    uvicorn.run(app, host="127.0.0.1", port=8000)
