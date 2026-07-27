@@ -181,7 +181,22 @@ class CurationService:
             review.assigned_curator = curator
             s.commit()
             self._maybe_mirror(review)
+            self._maybe_request_reviewer(pr_number, curator)
             return review
+
+    def _maybe_request_reviewer(self, pr_number: int, curator: str) -> None:
+        """Best-effort: mirror the app-side assignment as a real PR review request on GitHub.
+
+        GitHub refuses to request a review from the PR author (the submitter reviewing their own
+        pathway) or from a non-collaborator, and returns 422. That must not fail the app-side
+        assignment — the dashboard is the source of truth — so the error is swallowed.
+        """
+        if self._github is None or not curator:
+            return
+        try:
+            self._github.request_pr_reviewer(self._repo, pr_number, curator)
+        except (GitHubError, httpx.HTTPError):
+            pass
 
     def set_checklist_item(
         self, pr_number: int, key: str, state: str, note: str = ""

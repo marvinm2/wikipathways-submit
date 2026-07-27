@@ -116,6 +116,25 @@ def test_concurrent_checklist_updates_all_persist(session_factory):
     assert all(notes[k] == f"set-{k}" for k in keys), notes
 
 
+def test_assign_requests_pr_reviewer_on_github(session_factory):
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
+    review = svc.assign(1, "curator")
+    assert review.assigned_curator == "curator"
+    assert gh.review_requests.get(1) == ["curator"]  # real PR review request too
+
+
+def test_assign_swallows_review_request_failure(session_factory):
+    # GitHub declines (e.g. can't request review from the PR author) → app assignment still holds.
+    gh = FakeGitHubClient(fail_on={"request_pr_reviewer"})
+    svc = _service(session_factory, github=gh)
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
+    review = svc.assign(1, "curator")  # does not raise
+    assert review.assigned_curator == "curator"
+    assert gh.review_requests == {}
+
+
 def _gated_service(session_factory, github):
     return CurationService(
         session_factory,
