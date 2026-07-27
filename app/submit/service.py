@@ -202,5 +202,8 @@ def _pr_body(
     note = (description or "").strip()
     if note:
         body += f"\n**Submitter note**\n\n{note}\n"
-    body += "\nThe PR-preview pipeline will render this pathway and post a validation summary."
+    body += (
+        "\nThe PR-preview workflow will post a validation and metadata summary here. "
+        "The pathway itself is drawn in the curation dashboard, not in this pull request."
+    )
     return body

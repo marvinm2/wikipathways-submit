@@ -70,6 +70,21 @@ def test_get_missing_raises(session_factory):
         _service(session_factory).get(999)
 
 
+def test_state_click_keeps_the_existing_note(session_factory):
+    # The dashboard's Pass/Fail/N/A chips send no note. Treating that as an empty note wiped the
+    # auto-derived explanation the curator is reading ("1 of 3 data nodes have no identifier").
+    svc = _service(session_factory)
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
+    svc.set_checklist_item(1, "render_ok", "pending", note="1 of 3 data nodes unannotated")
+    svc.set_checklist_item(1, "render_ok", "pass")  # a state click, not a note edit
+    item = next(i for i in svc.get(1).checklist if i["key"] == "render_ok")
+    assert item["state"] == "pass"
+    assert item["note"] == "1 of 3 data nodes unannotated"
+    # An explicit empty string still clears it — that is a deliberate edit.
+    svc.set_checklist_item(1, "render_ok", "pass", note="")
+    assert next(i for i in svc.get(1).checklist if i["key"] == "render_ok")["note"] == ""
+
+
 def test_set_checklist_item_validates(session_factory):
     svc = _service(session_factory)
     svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")

@@ -289,26 +289,25 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     def _review_view(request: Request, r) -> dict:
         """The per-review dict the templates consume (design §4.5) — enriched beyond the API model.
 
-        ``preview`` mirrors the before/after render from the MVP-1 pipeline artifact (issue #11):
-        cheap status only here (no download); the SVG bytes stream from ``/previews/...`` when the
-        browser requests them. Only open reviews are checked — merged/closed cards lead with their
-        resolved banner.
+        ``preview`` is the app's own before/after render (issue #11): a cheap disk check here;
+        the SVG bytes stream from ``/previews/...`` when the browser requests them. Every status
+        gets it — a curator reading a change request, or checking what was merged, wants the
+        diagram just as much as one reviewing an open PR.
         """
         pr_url = f"https://github.com/{settings.content_repo}/pull/{r.pr_number}"
         preview = None
-        if r.status == ReviewStatus.OPEN:
-            status = request.app.state.preview.status(r.pr_number)
-            if status == "ready":
-                preview = {
-                    "status": "ready",
-                    "before_svg_url": f"/previews/{r.pr_number}/before.svg",
-                    "after_svg_url": f"/previews/{r.pr_number}/after.svg",
-                    "datanodes_url": f"{pr_url}/files",
-                    "validation_url": f"{pr_url}/checks",
-                }
-            elif status == "failed":
-                preview = {"status": "failed"}
-            # 'pending' → leave None so the template shows the "generating" empty state
+        status = request.app.state.preview.status(r.pr_number)
+        if status == "ready":
+            preview = {
+                "status": "ready",
+                "before_svg_url": f"/previews/{r.pr_number}/before.svg",
+                "after_svg_url": f"/previews/{r.pr_number}/after.svg",
+                "datanodes_url": f"{pr_url}/files",
+                "validation_url": f"{pr_url}/checks",
+            }
+        elif status == "failed":
+            preview = {"status": "failed"}
+        # 'pending' → leave None so the template shows the "generating" empty state
         return {
             **_detail(r).model_dump(),
             "wpid_str": f"WP{r.wpid}",
@@ -657,7 +656,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         pr_number: int,
         key: str = Form(...),
         state: str = Form(...),
-        note: str = Form(""),
+        # Omitted (the dashboard's state chips send no note) → the stored note is left alone.
+        note: str | None = Form(None),
         actor: str = Depends(get_current_user),
         bot: GitHubClient | None = Depends(get_bot_optional),
     ):

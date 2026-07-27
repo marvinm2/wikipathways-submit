@@ -24,14 +24,27 @@
     setTimeout(function () { if (el.parentNode) el.remove(); }, 6000);
   }
 
+  // Speak to a pathway author, not to a developer: no status codes in the message. The API's
+  // own `detail` is already written for humans, so prefer it; fall back per status.
+  var STATUS_FALLBACK = {
+    401: 'Your session has expired. Log in with GitHub again.',
+    403: 'You do not have permission to do that.',
+    404: 'That pathway or review no longer exists.',
+    409: 'Someone else is editing this pathway right now.',
+    413: 'That file is too large to upload.',
+    502: 'GitHub did not accept the change. Try again in a moment.',
+    503: 'That part of the app is not configured yet.'
+  };
   function describeError(status, body) {
     var detail = body && body.detail;
-    var msg;
-    if (detail && Array.isArray(detail.errors)) msg = detail.errors.join('; ');
-    else if (typeof detail === 'string') msg = detail;
-    else if (detail) { try { msg = JSON.stringify(detail); } catch (e) { msg = 'unknown error'; } }
-    else msg = 'Something went wrong.';
-    return 'Error ' + status + ': ' + msg;
+    if (detail && Array.isArray(detail.errors)) return detail.errors.join('; ');
+    if (typeof detail === 'string') return detail;
+    if (detail && detail.reason) {
+      return detail.held_by
+        ? 'This pathway is checked out by @' + detail.held_by + '. Try again once their edit is merged.'
+        : String(detail.reason);
+    }
+    return STATUS_FALLBACK[status] || 'Something went wrong. Try again.';
   }
 
   function postForm(url, fields) {
@@ -117,9 +130,22 @@
       wpidStatus.className = 'wpid-status wpid-status--checking';
       wpidStatus.textContent = 'Checking WP' + num + '…';
       fetch('/api/pathways/' + num)
-        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (r) {
+          // A 401/502 must NOT read as "absent": telling someone an existing pathway does not
+          // exist sends them to the New-pathway tab, which burns a WPID on a duplicate.
+          if (r.ok) return r.json();
+          return r.json().catch(function () { return {}; }).then(function (body) {
+            return { lookupFailed: true, message: describeError(r.status, body) };
+          });
+        })
         .then(function (info) {
           if (!info) { wpidStatus.hidden = true; return; }
+          if (info.lookupFailed) {
+            delete wpidInput.dataset.state;
+            wpidStatus.className = 'wpid-status wpid-status--error';
+            wpidStatus.textContent = 'Could not check WP' + num + '. ' + info.message;
+            return;
+          }
           wpidInput.dataset.state = info.state;
           if (info.state === 'on_main') {
             wpidStatus.className = 'wpid-status wpid-status--ok';
@@ -138,9 +164,11 @@
     });
   }
 
-  var updateBtn0 = document.getElementById('update-btn');
-  if (updateBtn0) {
-    updateBtn0.addEventListener('click', function (e) {
+  // Bound to the form's submit, not the button's click: with a single text field the browser
+  // implicitly submits on Enter, which used to reload the page and discard the whole form.
+  var updateForm = document.getElementById('update-form');
+  if (updateForm) {
+    updateForm.addEventListener('submit', function (e) {
       e.preventDefault();
       var wpid = (document.getElementById('update-wpid').value || '').trim().replace(/^WP/i, '');
       var file = document.getElementById('update-file').files[0];
@@ -165,6 +193,8 @@
       var label = btn.textContent;
       btn.disabled = true;
       btn.textContent = 'Submitting…';
+      var prevOut = document.getElementById('update-result');
+      if (prevOut) { prevOut.hidden = true; prevOut.innerHTML = ''; }
       var fd = new FormData();
       fd.append('file', file);
       fd.append('description', description);
@@ -172,8 +202,19 @@
       // Route by where the WPID lives: an existing pathway → update; a still-open new
       // submission → revise (commit onto its PR); nowhere → tell the user.
       fetch('/api/pathways/' + wpid)
-        .then(function (r) { return r.ok ? r.json() : { state: 'absent', wpid: 'WP' + wpid }; })
+        .then(function (r) {
+          if (r.ok) return r.json();
+          return r.json().catch(function () { return {}; }).then(function (body) {
+            return { lookupFailed: true, message: describeError(r.status, body) };
+          });
+        })
         .then(function (info) {
+          if (info.lookupFailed) {
+            // Unknown whether WP#### exists — stop rather than route the upload on a guess.
+            reset();
+            toast('Could not check WP' + wpid + '. ' + info.message, 'error');
+            return null;
+          }
           if (info.state === 'absent') {
             reset();
             toast(info.wpid + ' does not exist yet — use the "New pathway" tab.', 'error');
@@ -188,13 +229,14 @@
           reset();
           if (!res.ok) { toast(describeError(res.status, res.body), 'error'); return; }
           var word = res.verb === 'revise' ? 'Revised' : 'Updated';
+          var noun = res.verb === 'revise' ? 'Revision' : 'Update';
           var out = document.getElementById('update-result');
           out.innerHTML =
             word + ' <strong>' + res.body.wpid + '</strong> on pull request ' +
             '<a href="' + res.body.pr_url + '" target="_blank" rel="noopener">#' + res.body.pr_number + '</a> ' +
             '(<code>' + res.body.path + '</code>). <a href="/dashboard">Go to the dashboard</a>.';
           out.hidden = false;
-          toast(word + ' submitted.', 'success');
+          toast(noun + ' submitted.', 'success');
         })
         .catch(function () {
           reset();
@@ -204,6 +246,19 @@
   }
 
   // ---------- review cards (dashboard.html / review_detail.html) ----------
+  // Mirrors the state_icon() macro in templates/dashboard.html: the pill's glyph is the
+  // non-colour cue for its state, so a JS update has to redraw it, not just the word.
+  var PILL_ICON = {
+    pass: '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    fail: '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+    na: '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 8h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+    pending: '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="4" stroke="currentColor" stroke-width="2"/></svg>'
+  };
+  function setPillContent(pill, state) {
+    pill.innerHTML = (PILL_ICON[state] || '') + ' ';
+    pill.appendChild(document.createTextNode(state));
+  }
+
   function recomputeApprove(card) {
     var approveBtn = card.querySelector('.btn--approve');
     if (!approveBtn) return;
@@ -234,7 +289,7 @@
       if (pill) {
         pill.className = 'state-pill state-pill--' + srv.state;
         pill.setAttribute('data-state', srv.state);
-        pill.textContent = srv.state;
+        setPillContent(pill, srv.state);
       }
       item.querySelectorAll('.chip-btn').forEach(function (b) {
         b.setAttribute('aria-pressed', b.getAttribute('data-state') === srv.state ? 'true' : 'false');
@@ -379,6 +434,10 @@
     if (img.complete && img.naturalWidth) { measure(); } else { img.addEventListener('load', measure); }
 
     viewport.addEventListener('wheel', function (e) {
+      // Don't hijack the page scroll: a queue card is mostly preview, so swallowing every wheel
+      // event traps the reader. Ctrl+wheel (the pinch gesture) zooms from any scale; a plain
+      // wheel only once they have zoomed in and are navigating inside the diagram.
+      if (!e.ctrlKey && scale <= 1.001) return;
       e.preventDefault();
       zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY);
     }, { passive: false });
@@ -413,6 +472,21 @@
       .then(function (res) {
         select.disabled = false;
         if (!res.ok) { toast(describeError(res.status, res.body), 'error'); return; }
+        // The server-rendered "assigned to" line would otherwise contradict the select.
+        var line = card.querySelector('.review-card__submitter');
+        if (line && res.body && res.body.submitter) {
+          line.textContent = '';
+          line.appendChild(document.createTextNode('Submitted by '));
+          var who = document.createElement('strong');
+          who.textContent = '@' + res.body.submitter;
+          line.appendChild(who);
+          if (res.body.assigned_curator) {
+            line.appendChild(document.createTextNode(' · assigned to '));
+            var cur = document.createElement('strong');
+            cur.textContent = '@' + res.body.assigned_curator;
+            line.appendChild(cur);
+          }
+        }
         toast(select.value ? 'Assigned to @' + select.value + '.' : 'Unassigned.', 'success');
       })
       .catch(function () { select.disabled = false; toast('Could not reach the server. Try again.', 'error'); });

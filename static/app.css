@@ -95,6 +95,8 @@
 
 /* ---------- reset ---------- */
 *, *::before, *::after { box-sizing: border-box; }
+/* Author-origin `display` on a component beats the UA's [hidden] rule; restore it. */
+[hidden] { display: none !important; }
 html { color-scheme: light dark; }
 body {
   margin: 0;
@@ -651,7 +653,7 @@ main { flex: 1; }
 .review-card__expand:hover { color: var(--moss); background: var(--moss-tint); }
 .review-card__expand svg { width: 1.1rem; height: 1.1rem; }
 
-.review-card__submitter {
+.review-card__submitter { overflow-wrap: anywhere;
   color: var(--ink-muted);
   font-size: 0.9rem;
   margin: 0.8rem 0 1.1rem;
@@ -685,13 +687,14 @@ main { flex: 1; }
 .zoom__viewport {
   height: 19rem;
   overflow: hidden;
-  touch-action: none;
+  /* Vertical swipes scroll the queue; once zoomed, the gesture pans the diagram instead. */
+  touch-action: pan-y;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 .review-card--expanded .zoom__viewport { height: 30rem; }
-.zoom--zoomed .zoom__viewport { cursor: grab; }
+.zoom--zoomed .zoom__viewport { cursor: grab; touch-action: none; }
 .zoom--zoomed .zoom__viewport:active { cursor: grabbing; }
 .zoom .zoom__img {
   max-width: 100%;
@@ -731,7 +734,7 @@ main { flex: 1; }
 .meta-panel__block { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 0.6rem 0.75rem; background: var(--surface-2); }
 .meta-panel__block--note { background: var(--moss-tint); border-color: transparent; }
 .meta-panel__block h4 { margin: 0 0 0.3rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); }
-.meta-panel__block p { margin: 0; font-size: 0.9rem; white-space: pre-wrap; }
+.meta-panel__block p { margin: 0; font-size: 0.9rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .meta-panel__block > summary { cursor: pointer; font-size: 0.8rem; font-weight: 600; color: var(--ink); }
 .meta-panel__block[open] > summary { margin-bottom: 0.5rem; }
 .meta-panel__empty { color: var(--ink-faint); font-size: 0.85rem; margin: 0; }

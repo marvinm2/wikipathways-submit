@@ -262,7 +262,7 @@ class CurationService:
             return review
 
     def set_checklist_item(
-        self, pr_number: int, key: str, state: str, note: str = ""
+        self, pr_number: int, key: str, state: str, note: str | None = None
     ) -> Review:
         if not is_valid_key(key):
             raise ValueError(f"unknown checklist item: {key}")
@@ -287,7 +287,10 @@ class CurationService:
                     for item in checklist:
                         if item["key"] == key:
                             item["state"] = state
-                            item["note"] = note
+                            # None = "not editing the note" — a Pass/Fail/N/A click must not
+                            # erase the auto-derived explanation the curator is reading.
+                            if note is not None:
+                                item["note"] = note
                     review.checklist = checklist
                     s.commit()  # version-guarded UPDATE; StaleDataError if we lost the race
                     self._maybe_mirror(review)

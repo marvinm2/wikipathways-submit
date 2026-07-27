@@ -540,6 +540,43 @@ def test_preview_route_serves_the_app_render(tmp_path):
         assert c.get("/previews/999999/after.svg").status_code == 404
 
 
+def _login(client, login: str) -> None:
+    """Set the signed session cookie the HTML pages read.
+
+    The JSON API resolves identity through the ``get_current_user`` dependency (overridden in
+    tests), but the server-rendered pages read ``request.session`` directly, so a page test has
+    to carry a real session cookie. Mirrors what Starlette's SessionMiddleware writes.
+    """
+    import base64
+    import json as _json
+
+    from itsdangerous import TimestampSigner
+
+    data = base64.b64encode(_json.dumps({"gh_login": login}).encode())
+    signer = TimestampSigner("dev-insecure-change-me")  # the default session_secret in tests
+    client.cookies.set("session", signer.sign(data).decode())
+
+
+def test_dashboard_shows_the_render_after_changes_are_requested(tmp_path):
+    # The render used to be computed for open reviews only, so every other filter showed the
+    # "no render" state while the SVG sat in the cache.
+    app, current = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()["pr_number"]
+        current["user"] = "curator"
+        c.post(f"/api/reviews/{pr}/request-changes", data={"note": "add an identifier"})
+
+        _login(c, "curator")
+        page = c.get("/dashboard", params={"status": "changes_requested"})
+        assert page.status_code == 200
+        assert f"/previews/{pr}/after.svg".encode() in page.content
+        assert b"No render on file" not in page.content
+
+
 def test_preview_missing_side_serves_placeholder(tmp_path):
     app, current = _authed_app(tmp_path, curators=["curator"])
     with TestClient(app) as c:

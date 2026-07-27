@@ -63,7 +63,8 @@
     <p class="hint">Choose a <code>.gpml</code> file. The app validates it, assigns the WPID, lays it
       out, and opens a pull request on <code>{{ repo }}</code> as you.</p>
     <div class="file-field">
-      <input type="file" id="new-file" accept=".gpml,.xml" required aria-describedby="new-file-hint">
+      <input type="file" id="new-file" accept=".gpml,.xml" required
+             aria-label="Pathway GPML file" aria-describedby="new-file-hint">
     </div>
     <span id="new-file-hint" class="visually-hidden">Accepts .gpml or .xml pathway files</span>
     <label class="note-field">
@@ -91,7 +92,7 @@
              aria-describedby="update-wpid-status">
     </label>
     <div class="file-field">
-      <input type="file" id="update-file" accept=".gpml,.xml">
+      <input type="file" id="update-file" accept=".gpml,.xml" aria-label="Edited pathway GPML file">
     </div>
   </div>
   <p class="wpid-status" id="update-wpid-status" role="status" hidden></p>
@@ -113,7 +114,7 @@
     <textarea id="update-description" rows="3"
               placeholder="Summarise the edit so a curator can review it faster."></textarea>
   </label>
-  <button type="button" id="update-btn" class="btn btn--primary">Submit update</button>
+  <button type="submit" id="update-btn" class="btn btn--primary">Submit update</button>
   <div class="result-card" id="update-result" hidden></div>
 </form>
 </section>

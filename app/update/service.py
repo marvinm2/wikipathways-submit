@@ -137,5 +137,8 @@ def _pr_body(wpid_str: str, submitter: str, description: str | None = None) -> s
     note = (description or "").strip()
     if note:
         body += f"\n**What changed**\n\n{note}\n"
-    body += "\nThe PR-preview pipeline will render the revision and post a before/after summary."
+    body += (
+        "\nThe PR-preview workflow will post a validation and metadata summary here. "
+        "The before/after diagrams are drawn in the curation dashboard, not in this pull request."
+    )
     return body
