@@ -182,6 +182,27 @@
     }
   }
 
+  // Reconcile every pill/chip in a card against the authoritative server checklist, so a write
+  // that the server resolved differently than our optimistic click (e.g. after a concurrent
+  // update, issue #15) becomes visible instead of silently diverging.
+  function reconcileChecklist(card, checklist) {
+    if (!checklist) return;
+    checklist.forEach(function (srv) {
+      var item = card.querySelector('.checklist__item[data-key="' + srv.key + '"]');
+      if (!item) return;
+      var pill = item.querySelector('.state-pill');
+      if (pill) {
+        pill.className = 'state-pill state-pill--' + srv.state;
+        pill.setAttribute('data-state', srv.state);
+        pill.textContent = srv.state;
+      }
+      item.querySelectorAll('.chip-btn').forEach(function (b) {
+        b.setAttribute('aria-pressed', b.getAttribute('data-state') === srv.state ? 'true' : 'false');
+      });
+    });
+    recomputeApprove(card);
+  }
+
   document.querySelectorAll('.review-card').forEach(recomputeApprove);
 
   document.addEventListener('click', function (e) {
@@ -198,14 +219,8 @@
         .then(function (res) {
           siblingChips.forEach(function (b) { b.disabled = false; });
           if (!res.ok) { toast(describeError(res.status, res.body), 'error'); return; }
-          var pill = item.querySelector('.state-pill');
-          pill.className = 'state-pill state-pill--' + state;
-          pill.setAttribute('data-state', state);
-          pill.textContent = state;
-          siblingChips.forEach(function (b) {
-            b.setAttribute('aria-pressed', b.getAttribute('data-state') === state ? 'true' : 'false');
-          });
-          recomputeApprove(card);
+          // Trust the server's checklist (the full ReviewDetail), not just the clicked item.
+          reconcileChecklist(card, res.body && res.body.checklist);
         })
         .catch(function () {
           siblingChips.forEach(function (b) { b.disabled = false; });

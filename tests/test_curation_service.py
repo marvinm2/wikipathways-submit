@@ -80,6 +80,41 @@ def test_set_checklist_item_validates(session_factory):
         svc.set_checklist_item(1, "render_ok", "not-a-state")
 
 
+def test_concurrent_checklist_updates_all_persist(session_factory):
+    # Regression for issue #15: setting distinct checklist items concurrently must not lose
+    # updates. Each write is a read-modify-write of the whole JSON blob; without the row lock +
+    # retry, interleaved writes overwrite each other and only the last survives.
+    import threading
+
+    svc = _service(session_factory)
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
+
+    keys = [item.key for item in CURATION_CHECKLIST]  # every item, distinct
+    barrier = threading.Barrier(len(keys))
+    errors: list[Exception] = []
+
+    def worker(key: str) -> None:
+        try:
+            barrier.wait()  # maximise interleaving
+            svc.set_checklist_item(1, key, "pass", note=f"set-{key}")
+        except Exception as exc:  # noqa: BLE001 - collected and asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(k,)) for k in keys]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    review = svc.get(1)
+    states = {item["key"]: item["state"] for item in review.checklist}
+    notes = {item["key"]: item["note"] for item in review.checklist}
+    # Every concurrently-set item survived — no lost update.
+    assert all(states[k] == "pass" for k in keys), states
+    assert all(notes[k] == f"set-{k}" for k in keys), notes
+
+
 def test_approve_requires_curator(session_factory):
     gh = FakeGitHubClient()
     svc = _service(session_factory, github=gh)
