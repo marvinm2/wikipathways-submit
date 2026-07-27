@@ -198,8 +198,11 @@ def test_mirror_comment_written_when_bot_present(session_factory):
     body = gh.comments[(REPO, 3)]["<!-- wikipathways-submit:mirror -->"]
     assert "WP5639" in body and "read-only" in body
     assert body.startswith("<!-- wikipathways-submit:mirror -->")
-    assert "### WikiPathways curation — WP5639" in body
-    # House style: no decorative emoji in content posted to a real PR.
+    # Marked as a bot message (robot marker + automated line), so GitHub-native reviewers know
+    # it is not a human curator's comment.
+    assert "### 🤖 WikiPathways curation — WP5639" in body
+    assert "Automated message from the curation bot" in body
+    # House style: no decorative emoji beyond the bot marker.
     for emoji in ("🧬", "✅", "❌", "➖", "⬜"):
         assert emoji not in body
 

@@ -257,6 +257,56 @@
     }
   });
 
+  // ---------- pan / zoom of a rendered preview ----------
+  function initZoom(root) {
+    var img = root.querySelector('.zoom__img');
+    var viewport = root.querySelector('.zoom__viewport');
+    if (!img || !viewport) return;
+    var scale = 1, tx = 0, ty = 0, min = 1, max = 8;
+    var dragging = false, sx = 0, sy = 0;
+
+    function apply() {
+      img.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+      root.classList.toggle('zoom--zoomed', scale > 1.001);
+    }
+    function clamp(s) { return Math.max(min, Math.min(max, s)); }
+    function reset() { scale = 1; tx = 0; ty = 0; apply(); }
+    function zoomAt(factor, cx, cy) {
+      var rect = viewport.getBoundingClientRect();
+      var ox = cx - rect.left - rect.width / 2 - tx;
+      var oy = cy - rect.top - rect.height / 2 - ty;
+      var ns = clamp(scale * factor), ratio = ns / scale;
+      tx -= ox * (ratio - 1); ty -= oy * (ratio - 1); scale = ns;
+      if (scale === 1) { tx = 0; ty = 0; }
+      apply();
+    }
+    function center() { var r = viewport.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }
+
+    viewport.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY);
+    }, { passive: false });
+    viewport.addEventListener('pointerdown', function (e) {
+      if (scale <= 1) return;
+      dragging = true; sx = e.clientX - tx; sy = e.clientY - ty;
+      viewport.setPointerCapture(e.pointerId);
+    });
+    viewport.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      tx = e.clientX - sx; ty = e.clientY - sy; apply();
+    });
+    function end(e) { if (dragging) { dragging = false; try { viewport.releasePointerCapture(e.pointerId); } catch (_) {} } }
+    viewport.addEventListener('pointerup', end);
+    viewport.addEventListener('pointercancel', end);
+
+    var zin = root.querySelector('[data-zoom-in]'), zout = root.querySelector('[data-zoom-out]'), zr = root.querySelector('[data-zoom-reset]');
+    if (zin) zin.addEventListener('click', function () { var c = center(); zoomAt(1.3, c[0], c[1]); });
+    if (zout) zout.addEventListener('click', function () { var c = center(); zoomAt(1 / 1.3, c[0], c[1]); });
+    if (zr) zr.addEventListener('click', reset);
+    apply();
+  }
+  document.querySelectorAll('[data-zoom]').forEach(initZoom);
+
   document.addEventListener('change', function (e) {
     var select = e.target.closest('.assign__select');
     if (!select) return;

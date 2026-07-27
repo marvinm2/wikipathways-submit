@@ -9,11 +9,24 @@
   {% endif %}
 {% endmacro %}
 
+{% macro zoomable(url, alt) %}
+<div class="zoom" data-zoom>
+  <div class="zoom__viewport">
+    <img class="zoom__img" src="{{ url }}" alt="{{ alt }}" draggable="false" loading="lazy">
+  </div>
+  <div class="zoom__controls" role="group" aria-label="Zoom and pan">
+    <button type="button" class="zoom__btn" data-zoom-out aria-label="Zoom out">&minus;</button>
+    <button type="button" class="zoom__btn" data-zoom-reset aria-label="Reset view">Reset</button>
+    <button type="button" class="zoom__btn" data-zoom-in aria-label="Zoom in">+</button>
+  </div>
+</div>
+{% endmacro %}
+
 {% macro preview_frame(label, url, alt) %}
 <figure class="preview__frame">
   <figcaption>{{ label }}</figcaption>
   {% if url %}
-    <img src="{{ url }}" alt="{{ alt }}" loading="lazy">
+    {{ zoomable(url, alt) }}
   {% else %}
     <div class="preview__empty">
       <span class="preview__dots" aria-hidden="true"><span></span><span></span><span></span></span>
@@ -57,7 +70,7 @@
       <figure class="preview__frame preview__frame--solo">
         <figcaption>Preview</figcaption>
         {% if r.preview and r.preview.status == 'ready' and r.preview.after_svg_url %}
-          <img src="{{ r.preview.after_svg_url }}" alt="Rendered pathway diagram" loading="lazy">
+          {{ zoomable(r.preview.after_svg_url, 'Rendered pathway diagram') }}
         {% elif r.preview and r.preview.status == 'failed' %}
           <div class="preview__failed">Render failed. Check the PR for details.</div>
         {% else %}
@@ -74,9 +87,66 @@
     <p class="review-card__links"><a href="{{ r.pr_url }}" target="_blank" rel="noopener">Watch render progress on the PR &rarr;</a></p>
   {% elif r.preview.status == 'ready' %}
     <p class="review-card__links">
-      {% if r.preview.datanodes_url %}<a href="{{ r.preview.datanodes_url }}">Data nodes</a>{% endif %}
+      {% if r.preview.datanodes_url %}<a href="{{ r.preview.datanodes_url }}">Data nodes on GitHub</a>{% endif %}
       {% if r.preview.validation_url %}<a href="{{ r.preview.validation_url }}">Validation report</a>{% endif %}
     </p>
+  {% endif %}
+
+  {% if r.metadata %}
+  <div class="meta-panel">
+    {% if r.metadata.submitter_note %}
+    <div class="meta-panel__block meta-panel__block--note">
+      <h4>Submitter note</h4>
+      <p>{{ r.metadata.submitter_note }}</p>
+    </div>
+    {% endif %}
+    {% if r.metadata.description %}
+    <div class="meta-panel__block">
+      <h4>Description</h4>
+      <p>{{ r.metadata.description }}</p>
+    </div>
+    {% endif %}
+    <details class="meta-panel__block" {% if expanded %}open{% endif %}>
+      <summary>Data nodes ({{ r.metadata.data_nodes | length }})</summary>
+      {% if r.metadata.data_nodes %}
+      <div class="datanodes__scroll">
+        <table class="datanodes">
+          <thead><tr><th>Label</th><th>Type</th><th>Database</th><th>Identifier</th></tr></thead>
+          <tbody>
+            {% for n in r.metadata.data_nodes %}
+            <tr class="{{ 'datanodes__row--unmapped' if not n.identifier else '' }}">
+              <td>{{ n.label or '—' }}</td>
+              <td>{{ n.type }}</td>
+              <td>{{ n.database or '—' }}</td>
+              <td>{% if n.identifier %}<code>{{ n.identifier }}</code>{% else %}<span class="datanodes__missing">not annotated</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}<p class="meta-panel__empty">No data nodes found.</p>{% endif %}
+    </details>
+    <details class="meta-panel__block" {% if expanded %}open{% endif %}>
+      <summary>References ({{ r.metadata.references | length }})</summary>
+      {% if r.metadata.references %}
+      <ul class="meta-list">
+        {% for ref in r.metadata.references %}
+        <li>{{ ref.title or 'Reference' }}{% if ref.identifier %} <code>{{ ref.database or 'ref' }}:{{ ref.identifier }}</code>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="meta-panel__empty">No references.</p>{% endif %}
+    </details>
+    <details class="meta-panel__block" {% if expanded %}open{% endif %}>
+      <summary>Ontology tags ({{ r.metadata.ontology_tags | length }})</summary>
+      {% if r.metadata.ontology_tags %}
+      <ul class="meta-list">
+        {% for t in r.metadata.ontology_tags %}
+        <li>{{ t.term }}{% if t.identifier %} <code>{{ t.identifier }}</code>{% endif %}{% if t.ontology %} <span class="meta-list__src">{{ t.ontology }}</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="meta-panel__empty">No ontology tags.</p>{% endif %}
+    </details>
+  </div>
   {% endif %}
 
   <div class="checklist">

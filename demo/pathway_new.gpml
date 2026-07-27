@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Insulin signaling (demo)" Organism="Homo sapiens">
   <Graphics BoardWidth="480.0" BoardHeight="440.0" />
+  <Comment>Demo pathway: insulin (INS) activates its receptor INSR, which activates AKT1.</Comment>
 
   <DataNode TextLabel="INS" Type="GeneProduct">
     <Graphics CenterX="240.0" CenterY="80.0" Width="120.0" Height="34.0" Color="1a5276" />
@@ -30,4 +31,6 @@
       <Point X="240.0" Y="303.0" ArrowHead="Arrow" />
     </Graphics>
   </Interaction>
+
+  <OntologyTerm Term="insulin signaling pathway" ID="PW:0000143" Ontology="Pathway Ontology" />
 </Pathway>
