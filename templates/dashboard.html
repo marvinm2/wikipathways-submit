@@ -177,8 +177,9 @@
     {% set blocking = r.checklist | selectattr('required') | rejectattr('state', 'equalto', 'pass') | list %}
     <div class="review-card__actions">
       <label class="assign">
-        <span>Assign to</span>
-        <select class="assign__select">
+        <span>Assign reviewer</span>
+        <select class="assign__select"
+                title="Choose the curator responsible for reviewing this pathway. Anyone on the whitelist can still review; this just marks who is leading it.">
           <option value="">Unassigned</option>
           {% for c in curators %}
           <option value="{{ c }}"{% if r.assigned_curator == c %} selected{% endif %}>@{{ c }}</option>

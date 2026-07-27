@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import pathlib
 import subprocess
+import sys
 import tempfile
 
 import uvicorn
@@ -41,6 +42,13 @@ from app.main import (
 )
 
 BRANCH = "main"
+
+# Repo root, so the auto-reloader's worker subprocess can import ``demo.serve_demo`` regardless of
+# how the script was launched (PYTHONPATH propagates to the subprocess).
+_ROOT = pathlib.Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+os.environ["PYTHONPATH"] = str(_ROOT) + os.pathsep + os.environ.get("PYTHONPATH", "")
 
 
 def _gh(*args: str) -> str:
@@ -137,5 +145,14 @@ if __name__ == "__main__":
     print(f"  repo : {info['repo']}")
     if not info["fake"]:
         print("  NOTE : submitting/approving opens and merges REAL pull requests on that fork.")
-    print("  open : http://127.0.0.1:8000/demo/login\n")
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    print("  open : http://127.0.0.1:8000/demo/login")
+    print("  (auto-reloads on code changes — no stale-server surprises)\n")
+    # Auto-reload: the worker re-imports demo.serve_demo (rebuilding a fresh app) whenever the
+    # app/templates/static/demo sources change, so edits during a session can't run stale.
+    uvicorn.run(
+        "demo.serve_demo:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+        reload_dirs=[str(_ROOT / d) for d in ("app", "templates", "static", "demo")],
+    )
