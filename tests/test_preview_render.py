@@ -1,4 +1,4 @@
-"""Instant in-app GPML -> SVG preview (issue #11, 1a): renderer + local-render serving."""
+"""In-app GPML -> SVG preview (issue #11): the renderer and the cache it serves from."""
 from __future__ import annotations
 
 import pytest
@@ -64,44 +64,50 @@ def test_render_raises_on_non_gpml(bad):
         render_gpml(bad)
 
 
-def _svc(fake, tmp_path):
-    return PreviewService(
-        lambda: fake,
-        repo="owner/repo",
-        cache_dir=tmp_path / "cache",
-        workflow_file="pr-preview.yml",
-        artifact_name="pr-preview",
-    )
+def _svc(tmp_path):
+    return PreviewService(cache_dir=tmp_path / "cache")
 
 
-def test_render_local_serves_without_touching_github(tmp_path):
-    # A client that raises if the CI-artifact path is ever hit — proves we serve the local render.
-    fake = FakeGitHubClient(fail_on={"pr_preview_status", "download_pr_preview_zip"})
-    svc = _svc(fake, tmp_path)
+def test_render_local_serves_both_sides(tmp_path):
+    svc = _svc(tmp_path)
     state = svc.render_local(42, 554, after_gpml=_GPML.encode(), before_gpml=_GPML.encode())
     assert state.status == "ready" and state.has_before and state.has_after
-    assert svc.status(42) == "ready"  # disk-based, no GitHub call
-    assert svc.svg_path(42, 554, "after") is not None
-    assert svc.svg_path(42, 554, "before") is not None
+    assert svc.status(42) == "ready"
+    assert svc.svg_path(42, "after") is not None
+    assert svc.svg_path(42, "before") is not None
     assert b"<svg" in (tmp_path / "cache" / "42" / "after.svg").read_bytes()
 
 
 def test_render_local_new_pathway_has_no_before(tmp_path):
-    svc = _svc(FakeGitHubClient(), tmp_path)
+    svc = _svc(tmp_path)
     state = svc.render_local(7, 5640, after_gpml=_GPML.encode())  # no before_gpml
     assert state.status == "ready" and state.has_after and not state.has_before
-    assert svc.svg_path(7, 5640, "after") is not None
-    assert svc.svg_path(7, 5640, "before") is None  # absent side → placeholder, not CI fallback
+    assert svc.svg_path(7, "after") is not None
+    assert svc.svg_path(7, "before") is None  # absent side → placeholder
 
 
 def test_render_local_bad_gpml_fails_gracefully(tmp_path):
-    svc = _svc(FakeGitHubClient(), tmp_path)
+    svc = _svc(tmp_path)
     state = svc.render_local(9, 1, after_gpml=b"not gpml at all")
     assert state.status == "failed" and not state.has_after
+    # ...and the queue says so, instead of spinning on "generating" forever.
+    assert svc.status(9) == "failed"
+
+
+def test_re_render_clears_a_previous_failure(tmp_path):
+    svc = _svc(tmp_path)
+    svc.render_local(9, 1, after_gpml=b"not gpml at all")
+    assert svc.status(9) == "failed"
+    svc.render_local(9, 1, after_gpml=_GPML.encode())  # revised upload draws fine
+    assert svc.status(9) == "ready"
+
+
+def test_status_pending_before_anything_is_rendered(tmp_path):
+    assert _svc(tmp_path).status(123) == "pending"
 
 
 def test_render_local_caches_metadata_and_note(tmp_path):
-    svc = _svc(FakeGitHubClient(), tmp_path)
+    svc = _svc(tmp_path)
     svc.render_local(
         42, 554, after_gpml=_GPML.encode(), submitter_note="  please check the arrow  "
     )

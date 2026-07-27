@@ -123,12 +123,6 @@ class GitHubClient(ABC):
         missing), ``"absent"`` (no such PR). Cheap: no artifact bytes are transferred.
         """
 
-    @abstractmethod
-    def download_pr_preview_zip(
-        self, repo: str, pr_number: int, *, workflow_file: str, artifact_name: str
-    ) -> bytes | None:
-        """Download the PR-preview artifact zip for ``pr_number``, or None if not available."""
-
 
 class FakeGitHubClient(GitHubClient):
     """In-memory GitHubClient for tests. Records every mutation; can simulate failures.
@@ -180,7 +174,7 @@ class FakeGitHubClient(GitHubClient):
         self.comments: dict[tuple[str, int], dict[str, str]] = {}
         # {"org/team-slug": [login, ...]}
         self.team_members = dict(team_members or {})
-        # {pr_number: {"status": str, "zip": bytes | None}} — PR-preview artifact (issue #11).
+        # {pr_number: {"status": str}} — PR-preview CI state, the merge gate (issue #11).
         self.previews = dict(previews or {})
         self.fail_on = fail_on or set()
         self._next_pr = 1
@@ -293,12 +287,6 @@ class FakeGitHubClient(GitHubClient):
     ) -> str:
         self._maybe_fail("pr_preview_status")
         return self.previews.get(pr_number, {}).get("status", "absent")
-
-    def download_pr_preview_zip(
-        self, repo: str, pr_number: int, *, workflow_file: str, artifact_name: str
-    ) -> bytes | None:
-        self._maybe_fail("download_pr_preview_zip")
-        return self.previews.get(pr_number, {}).get("zip")
 
 
 @dataclass
@@ -525,18 +513,3 @@ class HttpGitHubClient(GitHubClient):
         if status != "success":
             return {"absent": "absent", "pending": "pending"}.get(status, "failed")
         return "ready" if self._preview_artifact_id(repo, run_id, artifact_name) else "failed"
-
-    def download_pr_preview_zip(
-        self, repo: str, pr_number: int, *, workflow_file: str, artifact_name: str
-    ) -> bytes | None:
-        status, run_id = self._latest_preview_run(repo, pr_number, workflow_file)
-        if status != "success":
-            return None
-        artifact_id = self._preview_artifact_id(repo, run_id, artifact_name)
-        if artifact_id is None:
-            return None
-        resp = self._client.get(
-            f"/repos/{repo}/actions/artifacts/{artifact_id}/zip", follow_redirects=True
-        )
-        self._raise_for(resp, f"download_artifact({artifact_id})")
-        return resp.content

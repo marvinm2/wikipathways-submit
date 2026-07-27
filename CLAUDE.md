@@ -15,7 +15,7 @@ repos.
 - `mvp1/` + `fork-staging/` — MVP-1 PR-preview pipeline (two GitHub Actions workflows +
   `validate_pathway.py`), adversarially reviewed and hardened. Ships to a **fork** of
   `wikipathways-database`; `fork-staging/CHECKLIST.md` is the test procedure. See `mvp1/README.md`.
-- `app/` — the FastAPI app (MVP-2 → MVP-4). Implemented + tested (147 tests): the transactional
+- `app/` — the FastAPI app (MVP-2 → MVP-4). Implemented + tested (140 tests): the transactional
   registry (`app/wpid/` atomic allocator, `app/locks/` pathway check-out lock — both with
   threaded race tests), app-owned GPML naming/layout (`app/submit/gpml.py`), the `GitHubClient`
   abstraction (`app/github/` — ABC + `FakeGitHubClient` + httpx impl), the **submission service**
@@ -47,17 +47,15 @@ repos.
   dependency-free GPML→SVG drawer runs at PR-creation time (`render_local`, wired into submit +
   update via `_render_preview`), rendering the uploaded GPML as *after* and the base-`main` GPML
   (fetched via the new `GitHubClient.get_file_content`) as *before*, cached to disk so the preview
-  is ready immediately with no CI wait; (2) fallback — the SVGs the PR-preview workflow uploads as
-  a run artifact (via the bot's Actions read), `WP<id>-after.svg`/`WP<id>.svg` + `WP<id>-before.svg`.
-  Both serve at `GET /previews/{pr}/{before,after}.svg` (locked-down CSP + sandbox so a hostile SVG
-  can't run script). `_review_view` fills the dashboard `preview` slot from a cheap
-  `PreviewService.status()`; bytes stream lazily.
+  is ready immediately with no CI wait. Serves at `GET /previews/{pr}/{before,after}.svg`
+  (locked-down CSP + sandbox so a hostile SVG can't run script); `_review_view` fills the
+  dashboard `preview` slot from a cheap disk-based `PreviewService.status()`.
   **CI draws no image at all** (2026-07-27): PinPath was retired once 1a existed, and
   `pr-preview.yml` now converts to **pvjson only** — a GPML `gpml2pvjson` refuses is broken, so
   the `.json` is a validity signal, not a picture. A PR comment cannot embed an artifact anyway,
-  and camo refuses SVG, so an image in the PR would need deployment plus a PNG endpoint. That
-  makes source (2) dead code — remove it when convenient. Marvin's call: the PR does not need an
-  image; it carries the validation and metadata tables, and `WPSUBMIT_APP_BASE_URL` (when set)
+  and camo refuses SVG, so an image in the PR would need deployment plus a PNG endpoint. The
+  app's old artifact-download path was **removed** with it, so `PreviewService` no longer talks to
+  GitHub at all. Marvin's call: the PR does not need an image; it carries the validation and metadata tables, and `WPSUBMIT_APP_BASE_URL` (when set)
   links the mirror comment to the dashboard page that holds the render.
   **Alembic is wired** (issue #2): `migrations/` + `alembic.ini`; `create_all` now runs **only**
   for SQLite dev, Postgres deploys run `alembic upgrade head` (`docs/migrations.md`); a test

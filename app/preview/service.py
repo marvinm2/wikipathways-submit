@@ -1,38 +1,28 @@
-"""Pathway preview service (issue #11) — surface the before/after render to the dashboard.
+"""Pathway preview service (issue #11) — the before/after render the dashboard shows.
 
-The PR-preview workflow (MVP-1, issue #6) renders the changed pathway(s) to SVG and uploads them
-as a run artifact. This service reads that artifact **as an external GitHub client** — it never
-renders anything itself — extracts the before/after SVGs for a pathway, caches them on disk, and
-lets the app serve them to the curation dashboard.
+The app draws both sides itself (``app/preview/render.py``) when the PR is created and caches the
+SVGs on disk, so a curator sees the diagram immediately with no CI wait.
 
-Two responsibilities, kept apart so the dashboard stays fast:
+There is no second source. CI used to render with PinPath and upload the SVGs as a run artifact,
+and this service downloaded them; that path was retired on 2026-07-27 along with the render step
+itself (``mvp1/pr-preview.yml`` now converts to pvjson only — a PR comment cannot show an image
+anyway). What CI produces is validation, not pictures, so nothing here talks to GitHub.
 
-- ``status(pr_number)`` — a cheap check (no artifact download) used while rendering the queue,
-  so each card shows pending / ready / failed. TTL-cached.
-- ``ensure_svg(pr_number, wpid, side)`` — the heavy path (download + unzip), run lazily only when
-  the browser actually requests an image, then served from the on-disk cache.
-
-Artifact layout (from the workflow's ``preview/`` dir): the *after* (submitted/PR version) is
-``WP<id>/WP<id>-after.svg`` if a dedicated renderer (e.g. PinPath) produced one, otherwise the
-gpmlconverter render ``WP<id>/WP<id>.svg``; the *before* (current ``main`` version, updates only)
-is ``WP<id>/WP<id>-before.svg``. Preferring ``-after.svg`` keeps before/after a consistent pair
-when both frames come from the same renderer.
+Cached per PR under ``<cache_dir>/<pr_number>/``: ``before.svg`` / ``after.svg``, the
+``metadata.json`` sidecar the dashboard panel reads, and a ``render-failed`` marker when a GPML
+could not be drawn (so the queue can say so instead of spinning on "generating" forever).
 """
 from __future__ import annotations
 
-import io
 import json
-import time
-import zipfile
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.github import GitHubClient, GitHubError
 from app.preview.metadata import parse_curation_metadata
 from app.preview.render import RenderError, render_gpml
 
 _SIDES = ("before", "after")
+_FAILED_MARKER = "render-failed"
 
 
 @dataclass(frozen=True)
@@ -43,28 +33,10 @@ class PreviewState:
 
 
 class PreviewService:
-    def __init__(
-        self,
-        client_provider: Callable[[], GitHubClient | None],
-        *,
-        repo: str,
-        cache_dir: str | Path,
-        workflow_file: str,
-        artifact_name: str,
-        ttl_seconds: int = 60,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self._client_provider = client_provider
-        self._repo = repo
+    def __init__(self, *, cache_dir: str | Path) -> None:
         self._cache_dir = Path(cache_dir)
-        self._workflow_file = workflow_file
-        self._artifact_name = artifact_name
-        self._ttl = ttl_seconds
-        self._clock = clock
-        self._status_cache: dict[int, tuple[float, str]] = {}
-        self._extract_cache: dict[int, tuple[float, PreviewState]] = {}
 
-    # -- instant local render (issue #11, 1a) ---------------------------------------------
+    # -- render at PR-creation time (issue #11, 1a) ----------------------------------------
     def render_local(
         self,
         pr_number: int,
@@ -74,13 +46,12 @@ class PreviewService:
         before_gpml: bytes | None = None,
         submitter_note: str | None = None,
     ) -> PreviewState:
-        """Render the before/after SVGs in-process at PR-creation time and cache them on disk.
+        """Render the before/after SVGs in-process and cache them on disk.
 
         Best-effort: a side that can't be rendered is skipped, never raised — the preview must
-        never sink the submission. Once written, ``status``/``svg_path`` serve these directly, so
-        the dashboard shows the diagram immediately instead of waiting on the CI artifact. The
-        curation metadata parsed from the *after* GPML (data nodes, references, description,
-        ontology tags) plus the submitter's note is cached alongside for the dashboard panel.
+        never sink the submission. The curation metadata parsed from the *after* GPML (data nodes,
+        references, description, ontology tags) plus the submitter's note is cached alongside for
+        the dashboard panel.
         """
         out = self._cache_dir / str(pr_number)
         out.mkdir(parents=True, exist_ok=True)
@@ -95,15 +66,19 @@ class PreviewService:
             (out / f"{side}.svg").write_bytes(svg)
             rendered[side] = True
         self._write_metadata(out, after_gpml, submitter_note)
-        state = PreviewState(
-            "ready" if (rendered["before"] or rendered["after"]) else "failed",
+        drawn = rendered["before"] or rendered["after"]
+        # Record the outcome so a re-upload that now renders clears a previous failure, and a
+        # GPML we cannot draw reads as 'failed' rather than 'pending' forever.
+        marker = out / _FAILED_MARKER
+        if drawn:
+            marker.unlink(missing_ok=True)
+        else:
+            marker.write_text("", encoding="utf-8")
+        return PreviewState(
+            "ready" if drawn else "failed",
             has_before=rendered["before"],
             has_after=rendered["after"],
         )
-        # A local render is authoritative for this PR; drop any stale CI status/extract cache.
-        self._status_cache.pop(pr_number, None)
-        self._extract_cache.pop(pr_number, None)
-        return state
 
     def _local_side_exists(self, pr_number: int) -> bool:
         d = self._cache_dir / str(pr_number)
@@ -122,7 +97,7 @@ class PreviewService:
 
     def metadata(self, pr_number: int) -> dict | None:
         """The cached curation metadata for a PR (data nodes, references, description, ontology
-        tags, submitter note), or None if it was never rendered locally."""
+        tags, submitter note), or None if it was never rendered."""
         path = self._cache_dir / str(pr_number) / "metadata.json"
         if not path.is_file():
             return None
@@ -131,100 +106,20 @@ class PreviewService:
         except (OSError, ValueError):
             return None
 
-    # -- cheap status (queue render) -------------------------------------------------------
+    # -- queue render ----------------------------------------------------------------------
     def status(self, pr_number: int) -> str:
-        # A locally-rendered preview is on disk already — ready without touching GitHub.
+        """'ready' once a side is on disk, 'failed' if the GPML could not be drawn, else
+        'pending' (nothing rendered yet, or the cache was cleared under a live review)."""
         if self._local_side_exists(pr_number):
             return "ready"
-        now = self._clock()
-        hit = self._status_cache.get(pr_number)
-        if hit and now - hit[0] < self._ttl:
-            return hit[1]
-        client = self._client_provider()
-        if client is None:
-            return "pending"  # bot not configured → keep the "generating" state
-        try:
-            status = client.pr_preview_status(
-                self._repo,
-                pr_number,
-                workflow_file=self._workflow_file,
-                artifact_name=self._artifact_name,
-            )
-        except GitHubError:
-            return "pending"
-        # 'absent' (no such PR) reads as pending to the UI — nothing to show, nothing wrong.
-        status = status if status in ("ready", "failed") else "pending"
-        self._status_cache[pr_number] = (now, status)
-        return status
+        if (self._cache_dir / str(pr_number) / _FAILED_MARKER).is_file():
+            return "failed"
+        return "pending"
 
-    # -- heavy download + extract (image request) -----------------------------------------
-    def ensure(self, pr_number: int, wpid: int) -> PreviewState:
-        """Download + extract the artifact (TTL-cached) and report which sides are available."""
-        now = self._clock()
-        hit = self._extract_cache.get(pr_number)
-        if hit and now - hit[0] < self._ttl:
-            return hit[1]
-        client = self._client_provider()
-        if client is None:
-            return PreviewState("pending")
-        try:
-            zip_bytes = client.download_pr_preview_zip(
-                self._repo,
-                pr_number,
-                workflow_file=self._workflow_file,
-                artifact_name=self._artifact_name,
-            )
-        except GitHubError:
-            return PreviewState("pending")
-        if not zip_bytes:
-            return PreviewState("failed")
-        state = self._extract(pr_number, wpid, zip_bytes)
-        self._extract_cache[pr_number] = (now, state)
-        return state
-
-    def svg_path(self, pr_number: int, wpid: int, side: str) -> Path | None:
-        """Cached path to the before/after SVG.
-
-        Serves a locally-rendered SVG (issue #11, 1a) directly; otherwise downloads + extracts the
-        CI artifact on first request. If only one side was rendered locally (e.g. a new pathway has
-        no "before"), the requested-but-absent side returns None → the endpoint shows a placeholder.
-        """
+    def svg_path(self, pr_number: int, side: str) -> Path | None:
+        """Cached path to the before/after SVG, or None when that side wasn't rendered (a new
+        pathway has no "before") — the endpoint then serves a placeholder."""
         if side not in _SIDES:
             return None
         path = self._cache_dir / str(pr_number) / f"{side}.svg"
-        if path.is_file():
-            return path
-        if self._local_side_exists(pr_number):
-            return None  # locally rendered, but this side wasn't (don't fall back to CI)
-        self.ensure(pr_number, wpid)
         return path if path.is_file() else None
-
-    def _extract(self, pr_number: int, wpid: int, zip_bytes: bytes) -> PreviewState:
-        before_name = f"WP{wpid}-before.svg"
-        after_pref = f"WP{wpid}-after.svg"  # dedicated renderer (PinPath) — preferred
-        after_fallback = f"WP{wpid}.svg"  # gpmlconverter render
-        before: bytes | None = None
-        after: bytes | None = None
-        after_is_preferred = False
-        try:
-            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-                for entry in zf.namelist():
-                    base = entry.rsplit("/", 1)[-1]
-                    if base == before_name:
-                        before = zf.read(entry)
-                    elif base == after_pref:
-                        after = zf.read(entry)
-                        after_is_preferred = True
-                    elif base == after_fallback and not after_is_preferred:
-                        after = zf.read(entry)
-        except zipfile.BadZipFile:
-            return PreviewState("failed")
-        if before is None and after is None:
-            return PreviewState("failed")
-        out = self._cache_dir / str(pr_number)
-        out.mkdir(parents=True, exist_ok=True)
-        if before is not None:
-            (out / "before.svg").write_bytes(before)
-        if after is not None:
-            (out / "after.svg").write_bytes(after)
-        return PreviewState("ready", has_before=before is not None, has_after=after is not None)

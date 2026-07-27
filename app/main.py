@@ -186,15 +186,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             config_logins=settings.curators,
             bot_client_provider=bot_provider,
         )
-        # Pathway preview (before/after render) read from the PR-preview artifact (issue #11).
-        app.state.preview = PreviewService(
-            bot_provider,
-            repo=settings.content_repo,
-            cache_dir=settings.preview_cache_dir,
-            workflow_file=settings.preview_workflow_file,
-            artifact_name=settings.preview_artifact_name,
-            ttl_seconds=settings.preview_cache_ttl_seconds,
-        )
+        # Pathway preview: the app draws before/after itself and caches it (issue #11).
+        app.state.preview = PreviewService(cache_dir=settings.preview_cache_dir)
         app.state.allocator = WpidAllocator(
             session_factory,
             _make_floor_provider(settings, bot_app),
@@ -356,16 +349,16 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/previews/{pr_number}/{side}.svg")
     def preview_svg(request: Request, pr_number: int, side: str):
-        # Serve the before/after render from the cached PR-preview artifact (issue #11). SVGs are
-        # served with a locked-down CSP + sandbox so a hostile SVG can't run script if opened
-        # directly; the dashboard only ever loads them via <img> (which already can't run script).
+        # Serve the app's cached before/after render (issue #11). SVGs are served with a
+        # locked-down CSP + sandbox so a hostile SVG can't run script if opened directly; the
+        # dashboard only ever loads them via <img> (which already can't run script).
         if side not in ("before", "after"):
             raise HTTPException(status_code=404, detail="unknown preview side")
         try:
-            wpid = _curation(request).get(pr_number).wpid
+            _curation(request).get(pr_number)  # unknown PR → 404, not a placeholder
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        path = request.app.state.preview.svg_path(pr_number, wpid, side)
+        path = request.app.state.preview.svg_path(pr_number, side)
         if path is None:
             # Missing side (e.g. a new pathway has no "before", or the render is unavailable):
             # a placeholder keeps the frame intact instead of a broken-image icon.
