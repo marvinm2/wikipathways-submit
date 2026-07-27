@@ -16,10 +16,7 @@
 
   <h1 class="reveal">Upload, update, and review WikiPathways pathways.</h1>
   <p class="hero__lede reveal">
-    A portal to the pathway database. Upload a GPML file and it assigns the WPID, lays the file
-    out the way the database expects, and opens a pull request on <code>{{ repo }}</code>.
-    Curators get a dashboard with a before and after render and a checklist, and approving a
-    pathway merges it.
+    The front door to the pathway database. No git, no local clone.
   </p>
   <div class="hero__cta reveal">
     <a class="btn btn--github" href="/auth/login">
@@ -31,9 +28,18 @@
 </section>
 
 <ul class="steps">
-  <li><h3>Upload your GPML</h3></li>
-  <li><h3>It becomes a pull request</h3></li>
-  <li><h3>Curators review and merge</h3></li>
+  <li>
+    <h3>Upload your GPML</h3>
+    <p>Any <code>.gpml</code> file, new pathway or edit.</p>
+  </li>
+  <li>
+    <h3>It becomes a pull request</h3>
+    <p>The app assigns the WPID and files it where the database expects.</p>
+  </li>
+  <li>
+    <h3>Curators review and merge</h3>
+    <p>They see the drawn pathway and a checklist, not raw XML.</p>
+  </li>
 </ul>
 
 {% else %}
