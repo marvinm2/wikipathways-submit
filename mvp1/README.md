@@ -68,20 +68,17 @@ through Java/Node converters. So:
 That runs untrusted code with a write token — a well-known GitHub Actions vulnerability. The
 two-workflow split is deliberate.
 
-## Before/after render (PinPath, #11 / #6)
+## Before/after render (in the app, #11 / 1a)
 
-`pr-preview.yml` also carries an optional **PinPath** (`drawGPML`) render step that produces
-`WP<id>-after.svg` (PR head) and `WP<id>-before.svg` (base version, updates only) for the app's
-before/after viewer — see `../fork-staging/scripts/render_pinpath.R`. It is best-effort
-(`continue-on-error`): if PinPath can't install or render, the run stays green.
+The before/after render is produced **in the app** (`app/preview/render.py`), not in CI: a
+dependency-free GPML→SVG drawer runs at PR-creation time, so the preview is instant. CI's only
+render-related output is the **pvjson** (`WP<id>.json`, from gpmlconverter) — `validate_pathway.py
+--pvjson` checks its presence as the "Renderable (pvjson)" signal, and it's what the app renderer
+and the pvjs viewer (#14) consume.
 
-**Validated on a real runner** (2026-07-26, fork PR #4, WP554). Two things it needs, learned there:
-the GitHub install must set `GITHUB_PAT: ${{ github.token }}` (else `remotes` hits the anon
-rate limit), and R must be `release` (PinPath v0.99.x requires **R ≥ 4.6.0**). Because
-gpmlconverter's own SVG render is blocked by upstream HTTP-400s, PinPath runs **before** the
-validation step and `validate_pathway.py --rendered` accepts multiple candidates in priority
-order — so PinPath's `-after.svg` satisfies the "Rendered SVG" check and the overall status is a
-genuine PASS.
+An earlier version rendered the pair in CI with **PinPath** (R + Bioconductor `SyNUM-lab/PinPath`,
+validated 2026-07-26 on fork PR #4). It was the workaround for gpmlconverter's HTTP-400-blocked SVG
+and added ~5–7 min per run; the in-app renderer supersedes it, so the PinPath step was removed.
 
 ## Adversarial review — applied hardening
 
@@ -120,8 +117,9 @@ To test on a fork, use the ready-to-drop tree in [`../fork-staging/`](../fork-st
 
 - Confirmed on a real run (2026-07-26): `meta-data-action` **v1.1.4** invocation, and that
   `gpmlconverter` generates locally without the assets-repo SSH keys. (gpmlconverter's *SVG*
-  render is separately blocked by upstream HTTP-400s — PinPath covers the render, see above.)
-- Decide artifact **retention** (currently 14 days) and whether to also attach the `.json`.
+  rasterisation is separately blocked by upstream HTTP-400s; the human preview is rendered in the
+  app from the GPML, and CI keeps only the pvjson `WP<id>.json` — see the render section above.)
+- Decide artifact **retention** (currently 14 days). The `.json` pvjson is the key artifact now.
 - Tune which checks are `WARN` vs `FAIL` with curators — severity is a policy choice.
 - MVP-1 posts the mirror comment; **approval state stays with GitHub** until the app's
   dashboard (MVP-4) exists to own it.

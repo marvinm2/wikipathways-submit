@@ -10,7 +10,7 @@ piece of the review subset that does not already exist in on_gpml_change.yml).
 
 Usage:
     python scripts/validate_pathway.py WP1234 [--pathways-dir pathways] \
-        [--rendered path/to/WP1234.svg [--rendered path/to/WP1234-after.svg ...]] [--out report.md]
+        [--pvjson path/to/WP1234.json] [--out report.md]
 
 Exit code is always 0 (a validation report is informational, not a gate — a
 curator decides). The overall severity is written to $GITHUB_OUTPUT as
@@ -237,42 +237,36 @@ def check_refs(report: Report, refs_path: Path, bibliography_path: Path) -> None
     )
 
 
-def _renderer_of(name: str) -> str:
-    # The app + workflow name PinPath's output <WP>-after.svg / <WP>-before.svg; the
-    # gpmlconverter output is the bare <WP>.svg. Report which renderer satisfied the check
-    # so a curator can see at a glance whether the (upstream-flaky) gpmlconverter ran.
-    if name.endswith("-after.svg") or name.endswith("-before.svg"):
-        return "PinPath"
-    return "gpmlconverter"
-
-
-def check_render(report: Report, rendered: list[Path] | None) -> None:
-    # Accept ANY non-empty candidate render, tried in priority order. gpmlconverter's SVG is
-    # blocked by upstream HTTP-400s, so PinPath's <WP>-after.svg is passed as a fallback — a good
-    # PinPath render is a genuine "rendered" pass, not a FAIL. (Curator decision, 2026-07-26.)
-    if not rendered:
-        report.add(WARN, "Rendered SVG", "not provided to validator")
+def check_pvjson(report: Report, pvjson: Path | None) -> None:
+    # "Renderable" = gpmlconverter produced the pvjson (<WP>.json). That JSON is what the app's
+    # in-app renderer and the pvjs viewer consume, so its presence — not a rasterised SVG — is the
+    # meaningful CI signal. (gpmlconverter's own SVG rasterisation is blocked by upstream HTTP-400s;
+    # the human preview is now rendered in-app from the GPML, so CI no longer renders one.)
+    if pvjson is None:
+        report.add(WARN, "Renderable (pvjson)", "not provided to validator")
         return
-    for cand in rendered:
-        if cand.exists() and cand.stat().st_size > 0:
-            report.add(
-                PASS,
-                "Rendered SVG",
-                f"{cand.name} ({cand.stat().st_size:,} bytes, {_renderer_of(cand.name)})",
-            )
-            return
-    tried = ", ".join(c.name for c in rendered)
-    report.add(FAIL, "Rendered SVG", f"no renderer produced an SVG (tried: {tried})")
+    if not (pvjson.exists() and pvjson.stat().st_size > 0):
+        report.add(FAIL, "Renderable (pvjson)", f"{pvjson.name} missing or empty")
+        return
+    try:
+        data = json.loads(pvjson.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        report.add(FAIL, "Renderable (pvjson)", f"{pvjson.name} unreadable: {exc}")
+        return
+    if not isinstance(data, dict) or "pathway" not in data:
+        report.add(FAIL, "Renderable (pvjson)", f"{pvjson.name} is not pvjson (no 'pathway')")
+        return
+    report.add(PASS, "Renderable (pvjson)", f"{pvjson.name} ({pvjson.stat().st_size:,} bytes)")
 
 
-def build_report(wpid: str, pathways_dir: Path, rendered: list[Path] | None) -> Report:
+def build_report(wpid: str, pathways_dir: Path, pvjson: Path | None) -> Report:
     d = pathways_dir / wpid
     report = Report(wpid)
     check_gpml(report, d / f"{wpid}.gpml")
     check_info_json(report, d / f"{wpid}-info.json")
     check_datanodes(report, d / f"{wpid}-datanodes.tsv")
     check_refs(report, d / f"{wpid}-refs.tsv", d / f"{wpid}-bibliography.tsv")
-    check_render(report, rendered)
+    check_pvjson(report, pvjson)
     return report
 
 
@@ -281,11 +275,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("wpid", help="e.g. WP1234")
     ap.add_argument("--pathways-dir", default="pathways", type=Path)
     ap.add_argument(
-        "--rendered",
+        "--pvjson",
         type=Path,
-        action="append",
         default=None,
-        help="path to a rendered SVG; repeat in priority order (first non-empty one passes)",
+        help="path to gpmlconverter's pvjson (WP<id>.json) — its presence is the renderable check",
     )
     ap.add_argument("--out", type=Path, default=None, help="write markdown here (else stdout)")
     ap.add_argument(
@@ -303,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OverflowError, ValueError):
         pass
 
-    report = build_report(args.wpid, args.pathways_dir, args.rendered)
+    report = build_report(args.wpid, args.pathways_dir, args.pvjson)
     md = report.to_markdown()
 
     if args.out:
