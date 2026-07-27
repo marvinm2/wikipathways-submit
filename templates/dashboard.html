@@ -118,7 +118,12 @@
               <td>{{ n.label or '—' }}</td>
               <td>{{ n.type }}</td>
               <td>{{ n.database or '—' }}</td>
-              <td>{% if n.identifier %}<code>{{ n.identifier }}</code>{% else %}<span class="datanodes__missing">not annotated</span>{% endif %}</td>
+              <td>
+                {%- if n.identifier %}
+                  {%- if n.url %}<a href="{{ n.url }}" target="_blank" rel="noopener"><code>{{ n.identifier }}</code></a>
+                  {%- else %}<code>{{ n.identifier }}</code>{% endif %}
+                {%- else %}<span class="datanodes__missing">not annotated</span>{% endif %}
+              </td>
             </tr>
             {% endfor %}
           </tbody>
@@ -131,7 +136,9 @@
       {% if r.metadata.references %}
       <ul class="meta-list">
         {% for ref in r.metadata.references %}
-        <li>{{ ref.title or 'Reference' }}{% if ref.identifier %} <code>{{ ref.database or 'ref' }}:{{ ref.identifier }}</code>{% endif %}</li>
+        <li>{{ ref.title or 'Reference' }}{% if ref.identifier %}
+          {%- if ref.url %} <a href="{{ ref.url }}" target="_blank" rel="noopener"><code>{{ ref.database }}:{{ ref.identifier }}</code></a>
+          {%- else %} <code>{{ ref.database }}:{{ ref.identifier }}</code>{% endif %}{% endif %}</li>
         {% endfor %}
       </ul>
       {% else %}<p class="meta-panel__empty">No references.</p>{% endif %}
@@ -155,7 +162,7 @@
       {% for it in r.checklist %}
       <li class="checklist__item" data-key="{{ it.key }}" data-required="{{ 'true' if it.required else 'false' }}">
         <span class="state-pill state-pill--{{ it.state }}" data-state="{{ it.state }}">{{ state_icon(it.state) }} {{ it.state }}</span>
-        <span class="checklist__label">{{ it.label }}{% if it.required %}<span class="req" aria-label="required">&bull;</span>{% endif %}</span>
+        <span class="checklist__label">{{ it.label }}{% if it.required %}<span class="req" aria-label="required">&bull;</span>{% endif %}{% if it.auto %}<span class="checklist__auto" title="Suggested automatically from the pathway metadata — override it if needed.">auto</span>{% endif %}</span>
         {% if it.note %}<span class="checklist__note">{{ it.note }}</span>{% endif %}
         {% if is_curator and r.status == 'open' %}
         <span class="checklist__controls" role="group" aria-label="Set state for {{ it.label }}">

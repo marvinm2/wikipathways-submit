@@ -134,13 +134,27 @@
       var file = document.getElementById('update-file').files[0];
       if (!/^\d+$/.test(wpid)) { toast('Enter a numeric WPID, like 554.', 'error'); return; }
       if (!file) { toast('Choose a .gpml file first.', 'error'); return; }
+      // Compose the "what changed" note from the ticked options + the free-text details.
+      var updateDesc = document.getElementById('update-description');
+      var detail = updateDesc ? (updateDesc.value || '').trim() : '';
+      var otherBox = document.getElementById('update-change-other');
+      if (otherBox && otherBox.checked && !detail) {
+        toast('You ticked "Other" — please describe the change in Details.', 'error'); return;
+      }
+      var changes = [];
+      document.querySelectorAll('.update-change:checked').forEach(function (cb) {
+        changes.push(cb.getAttribute('data-label'));
+      });
+      var parts = [];
+      if (changes.length) { parts.push('Changed: ' + changes.join('; ') + '.'); }
+      if (detail) { parts.push(detail); }
+      var description = parts.join('\n');
       var btn = document.getElementById('update-btn');
       btn.disabled = true;
       btn.textContent = 'Submitting…';
       var fd = new FormData();
       fd.append('file', file);
-      var updateDesc = document.getElementById('update-description');
-      if (updateDesc) { fd.append('description', updateDesc.value || ''); }
+      fd.append('description', description);
       fetch('/api/pathways/' + wpid + '/update', { method: 'POST', body: fd })
         .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
         .then(function (res) {
@@ -258,20 +272,41 @@
   });
 
   // ---------- pan / zoom of a rendered preview ----------
+  // Zoom by resizing the element (not CSS transform: scale) so the SVG re-rasterizes crisply at
+  // the new size; pan with a translate. Scaling an <img>-loaded SVG with transform only magnifies
+  // the already-rasterized bitmap, which is blurry.
   function initZoom(root) {
     var img = root.querySelector('.zoom__img');
     var viewport = root.querySelector('.zoom__viewport');
     if (!img || !viewport) return;
     var scale = 1, tx = 0, ty = 0, min = 1, max = 8;
-    var dragging = false, sx = 0, sy = 0;
+    var dragging = false, sx = 0, sy = 0, baseW = 0, baseH = 0;
 
+    function measure() {
+      // Fitted size at scale 1 (max-width/height:100%, natural aspect). Basis for crisp resizing.
+      var prev = img.style.cssText;
+      img.style.width = ''; img.style.height = '';
+      img.style.maxWidth = '100%'; img.style.maxHeight = '100%'; img.style.transform = 'none';
+      var r = img.getBoundingClientRect();
+      baseW = r.width; baseH = r.height;
+      img.style.cssText = prev;
+    }
     function apply() {
-      img.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+      if (scale > 1.001 && baseW) {
+        img.style.maxWidth = 'none'; img.style.maxHeight = 'none';
+        img.style.width = (baseW * scale) + 'px';
+        img.style.height = (baseH * scale) + 'px';
+      } else {
+        img.style.width = ''; img.style.height = '';
+        img.style.maxWidth = '100%'; img.style.maxHeight = '100%';
+      }
+      img.style.transform = 'translate(' + tx + 'px,' + ty + 'px)';
       root.classList.toggle('zoom--zoomed', scale > 1.001);
     }
     function clamp(s) { return Math.max(min, Math.min(max, s)); }
     function reset() { scale = 1; tx = 0; ty = 0; apply(); }
     function zoomAt(factor, cx, cy) {
+      if (!baseW) measure();
       var rect = viewport.getBoundingClientRect();
       var ox = cx - rect.left - rect.width / 2 - tx;
       var oy = cy - rect.top - rect.height / 2 - ty;
@@ -281,6 +316,8 @@
       apply();
     }
     function center() { var r = viewport.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }
+
+    if (img.complete && img.naturalWidth) { measure(); } else { img.addEventListener('load', measure); }
 
     viewport.addEventListener('wheel', function (e) {
       e.preventDefault();

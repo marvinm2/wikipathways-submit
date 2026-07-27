@@ -505,6 +505,12 @@ main { flex: 1; }
   border-color: var(--focus);
 }
 
+.change-set { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 0.7rem 0.9rem 0.85rem; margin: 0.9rem 0 0; }
+.change-set legend { font-size: 0.85rem; padding: 0 0.35rem; color: var(--ink); }
+.change-set__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); gap: 0.35rem 0.9rem; margin-top: 0.4rem; }
+.change-set__grid label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.88rem; cursor: pointer; }
+.change-set__grid input { accent-color: var(--moss); }
+
 .note-field { display: flex; flex-direction: column; gap: 0.35rem; margin: 0.9rem 0 0; }
 .note-field__label {
   font-size: 0.72rem;
@@ -650,17 +656,18 @@ main { flex: 1; }
   height: 11rem;
   overflow: hidden;
   touch-action: none;
-  cursor: default;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .review-card--expanded .zoom__viewport { height: 22rem; }
 .zoom--zoomed .zoom__viewport { cursor: grab; }
 .zoom--zoomed .zoom__viewport:active { cursor: grabbing; }
 .zoom .zoom__img {
-  width: 100%;
-  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
   padding: 0.5rem;
-  object-fit: contain;
-  transform-origin: center center;
+  box-sizing: border-box;
   will-change: transform;
   user-select: none;
   -webkit-user-drag: none;
@@ -707,6 +714,18 @@ main { flex: 1; }
 .datanodes__row--unmapped td { background: color-mix(in srgb, var(--surface-2) 82%, #d97706 18%); }
 .meta-list { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; }
 .meta-list__src { color: var(--ink-faint); font-size: 0.8em; }
+.checklist__auto {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--moss-strong);
+  background: var(--moss-tint);
+  vertical-align: middle;
+}
 .preview__empty, .preview__failed {
   height: 11rem;
   display: flex;

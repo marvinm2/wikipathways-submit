@@ -38,6 +38,10 @@ def test_parses_all_sections():
     assert insr.database == "Ensembl"
     assert insr.identifier == "ENSG00000171105"
     assert insr.type == "GeneProduct"
+    # Mapped nodes get a resolvable identifiers.org link; unmapped ones do not.
+    assert insr.url == "https://identifiers.org/ensembl:ENSG00000171105"
+    assert m.data_nodes[1].url is None
+    assert m.references[0].url == "https://identifiers.org/pubmed:17635937"
     # An unannotated node keeps empty database/identifier so the UI can flag it.
     assert m.data_nodes[1].identifier == ""
 
