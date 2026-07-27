@@ -13,9 +13,14 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
+      # setup-uv points VIRTUAL_ENV at .venv but does not create it, and --system installs into
+      # the runner's Debian Python, which is externally managed (PEP 668) and refuses. Create the
+      # environment explicitly and run the tools out of it.
       - name: Install
-        run: uv pip install --system -e ".[dev]"
+        run: |
+          uv venv
+          uv pip install -e ".[dev]"
       - name: Lint
-        run: ruff check app/ tests/ migrations/env.py
+        run: .venv/bin/ruff check app/ tests/ migrations/env.py
       - name: Test
-        run: pytest -q
+        run: .venv/bin/pytest -q
