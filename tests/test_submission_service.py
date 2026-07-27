@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.github import FakeGitHubClient
+from app.github import BranchAlreadyExists, FakeGitHubClient
 from app.models import WpidReservation
 from app.submit import InvalidGpml, NoPendingSubmission, SubmissionService
 from app.wpid import WpidAllocator
@@ -147,6 +147,35 @@ def test_github_failure_rolls_back_wpid(allocator, session_factory):
     gh2 = _fake_github()
     svc2 = SubmissionService(allocator, gh2, repo=REPO)
     assert svc2.submit_new_pathway(gpml=GOOD_GPML, submitter="bob").wpid == 5637
+
+
+def test_leftover_branch_is_stepped_over(allocator, session_factory):
+    # A previous submission whose PR was closed unmerged left submit/WP5637 behind, and the
+    # floor did not account for it (a race, or a branch made by hand). The submit must move on
+    # to the next id rather than failing with "branch already exists".
+    gh = _fake_github()
+    gh.branches[(REPO, "submit/WP5637")] = "stale000"
+    svc = SubmissionService(allocator, gh, repo=REPO)
+
+    result = svc.submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
+
+    assert result.wpid == 5638
+    assert result.branch == "submit/WP5638"
+    # The collided id was returned to the pool, so only the successful one is reserved.
+    assert [r.wpid for r in _reservations(session_factory)] == [5638]
+
+
+def test_branch_collisions_beyond_the_retry_budget_burn_no_wpid(allocator, session_factory):
+    gh = _fake_github()
+    for wpid in (5637, 5638, 5639, 5640):
+        gh.branches[(REPO, f"submit/WP{wpid}")] = "stale000"
+    svc = SubmissionService(allocator, gh, repo=REPO)
+
+    with pytest.raises(BranchAlreadyExists):
+        svc.submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
+
+    assert _reservations(session_factory) == []
+    assert gh.pulls == []
 
 
 def test_submits_get_incrementing_wpids(allocator):

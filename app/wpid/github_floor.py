@@ -1,11 +1,13 @@
-"""Real ``FloorProvider`` backed by GitHub: max WPID over the repo tree ∪ open PRs.
+"""Real ``FloorProvider`` backed by GitHub: max WPID over the repo tree ∪ open PRs ∪ app branches.
 
 This is the production floor for :class:`app.wpid.allocator.WpidAllocator`. It is intentionally
-kept separate from the allocator (which is pure and unit-tested without a network). This module
-is exercised by integration tests / live runs, not the unit suite — it needs a token and network.
+kept separate from the allocator (which is pure and unit-tested without a network).
 
 Union rationale (design §4.2): reading only the merged tree is the historical bug. An id
 reserved in an open PR (e.g. WP5641) is not yet in the tree, so we must also scan open PRs.
+Branches named ``submit/WP<id>`` / ``update/WP<id>`` are counted too: a PR that was closed
+unmerged leaves its branch behind, and the submission flow creates that exact branch name, so an
+id whose branch still exists is not reusable even though no tree entry and no open PR claim it.
 Local live reservations are added by the allocator itself on top of this floor.
 """
 from __future__ import annotations
@@ -16,6 +18,8 @@ import httpx
 
 _PATHWAY_DIR_RE = re.compile(r"(?:^|/)pathways/WP(\d+)(?:/|$)")
 _WP_NAME_RE = re.compile(r"^WP(\d+)$")
+#: Branches this app creates. Their names encode a claimed WPID even after the PR is gone.
+_APP_BRANCH_RE = re.compile(r"^(?:submit|update)/WP(\d+)$")
 
 _GITHUB_API = "https://api.github.com"
 
@@ -83,6 +87,30 @@ def _open_pr_max(client: httpx.Client, owner: str, repo: str) -> int:
     return best
 
 
+def _branch_max(client: httpx.Client, owner: str, repo: str) -> int:
+    """Max WPID among leftover ``submit/WP<id>`` / ``update/WP<id>`` branches.
+
+    A closed-unmerged PR leaves its branch behind; re-allocating that id would make
+    ``create_branch`` fail with ``BranchAlreadyExists``, so the id is treated as taken.
+    """
+    best = 0
+    page = 1
+    while True:
+        branches = client.get(
+            f"/repos/{owner}/{repo}/branches", params={"per_page": 100, "page": page}
+        ).json()
+        if not branches:
+            break
+        for branch in branches:
+            m = _APP_BRANCH_RE.match(branch.get("name", ""))
+            if m:
+                best = max(best, int(m.group(1)))
+        if len(branches) < 100:
+            break
+        page += 1
+    return best
+
+
 def github_wpid_floor(
     owner: str,
     repo: str,
@@ -91,13 +119,14 @@ def github_wpid_floor(
     branch: str = "main",
     client: httpx.Client | None = None,
 ) -> int:
-    """Return ``max(WPID)`` over the merged tree ∪ open PRs. 0 if nothing found."""
+    """Return ``max(WPID)`` over the merged tree ∪ open PRs ∪ app branches. 0 if nothing found."""
     owned_client = client is None
     client = client or httpx.Client(base_url=_GITHUB_API, headers=_headers(token), timeout=30.0)
     try:
         return max(
             _tree_max(client, owner, repo, branch),
             _open_pr_max(client, owner, repo),
+            _branch_max(client, owner, repo),
         )
     finally:
         if owned_client:

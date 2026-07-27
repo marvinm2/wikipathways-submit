@@ -16,9 +16,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.github import GitHubClient, GitHubError, PullRequest
+from app.github import BranchAlreadyExists, GitHubClient, GitHubError, PullRequest
 from app.submit.gpml import assign_wpid, layout_paths, validate_gpml
 from app.wpid import WpidAllocator, format_wpid
+
+#: How many times to step past a WPID whose ``submit/WP<id>`` branch already exists.
+_BRANCH_COLLISION_RETRIES = 3
 
 
 class NoPendingSubmission(RuntimeError):
@@ -60,39 +63,62 @@ class SubmissionService:
         # 1. Validate first — a malformed upload must not consume a WPID.
         meta = validate_gpml(gpml)
 
-        # 2. Reserve the WPID atomically.
-        wpid = self._allocator.allocate(submitter)
-
+        # 2. Reserve the WPID atomically and claim its branch. A PR closed unmerged leaves its
+        # branch behind, so a free id can still have a taken branch name; the floor counts those
+        # branches, and this loop steps past any that slipped through (e.g. a branch created
+        # between the floor read and here). Colliding reservations are held until a clean id is
+        # found — releasing one first would just hand the same id back — then returned to the pool.
+        collided: list[int] = []
         try:
-            # 3. Stamp the assigned WPID into the GPML (Version attribute).
-            gpml_out = assign_wpid(gpml, wpid)
-            path = layout_paths(wpid)["gpml"]
-            wpid_str = format_wpid(wpid)
-            branch = f"submit/{wpid_str}"
+            for attempt in range(_BRANCH_COLLISION_RETRIES):
+                wpid = self._allocator.allocate(submitter)
 
-            # 4. Branch off the latest base, 5. commit the file, 6. open the PR.
-            base_sha = self._github.get_branch_sha(self._repo, self._base_branch)
-            self._github.create_branch(self._repo, branch, base_sha)
-            self._github.put_file(
-                self._repo,
-                branch,
-                path,
-                gpml_out,
-                message=f"Add {wpid_str}: {meta.name}",
-                author_name=submitter,
-                author_email=author_email,
-            )
-            pr: PullRequest = self._github.open_pull_request(
-                self._repo,
-                head=branch,
-                base=self._base_branch,
-                title=f"New pathway {wpid_str}: {meta.name}",
-                body=_pr_body(wpid_str, meta.name, meta.organism, submitter, description),
-            )
-        except Exception:
-            # Any GitHub failure → return the WPID to the pool before re-raising.
-            self._allocator.release(wpid)
-            raise
+                # 3. Stamp the assigned WPID into the GPML (Version attribute), and the
+                #    submitter as Author if the upload carries none.
+                gpml_out = assign_wpid(gpml, wpid, author=submitter)
+                path = layout_paths(wpid)["gpml"]
+                wpid_str = format_wpid(wpid)
+                branch = f"submit/{wpid_str}"
+
+                # 4. Branch off the latest base.
+                try:
+                    base_sha = self._github.get_branch_sha(self._repo, self._base_branch)
+                    self._github.create_branch(self._repo, branch, base_sha)
+                except BranchAlreadyExists:
+                    collided.append(wpid)
+                    if attempt == _BRANCH_COLLISION_RETRIES - 1:
+                        raise
+                    continue
+                except Exception:
+                    self._allocator.release(wpid)
+                    raise
+                break
+
+            try:
+                # 5. Commit the file, 6. open the PR.
+                self._github.put_file(
+                    self._repo,
+                    branch,
+                    path,
+                    gpml_out,
+                    message=f"Add {wpid_str}: {meta.name}",
+                    author_name=submitter,
+                    author_email=author_email,
+                )
+                pr: PullRequest = self._github.open_pull_request(
+                    self._repo,
+                    head=branch,
+                    base=self._base_branch,
+                    title=f"New pathway {wpid_str}: {meta.name}",
+                    body=_pr_body(wpid_str, meta.name, meta.organism, submitter, description),
+                )
+            except Exception:
+                # Any GitHub failure → return the WPID to the pool before re-raising.
+                self._allocator.release(wpid)
+                raise
+        finally:
+            for burnt in collided:
+                self._allocator.release(burnt)
 
         # 7. Record the PR number on the reservation.
         self._allocator.attach_pr(wpid, pr.number)
@@ -136,7 +162,8 @@ class SubmissionService:
         if pr is None:
             raise NoPendingSubmission(f"no open submission PR for {wpid_str} to revise")
 
-        gpml_out = assign_wpid(gpml, wpid)  # keep the assigned WPID; a revise can't renumber
+        # Keep the assigned WPID; a revise can't renumber.
+        gpml_out = assign_wpid(gpml, wpid, author=submitter)
         branch_file_sha = self._github.get_file_sha(self._repo, branch, path)
         self._github.put_file(
             self._repo,
