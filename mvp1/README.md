@@ -118,7 +118,7 @@ To test on a fork, use the ready-to-drop tree in [`../fork-staging/`](../fork-st
 
 ## Open items before upstreaming
 
-- ✅ Confirmed on a real run (2026-07-26): `meta-data-action` **v1.1.4** invocation, and that
+- Confirmed on a real run (2026-07-26): `meta-data-action` **v1.1.4** invocation, and that
   `gpmlconverter` generates locally without the assets-repo SSH keys. (gpmlconverter's *SVG*
   render is separately blocked by upstream HTTP-400s — PinPath covers the render, see above.)
 - Decide artifact **retention** (currently 14 days) and whether to also attach the `.json`.

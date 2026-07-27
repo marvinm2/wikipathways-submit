@@ -77,41 +77,41 @@ real runner — validate:**
       SVGs (needs the bot identity configured for Actions read — see `docs/github-app-setup.md`).
 - [ ] Compare PinPath vs `gpmlconverter` render fidelity and decide which is the default "after".
 
-## Validated on a real runner (2026-07-25/26, marvinm2/wikipathways-database)
+## Validated on a real runner (2026-07-26, marvinm2/wikipathways-database)
 
-Ran the pipeline on a WP554 edit PR (fork PR #3). What we learned + fixed:
+Ran the pipeline on WP554 edit PRs (fork PR #3, then PR #4). What we learned and fixed:
 
-- ✅ **Plumbing works end-to-end:** `pull_request` → `pr-preview.yml` → `pr-preview` artifact →
-  `pr-preview-comment.yml` sticky comment. The validation correctly reported
-  `❌ Rendered SVG — render step produced no SVG` when the render failed (the pipeline's job).
-- ✅ **gpmlconverter renders without the assets-repo SSH keys** (open question resolved).
-- 🔧 **BridgeDb `.bridge` must be downloaded, not just cached.** `configGenerator.sh` only writes
-  `gdb.config`; without `installDependencies.sh` the derby is missing →
-  `NoSuchFileException Hs_Derby_*.bridge` → meta-data-action fails → no datanodes → no render.
-  **Fixed:** added the "Install BridgeDb files (cache miss)" step. Metadata now generates.
-- ⚠️ **gpmlconverter's SVG render is blocked by upstream HTTP 400s** — it calls an external
-  per-node service that floods `Server responded with status code 400`. Not fixable from here;
-  it's an upstream gpmlconverter/service issue. **PinPath (local R render, no Chrome) sidesteps it.**
-- 🔧 **PinPath install** needed a sequence of fixes, applied in order across runs: (1) install from
-  GitHub (`SyNUM-lab/PinPath`), not Bioconductor release; (2) install `remotes` first; (3)
+- **Plumbing works end to end:** `pull_request` runs `pr-preview.yml`, which uploads the
+  `pr-preview` artifact, and `pr-preview-comment.yml` posts the sticky comment. Validation reported
+  a failed "Rendered SVG" check when the render failed, which is the pipeline doing its job.
+- **gpmlconverter renders without the assets-repo SSH keys** (open question resolved).
+- **BridgeDb `.bridge` must be downloaded, not just cached.** `configGenerator.sh` only writes
+  `gdb.config`; without `installDependencies.sh` the derby is missing
+  (`NoSuchFileException Hs_Derby_*.bridge`), so meta-data-action fails and there are no datanodes
+  and no render. Fixed by adding the "Install BridgeDb files (cache miss)" step. Metadata now
+  generates.
+- **gpmlconverter's SVG render is blocked by upstream HTTP-400s.** It calls an external per-node
+  service that floods `Server responded with status code 400`. Not fixable from here; it's an
+  upstream gpmlconverter/service issue. PinPath (local R render, no Chrome) sidesteps it.
+- **PinPath install** needed a sequence of fixes, applied in order across runs: (1) install from
+  GitHub (`SyNUM-lab/PinPath`), not the Bioconductor release; (2) install `remotes` first; (3)
   authenticate the GitHub API with `GITHUB_PAT: ${{ github.token }}` (unauthenticated `remotes` hit
-  the 60-req/hr limit: `cannot open URL .../DESCRIPTION`); (4) **use current-release R, not a 4.4.x
-  pin.** An earlier `4.4.2` pin (chosen to avoid devel Bioc 3.23) failed `R CMD build` with
-  `ERROR: this R is version 4.4.2, package 'PinPath' requires R >= 4.6.0` — PinPath's `devel` branch
-  (v0.99.4, its only branch, no release tag) hard-requires **R ≥ 4.6.0**. Bumped to
-  `r-version: "release"` (R 4.6.x now → the *released* Bioc 3.23, paired with R 4.6 since April
-  2026, so the devel-Bioc concern is moot). Cache key bumped to `r-pinpath-...-rrelease-v3`.
-  - ✅ **The `GITHUB_PAT` fix is confirmed working** (run 30214373998, 2026-07-26): the rate-limit
-    error is gone; PinPath downloaded and all its Bioconductor deps (AnnotationDbi, ggraph,
-    BiocFileCache, …) resolved + installed. The install now reaches `R CMD build` and only failed on
-    the R-version requirement above — which fix (4) addresses.
-  - ⏳ **The R-release fix is authored but not yet confirmed green on a runner.** After pushing the
-    fix to the fork's `main`, rapid PR close/reopen/push churn appears to have throttled GitHub's
-    scheduling of the `pull_request` `pr-preview.yml` (runs stopped registering while the native
-    `pull_request_target` workflow kept firing). Re-validate with **one** calm push of any gpml
-    change to a PR branch, then confirm PinPath compiles + `WP<id>-after.svg`/`-before.svg` are
-    non-empty in the `pr-preview` artifact. (These PinPath steps live only in `fork-staging`, not
-    `mvp1/` — they stay experimental here until this render is confirmed, then backport to `mvp1`.)
+  the 60-req/hr limit: `cannot open URL .../DESCRIPTION`); (4) use current-release R, not a 4.4.x
+  pin. An earlier `4.4.2` pin (chosen to avoid devel Bioc 3.23) failed `R CMD build` with
+  `ERROR: this R is version 4.4.2, package 'PinPath' requires R >= 4.6.0`. PinPath's `devel` branch
+  (v0.99.4, its only branch, no release tag) hard-requires R >= 4.6.0. Bumped to
+  `r-version: "release"` (R 4.6.x now, which resolves the released Bioc 3.23, paired with R 4.6
+  since April 2026, so the devel-Bioc concern is moot). Cache key bumped to
+  `r-pinpath-...-rrelease-v3`.
+- **Confirmed green on PR #4** (2026-07-26): PinPath installs and renders, `WP554-after.svg` and
+  `-before.svg` are non-empty valid svglite SVGs, and the overall validation status is PASS.
+  `validate_pathway.py --rendered` takes several candidates in priority order, so PinPath's
+  `-after.svg` satisfies the "Rendered SVG" check while gpmlconverter's SVG stays blocked upstream.
+- **One process note:** don't re-trigger by closing and reopening a PR repeatedly. That churn wedged
+  PR #3's scheduler (the `pull_request` runs stopped registering while `pull_request_target` kept
+  firing). A single push on a fresh branch (PR #4) triggered cleanly.
+
+These PinPath steps have been backported from `fork-staging/` to `mvp1/`, so both copies match.
 
 ## Before proposing upstream
 
