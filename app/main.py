@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -218,6 +219,35 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             locks=st.locks,
         )
 
+    def _render_preview(
+        request: Request,
+        *,
+        pr_number: int,
+        wpid: int,
+        path: str,
+        after_gpml: bytes,
+        github: GitHubClient,
+        with_before: bool,
+    ) -> None:
+        """Instantly render the before/after preview at PR-creation time (issue #11, 1a).
+
+        Best-effort — a render or base-fetch failure only costs the preview, never the submission,
+        so the whole thing is swallowed (the CI artifact / placeholder still covers the frame).
+        """
+        try:
+            before_gpml = None
+            if with_before:
+                before_gpml = github.get_file_content(
+                    settings.content_repo, settings.default_branch, path
+                )
+            request.app.state.preview.render_local(
+                pr_number, wpid, after_gpml=after_gpml, before_gpml=before_gpml
+            )
+        except Exception:  # noqa: BLE001 — preview is cosmetic; never fail the write path on it
+            logging.getLogger("wpsubmit.preview").warning(
+                "local preview render failed for PR #%s", pr_number, exc_info=True
+            )
+
     app = FastAPI(title="wikipathways-submit", version="0.0.1", lifespan=lifespan)
     app.add_middleware(
         SessionMiddleware,
@@ -417,6 +447,15 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         _curation(request, bot).register(
             pr_number=result.pr_number, wpid=result.wpid, submitter=submitter, kind="new"
         )
+        _render_preview(
+            request,
+            pr_number=result.pr_number,
+            wpid=result.wpid,
+            path=result.path,
+            after_gpml=content,
+            github=github,
+            with_before=False,  # new pathway has no base version
+        )
         return SubmitResponse(
             wpid=result.wpid_str,
             pr_number=result.pr_number,
@@ -454,6 +493,15 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         _curation(request, bot).register(
             pr_number=result.pr_number, wpid=result.wpid, submitter=submitter, kind="update"
+        )
+        _render_preview(
+            request,
+            pr_number=result.pr_number,
+            wpid=result.wpid,
+            path=result.path,
+            after_gpml=content,
+            github=github,
+            with_before=True,  # render the current main version as the "before"
         )
         return SubmitResponse(
             wpid=result.wpid_str,

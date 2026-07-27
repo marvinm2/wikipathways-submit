@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.github import GitHubClient, GitHubError
+from app.preview.render import RenderError, render_gpml
 
 _SIDES = ("before", "after")
 
@@ -61,8 +62,47 @@ class PreviewService:
         self._status_cache: dict[int, tuple[float, str]] = {}
         self._extract_cache: dict[int, tuple[float, PreviewState]] = {}
 
+    # -- instant local render (issue #11, 1a) ---------------------------------------------
+    def render_local(
+        self, pr_number: int, wpid: int, *, after_gpml: bytes, before_gpml: bytes | None = None
+    ) -> PreviewState:
+        """Render the before/after SVGs in-process at PR-creation time and cache them on disk.
+
+        Best-effort: a side that can't be rendered is skipped, never raised — the preview must
+        never sink the submission. Once written, ``status``/``svg_path`` serve these directly, so
+        the dashboard shows the diagram immediately instead of waiting on the CI artifact.
+        """
+        out = self._cache_dir / str(pr_number)
+        out.mkdir(parents=True, exist_ok=True)
+        rendered: dict[str, bool] = {"before": False, "after": False}
+        for side, gpml in (("before", before_gpml), ("after", after_gpml)):
+            if gpml is None:
+                continue
+            try:
+                svg = render_gpml(gpml)
+            except RenderError:
+                continue
+            (out / f"{side}.svg").write_bytes(svg)
+            rendered[side] = True
+        state = PreviewState(
+            "ready" if (rendered["before"] or rendered["after"]) else "failed",
+            has_before=rendered["before"],
+            has_after=rendered["after"],
+        )
+        # A local render is authoritative for this PR; drop any stale CI status/extract cache.
+        self._status_cache.pop(pr_number, None)
+        self._extract_cache.pop(pr_number, None)
+        return state
+
+    def _local_side_exists(self, pr_number: int) -> bool:
+        d = self._cache_dir / str(pr_number)
+        return any((d / f"{s}.svg").is_file() for s in _SIDES)
+
     # -- cheap status (queue render) -------------------------------------------------------
     def status(self, pr_number: int) -> str:
+        # A locally-rendered preview is on disk already — ready without touching GitHub.
+        if self._local_side_exists(pr_number):
+            return "ready"
         now = self._clock()
         hit = self._status_cache.get(pr_number)
         if hit and now - hit[0] < self._ttl:
@@ -110,11 +150,20 @@ class PreviewService:
         return state
 
     def svg_path(self, pr_number: int, wpid: int, side: str) -> Path | None:
-        """Cached path to the before/after SVG, downloading+extracting on first request."""
+        """Cached path to the before/after SVG.
+
+        Serves a locally-rendered SVG (issue #11, 1a) directly; otherwise downloads + extracts the
+        CI artifact on first request. If only one side was rendered locally (e.g. a new pathway has
+        no "before"), the requested-but-absent side returns None → the endpoint shows a placeholder.
+        """
         if side not in _SIDES:
             return None
-        self.ensure(pr_number, wpid)
         path = self._cache_dir / str(pr_number) / f"{side}.svg"
+        if path.is_file():
+            return path
+        if self._local_side_exists(pr_number):
+            return None  # locally rendered, but this side wasn't (don't fall back to CI)
+        self.ensure(pr_number, wpid)
         return path if path.is_file() else None
 
     def _extract(self, pr_number: int, wpid: int, zip_bytes: bytes) -> PreviewState:
