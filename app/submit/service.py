@@ -194,12 +194,12 @@ def _pr_body(
 ) -> str:
     body = (
         f"@{submitter} submitted this pathway through the WikiPathways curation portal.\n\n"
-        f"- Pathway: {name or '(unnamed)'}\n"
-        f"- WPID: {wpid_str}, assigned by the app\n"
-        f"- Organism: {organism or '(unset)'}\n"
+        f"- **Pathway:** {name or '(unnamed)'}\n"
+        f"- **WPID:** {wpid_str}, assigned by the app\n"
+        f"- **Organism:** {organism or '(unset)'}\n"
     )
     note = (description or "").strip()
     if note:
-        body += f"\nNote from the submitter:\n\n{note}\n"
+        body += f"\n**Note from the submitter**\n\n{note}\n"
     body += "\nThe drawn pathway is in the curation dashboard; this pull request holds the GPML."
     return body

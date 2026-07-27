@@ -131,7 +131,7 @@ def test_submit_success(tmp_path):
     assert body["path"] == "pathways/WP5637/WP5637.gpml"
     # The submitter note travels through the Form field into the PR body.
     pr_body = app.state._fake.pull_meta[body["pr_number"]]["body"]
-    assert "Note from the submitter:" in pr_body
+    assert "**Note from the submitter**" in pr_body
     assert "Curated from Reactome" in pr_body
 
 
@@ -378,7 +378,7 @@ def test_approve_merges_via_bot_and_updates_mirror(tmp_path):
     assert pr in fake.merged  # merged through the bot identity
     # The mirror comment (single upserted comment) now reflects the merge.
     mirror = next(iter(fake.comments[(repo, pr)].values()))
-    assert ", merged." in mirror and "Approved and merged by @curator" in mirror
+    assert "**merged**." in mirror and "**Approved and merged by @curator.**" in mirror
 
 
 def test_approve_503_without_bot_identity(tmp_path):

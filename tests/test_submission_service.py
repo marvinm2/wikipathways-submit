@@ -56,8 +56,8 @@ def test_submit_new_pathway_happy_path(allocator, session_factory):
     assert meta["title"] == "New pathway WP5637: Mitophagy"
     assert meta["base"] == "main"
     assert meta["head"] == "submit/WP5637"
-    assert "WPID: WP5637, assigned by the app" in meta["body"]
-    assert "Organism: Homo sapiens" in meta["body"]
+    assert "**WPID:** WP5637, assigned by the app" in meta["body"]
+    assert "**Organism:** Homo sapiens" in meta["body"]
     assert "@alice submitted this pathway" in meta["body"]
     # No note was supplied, so the body carries no submitter-note section.
     assert "Note from the submitter" not in meta["body"]
@@ -109,7 +109,7 @@ def test_submit_description_flows_into_pr_body(allocator):
     )
 
     body = gh.pull_meta[1]["body"]
-    assert "Note from the submitter:" in body
+    assert "**Note from the submitter**" in body
     assert "Curated from Reactome R-HSA-1234" in body
 
 

@@ -54,7 +54,7 @@ def render_mirror_comment(review: Review, repo: str, *, base_url: str = "") -> s
         MIRROR_MARKER,
         f"### Curation status for WP{review.wpid}",
         "",
-        f"Written by the curation bot. A {kind} from @{review.submitter}, {where}.{assigned}",
+        f"Written by the curation bot. A {kind} from @{review.submitter}, **{where}**.{assigned}",
         "",
         "| Check | State | Notes |",
         "|---|---|---|",
@@ -62,9 +62,10 @@ def render_mirror_comment(review: Review, repo: str, *, base_url: str = "") -> s
     for item in review.checklist:
         req = " (required)" if item.get("required") else ""
         state = _PLAIN_STATE.get(item.get("state", "pending"), item.get("state", "pending"))
-        lines.append(f"| {item['label']}{req} | {state} | {item.get('note') or ''} |")
+        note = item.get("note") or ""
+        lines.append(f"| {item['label']}{req} | {state} | {f'_{note}_' if note else ''} |")
     if review.approved_by:
-        lines += ["", f"Approved and merged by @{review.approved_by}."]
+        lines += ["", f"**Approved and merged by @{review.approved_by}.**"]
     if base_url:
         lines += [
             "",
