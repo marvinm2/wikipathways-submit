@@ -100,6 +100,12 @@ class Review(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
     merged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Optimistic-concurrency counter: the ORM stamps every UPDATE with WHERE version=<read> and
+    # bumps it, so a lost update (issue #15) surfaces as StaleDataError instead of silently
+    # overwriting. See CurationService.set_checklist_item, which retries on that conflict.
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    __mapper_args__ = {"version_id_col": version}
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"<Review PR#{self.pr_number} WP{self.wpid} {self.status.value}>"

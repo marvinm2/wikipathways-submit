@@ -10,6 +10,7 @@ from __future__ import annotations
 import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.curators import CuratorRegistry
 from app.github import GitHubClient, GitHubError
@@ -20,6 +21,10 @@ from app.wpid import WpidAllocator
 
 #: Hidden token embedded in the mirror comment so we update the same one instead of spamming.
 MIRROR_MARKER = "<!-- wikipathways-submit:mirror -->"
+
+#: How many times to re-read-and-retry a checklist write that lost the optimistic-version race
+#: (issue #15). Ample: contention is between a handful of curators on one review, not a hot loop.
+_CHECKLIST_WRITE_RETRIES = 10
 
 
 def render_mirror_comment(review: Review, repo: str) -> str:
@@ -154,20 +159,36 @@ class CurationService:
             raise ValueError(f"unknown checklist item: {key}")
         if state not in {s.value for s in ChecklistState}:
             raise ValueError(f"invalid checklist state: {state}")
-        with self._session_factory() as s:
-            review = s.get(Review, pr_number)
-            if review is None:
-                raise ReviewNotFound(f"no review for PR #{pr_number}")
-            # Rebuild the list so the JSON column is marked dirty.
-            checklist = [dict(item) for item in review.checklist]
-            for item in checklist:
-                if item["key"] == key:
-                    item["state"] = state
-                    item["note"] = note
-            review.checklist = checklist
-            s.commit()
-            self._maybe_mirror(review)
-            return review
+        # The checklist is one JSON blob on the review row, so setting an item is a
+        # read-modify-write of the whole list. Two curators — or a burst of clicks — updating
+        # *different* items at once would otherwise lose updates: each reads the list, changes
+        # its own item, writes the whole list back, and the last commit wins, silently dropping
+        # the others (issue #15). Review carries a ``version_id_col``, so the ORM stamps every
+        # UPDATE with ``WHERE version = <read value>`` and raises StaleDataError when a concurrent
+        # write got there first. On that conflict we re-read the fresh row and retry — the same
+        # read-latest-and-retry shape the allocator uses, and correct on both Postgres and SQLite.
+        for attempt in range(_CHECKLIST_WRITE_RETRIES):
+            try:
+                with self._session_factory() as s:
+                    review = s.get(Review, pr_number)
+                    if review is None:
+                        raise ReviewNotFound(f"no review for PR #{pr_number}")
+                    # Rebuild the list (new object) so the JSON column is marked dirty.
+                    checklist = [dict(item) for item in review.checklist]
+                    for item in checklist:
+                        if item["key"] == key:
+                            item["state"] = state
+                            item["note"] = note
+                    review.checklist = checklist
+                    s.commit()  # version-guarded UPDATE; StaleDataError if we lost the race
+                    self._maybe_mirror(review)
+                    return review
+            except StaleDataError:
+                # Another checklist write committed between our read and write. Retry with a
+                # fresh read so its change is preserved and ours is layered on top.
+                if attempt == _CHECKLIST_WRITE_RETRIES - 1:
+                    raise
+        raise AssertionError("unreachable: the retry loop always returns or raises")
 
     def approve_and_merge(self, pr_number: int, curator: str) -> Review:
         if not self._curators.is_curator(curator):
