@@ -68,6 +68,21 @@ through Java/Node converters. So:
 That runs untrusted code with a write token — a well-known GitHub Actions vulnerability. The
 two-workflow split is deliberate.
 
+## Before/after render (PinPath, #11 / #6)
+
+`pr-preview.yml` also carries an optional **PinPath** (`drawGPML`) render step that produces
+`WP<id>-after.svg` (PR head) and `WP<id>-before.svg` (base version, updates only) for the app's
+before/after viewer — see `../fork-staging/scripts/render_pinpath.R`. It is best-effort
+(`continue-on-error`): if PinPath can't install or render, the run stays green.
+
+**Validated on a real runner** (2026-07-26, fork PR #4, WP554). Two things it needs, learned there:
+the GitHub install must set `GITHUB_PAT: ${{ github.token }}` (else `remotes` hits the anon
+rate limit), and R must be `release` (PinPath v0.99.x requires **R ≥ 4.6.0**). Because
+gpmlconverter's own SVG render is blocked by upstream HTTP-400s, PinPath runs **before** the
+validation step and `validate_pathway.py --rendered` accepts multiple candidates in priority
+order — so PinPath's `-after.svg` satisfies the "Rendered SVG" check and the overall status is a
+genuine PASS.
+
 ## Adversarial review — applied hardening
 
 This bundle was run through a multi-agent adversarial review (13 verified findings). The fixes
@@ -103,8 +118,9 @@ To test on a fork, use the ready-to-drop tree in [`../fork-staging/`](../fork-st
 
 ## Open items before upstreaming
 
-- Confirm `meta-data-action` **v1.1.4** invocation signature on a real run (mirrored from the
-  live `metadata` job; the local-run script pins the older v1.1.2).
+- ✅ Confirmed on a real run (2026-07-26): `meta-data-action` **v1.1.4** invocation, and that
+  `gpmlconverter` generates locally without the assets-repo SSH keys. (gpmlconverter's *SVG*
+  render is separately blocked by upstream HTTP-400s — PinPath covers the render, see above.)
 - Decide artifact **retention** (currently 14 days) and whether to also attach the `.json`.
 - Tune which checks are `WARN` vs `FAIL` with curators — severity is a policy choice.
 - MVP-1 posts the mirror comment; **approval state stays with GitHub** until the app's
