@@ -77,6 +77,12 @@ class GitHubClient(ABC):
         """Open a PR from ``head`` into ``base`` and return it."""
 
     @abstractmethod
+    def get_pull_request_state(self, repo: str, pr_number: int) -> str | None:
+        """State of a PR: ``"open"``, ``"closed"``, ``"merged"``, or None if it does not exist.
+
+        Used to reconcile review rows against PRs closed/merged outside the app (issue #1)."""
+
+    @abstractmethod
     def merge_pull_request(self, repo: str, pr_number: int, *, method: str = "squash") -> None:
         """Merge a PR. Raises GitHubError if the merge is not allowed."""
 
@@ -153,6 +159,8 @@ class FakeGitHubClient(GitHubClient):
         # sends. Captured so tests can assert on the title/body a reviewer actually sees.
         self.pull_meta: dict[int, dict[str, str]] = {}
         self.merged: set[int] = set()
+        # PRs closed without merging (tests set this to simulate an out-of-band close).
+        self.closed: set[int] = set()
         # {(repo, issue_number): {marker: body}} — one comment per marker (upsert semantics).
         self.comments: dict[tuple[str, int], dict[str, str]] = {}
         # {"org/team-slug": [login, ...]}
@@ -232,6 +240,16 @@ class FakeGitHubClient(GitHubClient):
         self._next_pr += 1
         self.pulls.append(pr)
         return pr
+
+    def get_pull_request_state(self, repo: str, pr_number: int) -> str | None:
+        self._maybe_fail("get_pull_request_state")
+        if pr_number in self.merged:
+            return "merged"
+        if pr_number in self.closed:
+            return "closed"
+        if any(pr.number == pr_number for pr in self.pulls):
+            return "open"
+        return None
 
     def merge_pull_request(self, repo: str, pr_number: int, *, method: str = "squash") -> None:
         self._maybe_fail("merge_pull_request")
@@ -370,6 +388,16 @@ class HttpGitHubClient(GitHubClient):
         self._raise_for(resp, "open_pull_request")
         data = resp.json()
         return PullRequest(number=data["number"], html_url=data["html_url"], head_branch=head)
+
+    def get_pull_request_state(self, repo: str, pr_number: int) -> str | None:
+        resp = self._client.get(f"/repos/{repo}/pulls/{pr_number}")
+        if resp.status_code == 404:
+            return None
+        self._raise_for(resp, f"get_pull_request_state({pr_number})")
+        data = resp.json()
+        if data.get("merged"):
+            return "merged"
+        return data.get("state")  # "open" | "closed"
 
     def merge_pull_request(self, repo: str, pr_number: int, *, method: str = "squash") -> None:
         resp = self._client.put(

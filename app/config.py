@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     preview_artifact_name: str = "pr-preview"
     preview_cache_dir: str = "./preview-cache"
     preview_cache_ttl_seconds: int = 60
+    # Refuse approve-and-merge until the PR-preview CI workflow has completed successfully
+    # (design problem #1: never merge a pathway whose render/validation hasn't run green).
+    require_preview_check: bool = True
 
     # Per-user OAuth (submitter identity, scaffolding-plan §3). Absent → auth routes 503.
     github_oauth_client_id: str | None = None

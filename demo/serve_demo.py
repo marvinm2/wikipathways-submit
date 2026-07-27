@@ -68,6 +68,11 @@ class _MergingFake(FakeGitHubClient):
                 self.existing_files[(r, path)] = sha
                 self.existing_contents[(r, path)] = content
 
+    def pr_preview_status(self, repo, pr_number, *, workflow_file, artifact_name):
+        # Simulate a green PR-preview CI run so the merge gate (require_preview_check) passes in
+        # the offline demo, matching what a real fork's pr-preview.yml does.
+        return "ready"
+
 
 def make_demo_app():
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="wpsubmit-demo-"))

@@ -39,6 +39,7 @@ from app.review.service import (
     ChecklistIncomplete,
     CurationService,
     NotACurator,
+    PreviewNotReady,
     ReviewNotFound,
 )
 from app.submit import InvalidGpml, SubmissionService, layout_paths, validate_gpml
@@ -217,6 +218,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             curators=st.curators,
             allocator=st.allocator,
             locks=st.locks,
+            require_preview_check=settings.require_preview_check,
+            preview_workflow_file=settings.preview_workflow_file,
+            preview_artifact_name=settings.preview_artifact_name,
         )
 
     def _render_preview(
@@ -320,7 +324,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/dashboard", response_class=HTMLResponse)
-    def dashboard(request: Request, status: ReviewStatus = ReviewStatus.OPEN):
+    def dashboard(
+        request: Request,
+        status: ReviewStatus = ReviewStatus.OPEN,
+        bot: GitHubClient | None = Depends(get_bot_optional),
+    ):
+        # Terminalise any review whose PR was closed/merged outside the app before rendering the
+        # queue, so the dashboard never shows a PR that no longer exists (issue #1).
+        _curation(request, bot).reconcile_open_reviews()
         reviews = [_review_view(request, r) for r in _curation(request).list_queue(status=status)]
         return templates.TemplateResponse(
             request,
@@ -593,6 +604,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         except NotACurator as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ChecklistIncomplete as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PreviewNotReady as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -12,6 +12,7 @@ from app.review.service import (
     ChecklistIncomplete,
     CurationService,
     NotACurator,
+    PreviewNotReady,
     ReviewNotFound,
 )
 from app.wpid import WpidAllocator
@@ -113,6 +114,59 @@ def test_concurrent_checklist_updates_all_persist(session_factory):
     # Every concurrently-set item survived — no lost update.
     assert all(states[k] == "pass" for k in keys), states
     assert all(notes[k] == f"set-{k}" for k in keys), notes
+
+
+def _gated_service(session_factory, github):
+    return CurationService(
+        session_factory,
+        github,
+        repo=REPO,
+        curators=ConfigCurators(CURATORS),
+        require_preview_check=True,
+        preview_workflow_file="pr-preview.yml",
+        preview_artifact_name="pr-preview",
+    )
+
+
+def test_approve_blocked_until_preview_ready(session_factory):
+    gh = FakeGitHubClient(previews={1: {"status": "pending"}})
+    svc = _gated_service(session_factory, gh)
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
+    _complete_required(svc, 1)
+
+    # Checklist complete, but the PR-preview CI has not gone green → merge is refused.
+    with pytest.raises(PreviewNotReady):
+        svc.approve_and_merge(1, "curator")
+    assert gh.merged == set()
+
+    # Once the preview is ready, the same approval merges.
+    gh.previews[1] = {"status": "ready"}
+    review = svc.approve_and_merge(1, "curator")
+    assert review.status == ReviewStatus.MERGED
+    assert gh.merged == {1}
+
+
+def test_reconcile_terminalises_out_of_band_prs(session_factory):
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    # Open PRs 1..3 in the fake so it knows their state; register a review for each, plus a
+    # review (#4) whose PR was never opened (deleted / absent).
+    for wpid in (5637, 5638, 5639):
+        gh.open_pull_request(REPO, head=f"submit/WP{wpid}", base="main", title="t", body="b")
+    for pr, wpid in ((1, 5637), (2, 5638), (3, 5639), (4, 5640)):
+        svc.register(pr_number=pr, wpid=wpid, submitter="bob", kind="new")
+
+    gh.merged.add(1)  # merged outside the app
+    gh.closed.add(2)  # closed unmerged outside the app
+    # 3 stays open; 4 is absent (no PR) → treated as closed
+
+    assert svc.reconcile_open_reviews() == 3
+    assert svc.get(1).status == ReviewStatus.MERGED
+    assert svc.get(2).status == ReviewStatus.CLOSED
+    assert svc.get(3).status == ReviewStatus.OPEN
+    assert svc.get(4).status == ReviewStatus.CLOSED
+    # Idempotent: a second pass reconciles nothing new.
+    assert svc.reconcile_open_reviews() == 0
 
 
 def test_approve_requires_curator(session_factory):

@@ -72,6 +72,10 @@ class ChecklistIncomplete(RuntimeError):
     """Approval attempted before every required checklist item is marked pass."""
 
 
+class PreviewNotReady(RuntimeError):
+    """Approval attempted before the PR-preview CI workflow has completed successfully."""
+
+
 class CurationService:
     def __init__(
         self,
@@ -82,6 +86,9 @@ class CurationService:
         curators: CuratorRegistry,
         allocator: WpidAllocator | None = None,
         locks: PathwayLockRegistry | None = None,
+        require_preview_check: bool = False,
+        preview_workflow_file: str = "",
+        preview_artifact_name: str = "",
     ) -> None:
         self._session_factory = session_factory
         self._github = github
@@ -89,6 +96,9 @@ class CurationService:
         self._curators = curators
         self._allocator = allocator
         self._locks = locks
+        self._require_preview_check = require_preview_check
+        self._preview_workflow_file = preview_workflow_file
+        self._preview_artifact_name = preview_artifact_name
 
     def is_curator(self, user: str) -> bool:
         return self._curators.is_curator(user)
@@ -207,6 +217,21 @@ class CurationService:
                 )
             wpid = review.wpid
 
+        # Never merge a pathway whose render/validation hasn't run green (design problem #1): the
+        # PR-preview CI workflow must have completed successfully before we merge.
+        if self._require_preview_check:
+            status = self._github.pr_preview_status(
+                self._repo,
+                pr_number,
+                workflow_file=self._preview_workflow_file,
+                artifact_name=self._preview_artifact_name,
+            )
+            if status != "ready":
+                raise PreviewNotReady(
+                    f"PR #{pr_number}: PR-preview check is '{status}', not 'ready' — the render "
+                    f"and validation must pass before this can be merged"
+                )
+
         # Merge first; only mutate our state if GitHub accepts the merge.
         self._github.merge_pull_request(self._repo, pr_number)
 
@@ -259,3 +284,35 @@ class CurationService:
             s.commit()
             self._maybe_mirror(review)
             return review
+
+    def reconcile_open_reviews(self) -> int:
+        """Terminalise open reviews whose PR is no longer open on GitHub (issue #1).
+
+        A PR closed or merged *outside* the app — a raw merge, a manual close, or a webhook that
+        never arrived (as in the demo, which wires none) — would otherwise linger in the queue
+        forever. On each dashboard load we ask GitHub for the real state of every open review's PR
+        and, for any that is merged/closed/gone, run the same finalisation the webhook would. A
+        missing PR (deleted, 404) counts as closed-unmerged. Best-effort per review and a no-op if
+        no GitHub client is configured. Returns how many were reconciled.
+        """
+        if self._github is None:
+            return 0
+        with self._session_factory() as s:
+            open_prs = [
+                r.pr_number
+                for r in s.execute(
+                    select(Review).where(Review.status == ReviewStatus.OPEN)
+                ).scalars()
+            ]
+        reconciled = 0
+        for pr_number in open_prs:
+            try:
+                state = self._github.get_pull_request_state(self._repo, pr_number)
+            except GitHubError:
+                continue  # transient — leave the review; try again next load
+            if state == "open":
+                continue
+            # merged → promote; closed or absent (None) → return the id to the pool
+            self.handle_pr_closed(pr_number, merged=(state == "merged"))
+            reconciled += 1
+        return reconciled
