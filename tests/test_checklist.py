@@ -32,8 +32,10 @@ def test_auto_checks_prefill_states():
     assert _item(cl, "datanodes_mapped")["state"] == "pass"
     assert _item(cl, "datanodes_mapped")["auto"] is True
     assert _item(cl, "naming_ok")["state"] == "pass"
-    assert _item(cl, "description_ok")["state"] == "pass"
     assert _item(cl, "ontology_tags")["state"] == "pass"
+    # "Title and description are meaningful" is a human judgement — no auto state.
+    assert _item(cl, "description_ok")["state"] == "pending"
+    assert _item(cl, "description_ok")["auto"] is False
     refs = _item(cl, "references_valid")
     assert refs["state"] == "na"  # no references
     assert refs["required"] is False  # auto-N/A must not block approval
@@ -42,11 +44,13 @@ def test_auto_checks_prefill_states():
     assert _item(cl, "render_ok")["auto"] is False
 
 
-def test_well_annotated_submission_only_needs_render_check():
+def test_well_annotated_submission_only_needs_human_checks():
     cl = build_checklist(metadata=parse_curation_metadata(MAPPED), kind="new")
-    assert is_complete(cl) is False  # render_ok still pending
-    _item(cl, "render_ok")["state"] = "pass"
-    # No references (auto-N/A, non-blocking) → the human render check was the only thing left.
+    assert is_complete(cl) is False  # render_ok + description_ok still pending
+    # The structural checks auto-pass; only the two human judgements remain.
+    for key in ("render_ok", "description_ok"):
+        assert _item(cl, key)["state"] == "pending"
+        _item(cl, key)["state"] = "pass"
     assert is_complete(cl) is True
 
 
