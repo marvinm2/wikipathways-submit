@@ -75,6 +75,11 @@
     <span class="step-card__eyebrow">Step 2 &middot; Submit</span>
     <h2>Open the pull request</h2>
     <p class="hint">Uses the file you validated above. This creates a real PR on <code>{{ repo }}</code>.</p>
+    <label class="note-field">
+      <span class="note-field__label">Note for reviewers <span class="muted">(optional)</span></span>
+      <textarea id="submit-description" rows="3"
+                placeholder="Anything a curator should know: the source, what this pathway covers, open questions."></textarea>
+    </label>
     <button type="submit" id="submit-btn" class="btn btn--primary" disabled>Submit new pathway</button>
 
     <div class="result-card" id="result-card" hidden></div>
@@ -99,6 +104,11 @@
       <input type="file" id="update-file" accept=".gpml,.xml">
     </div>
   </div>
+  <label class="note-field">
+    <span class="note-field__label">What changed <span class="muted">(optional)</span></span>
+    <textarea id="update-description" rows="3"
+              placeholder="Summarise the edit so a curator can review it faster."></textarea>
+  </label>
   <button type="button" id="update-btn" class="btn btn--primary">Submit update</button>
   <div class="result-card" id="update-result" hidden></div>
 </form>

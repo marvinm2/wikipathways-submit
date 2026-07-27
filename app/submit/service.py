@@ -51,6 +51,7 @@ class SubmissionService:
         gpml: bytes | str,
         submitter: str,
         author_email: str | None = None,
+        description: str | None = None,
     ) -> SubmissionResult:
         # 1. Validate first — a malformed upload must not consume a WPID.
         meta = validate_gpml(gpml)
@@ -82,7 +83,7 @@ class SubmissionService:
                 head=branch,
                 base=self._base_branch,
                 title=f"New pathway {wpid_str}: {meta.name}",
-                body=_pr_body(wpid_str, meta.name, meta.organism, submitter),
+                body=_pr_body(wpid_str, meta.name, meta.organism, submitter, description),
             )
         except Exception:
             # Any GitHub failure → return the WPID to the pool before re-raising.
@@ -102,12 +103,22 @@ class SubmissionService:
         )
 
 
-def _pr_body(wpid_str: str, name: str | None, organism: str | None, submitter: str) -> str:
-    return (
+def _pr_body(
+    wpid_str: str,
+    name: str | None,
+    organism: str | None,
+    submitter: str,
+    description: str | None = None,
+) -> str:
+    body = (
         f"Automated submission via wikipathways-submit.\n\n"
         f"- **Pathway:** {name or '(unnamed)'}\n"
         f"- **WPID:** {wpid_str} (assigned by the app)\n"
         f"- **Organism:** {organism or '(unset)'}\n"
-        f"- **Submitter:** @{submitter}\n\n"
-        f"The PR-preview pipeline will render this pathway and post a validation summary."
+        f"- **Submitter:** @{submitter}\n"
     )
+    note = (description or "").strip()
+    if note:
+        body += f"\n**Submitter note**\n\n{note}\n"
+    body += "\nThe PR-preview pipeline will render this pathway and post a validation summary."
+    return body

@@ -21,8 +21,6 @@ from app.wpid import WpidAllocator
 #: Hidden token embedded in the mirror comment so we update the same one instead of spamming.
 MIRROR_MARKER = "<!-- wikipathways-submit:mirror -->"
 
-_STATE_ICON = {"pass": "✅", "fail": "❌", "na": "➖", "pending": "⬜"}
-
 
 def render_mirror_comment(review: Review, repo: str) -> str:
     """Render the read-only PR mirror comment (design §4.5): checklist + approval state.
@@ -32,20 +30,19 @@ def render_mirror_comment(review: Review, repo: str) -> str:
     """
     lines = [
         MIRROR_MARKER,
-        f"### 🧬 WikiPathways curation — WP{review.wpid}",
+        f"### WikiPathways curation — WP{review.wpid}",
         "",
         f"**Status:** `{review.status.value}` · **Submitter:** @{review.submitter} · "
         f"**Kind:** {review.kind}"
         + (f" · **Assigned:** @{review.assigned_curator}" if review.assigned_curator else ""),
         "",
-        "| | Check | |",
-        "|---|---|---|",
+        "| Check | State |",
+        "|---|---|",
     ]
     for item in review.checklist:
         req = " *(required)*" if item.get("required") else ""
-        icon = _STATE_ICON.get(item.get("state", "pending"), "⬜")
         note = f" — {item['note']}" if item.get("note") else ""
-        lines.append(f"| {icon} | {item['label']}{req}{note} | `{item.get('state', 'pending')}` |")
+        lines.append(f"| {item['label']}{req}{note} | `{item.get('state', 'pending')}` |")
     if review.approved_by:
         lines += ["", f"**Approved & merged by** @{review.approved_by}."]
     lines += [

@@ -162,6 +162,11 @@ def test_mirror_comment_written_when_bot_present(session_factory):
     svc.register(pr_number=3, wpid=5639, submitter="bob", kind="new")
     body = gh.comments[(REPO, 3)]["<!-- wikipathways-submit:mirror -->"]
     assert "WP5639" in body and "read-only" in body
+    assert body.startswith("<!-- wikipathways-submit:mirror -->")
+    assert "### WikiPathways curation — WP5639" in body
+    # House style: no decorative emoji in content posted to a real PR.
+    for emoji in ("🧬", "✅", "❌", "➖", "⬜"):
+        assert emoji not in body
 
 
 def test_approve_does_not_mutate_state_if_merge_fails(session_factory, allocator, locks):

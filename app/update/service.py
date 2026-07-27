@@ -58,6 +58,7 @@ class UpdateService:
         gpml: bytes | str,
         submitter: str,
         author_email: str | None = None,
+        description: str | None = None,
     ) -> UpdateResult:
         # Validate before taking the lock — a malformed revision shouldn't check out the pathway.
         validate_gpml(gpml)
@@ -104,7 +105,7 @@ class UpdateService:
                     head=branch,
                     base=self._base_branch,
                     title=f"Update {wpid_str}",
-                    body=_pr_body(wpid_str, submitter),
+                    body=_pr_body(wpid_str, submitter, description),
                 )
         except Exception:
             # Any failure → free the pathway so it isn't stuck checked out.
@@ -124,11 +125,15 @@ class UpdateService:
         )
 
 
-def _pr_body(wpid_str: str, submitter: str) -> str:
-    return (
+def _pr_body(wpid_str: str, submitter: str, description: str | None = None) -> str:
+    body = (
         f"Automated update via wikipathways-submit.\n\n"
         f"- **WPID:** {wpid_str}\n"
         f"- **Submitter:** @{submitter}\n"
-        f"- Branch cut from the latest base, so this never rebases across a GPML conflict.\n\n"
-        f"The PR-preview pipeline will render the revision and post a before/after summary."
+        f"- Branch cut from the latest base, so this never rebases across a GPML conflict.\n"
     )
+    note = (description or "").strip()
+    if note:
+        body += f"\n**What changed**\n\n{note}\n"
+    body += "\nThe PR-preview pipeline will render the revision and post a before/after summary."
+    return body

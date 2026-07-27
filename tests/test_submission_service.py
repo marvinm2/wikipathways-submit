@@ -50,14 +50,47 @@ def test_submit_new_pathway_happy_path(allocator, session_factory):
     assert 'Version="WP5637_r' in content
     assert "WP1_r00000000000000" not in content  # placeholder overwritten
     assert message == "Add WP5637: Mitophagy"
-    # PR opened.
+    # PR opened, with the human-facing title/body a reviewer sees.
     assert gh.pulls[0].head_branch == "submit/WP5637"
+    meta = gh.pull_meta[1]
+    assert meta["title"] == "New pathway WP5637: Mitophagy"
+    assert meta["base"] == "main"
+    assert meta["head"] == "submit/WP5637"
+    assert "**WPID:** WP5637 (assigned by the app)" in meta["body"]
+    assert "**Organism:** Homo sapiens" in meta["body"]
+    assert "**Submitter:** @alice" in meta["body"]
+    # No note was supplied, so the body carries no submitter-note section.
+    assert "Submitter note" not in meta["body"]
 
     # Reservation persisted with the PR number attached.
     rows = _reservations(session_factory)
     assert len(rows) == 1
     assert rows[0].wpid == 5637
     assert rows[0].pr_number == 1
+
+
+def test_submit_description_flows_into_pr_body(allocator):
+    gh = _fake_github()
+    svc = SubmissionService(allocator, gh, repo=REPO)
+
+    svc.submit_new_pathway(
+        gpml=GOOD_GPML,
+        submitter="alice",
+        description="Curated from Reactome R-HSA-1234; two data nodes need HGNC ids.",
+    )
+
+    body = gh.pull_meta[1]["body"]
+    assert "**Submitter note**" in body
+    assert "Curated from Reactome R-HSA-1234" in body
+
+
+def test_submit_blank_description_adds_no_note(allocator):
+    gh = _fake_github()
+    svc = SubmissionService(allocator, gh, repo=REPO)
+
+    svc.submit_new_pathway(gpml=GOOD_GPML, submitter="alice", description="   ")
+
+    assert "Submitter note" not in gh.pull_meta[1]["body"]
 
 
 def test_submit_invalid_gpml_reserves_nothing(allocator, session_factory):

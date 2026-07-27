@@ -427,6 +427,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     async def submit(
         request: Request,
         file: UploadFile,
+        description: str = Form(""),
         submitter: str = Depends(get_current_user),
         github: GitHubClient = Depends(get_github_client),
         bot: GitHubClient | None = Depends(get_bot_optional),
@@ -439,7 +440,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             base_branch=settings.default_branch,
         )
         try:
-            result = service.submit_new_pathway(gpml=content, submitter=submitter)
+            result = service.submit_new_pathway(
+                gpml=content, submitter=submitter, description=description
+            )
         except InvalidGpml as exc:
             raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc
         except GitHubError as exc:
@@ -468,6 +471,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         wpid: int,
         file: UploadFile,
+        description: str = Form(""),
         submitter: str = Depends(get_current_user),
         github: GitHubClient = Depends(get_github_client),
         bot: GitHubClient | None = Depends(get_bot_optional),
@@ -480,7 +484,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             base_branch=settings.default_branch,
         )
         try:
-            result = service.update_pathway(wpid=wpid, gpml=content, submitter=submitter)
+            result = service.update_pathway(
+                wpid=wpid, gpml=content, submitter=submitter, description=description
+            )
         except InvalidGpml as exc:
             raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc
         except LockUnavailable as exc:
