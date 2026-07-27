@@ -32,7 +32,6 @@ from pathlib import Path
 # Severity ordering so we can take the worst finding as the overall status.
 PASS, WARN, FAIL = "pass", "warn", "fail"
 _RANK = {PASS: 0, WARN: 1, FAIL: 2}
-_ICON = {PASS: "✅", WARN: "⚠️", FAIL: "❌"}
 
 # An empty BridgeDb/Xref identifier in a generated datanodes.tsv row shows up as
 # an empty Identifier column; meta-data-action writes literal "NA" when it cannot
@@ -58,16 +57,16 @@ class Report:
 
     def to_markdown(self) -> str:
         lines = [
-            f"### 🔬 Pathway validation — `{self.wpid}`",
+            f"### Pathway validation — `{self.wpid}`",
             "",
-            f"**Overall: {_ICON[self.status]} {self.status.upper()}**",
+            f"**Overall: {self.status.upper()}**",
             "",
-            "| | Check | Detail |",
+            "| Status | Check | Detail |",
             "|---|---|---|",
         ]
         for severity, name, detail in self.checks:
             detail = detail.replace("\n", " ").replace("|", "\\|")
-            lines.append(f"| {_ICON[severity]} | {name} | {detail} |")
+            lines.append(f"| {severity.upper()} | {name} | {detail} |")
         lines.append("")
         lines.append(
             "_This is an automated preview, not a merge gate. A curator makes the "
