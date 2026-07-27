@@ -58,24 +58,17 @@ scripts/validate_pathway.py               # the validation report (stdlib only)
 | No comment, comment run green | delete-only PR (expected) or artifact had no `comment.md` | download step + artifact contents |
 | `validation.md` shows FAIL "Metadata generated" for a valid pathway | organism not extracted / meta-data-action failed | the pathway's `::group::`, `organism:` line |
 
-## PinPath before/after render (issue #11 — EXPERIMENTAL, validate here)
+## Before/after render — now done in the app, not CI (PinPath retired)
 
-The `Setup R (PinPath)` → `Install PinPath` → `Render before/after with PinPath` steps add a
-PinPath render of both the PR-head version (`WP<id>-after.svg`) and the base-branch version
-(`WP<id>-before.svg`, updates only) to the `pr-preview` artifact. The app prefers `-after.svg`
-over the gpmlconverter `WP<id>.svg` and shows the two frames side by side. **Not yet run on a
-real runner — validate:**
+The before/after render is produced **in the app** (`app/preview/render.py`, issue #11 / 1a): a
+dependency-free GPML→SVG drawer runs at PR-creation time, so the preview is instant and needs no CI
+render. CI's only render-related job is to emit the **pvjson** (`WP<id>.json`) from gpmlconverter —
+its presence is the workflow's "Renderable (pvjson)" check, and it's what the app's renderer and the
+future pvjs viewer (#14) consume.
 
-- [ ] `Rscript scripts/render_pinpath.R <a.gpml> out out.svg` produces a non-empty SVG (a *plain*
-      render needs only PinPath + imports — no `org.Hs.eg.db`/Bioconductor annotation DB).
-- [ ] Confirm `BiocManager::install("PinPath")` resolves on the runner and the **R-packages cache**
-      makes subsequent runs fast (first run is minutes). If it's too heavy for every PR, split the
-      PinPath steps into their own workflow that uploads into the same `pr-preview` artifact name.
-- [ ] For an **update** PR: `git show <base>:<path>` renders a "before"; for a **new** pathway there
-      is no base version, so only `-after.svg` appears and the app shows a single frame.
-- [ ] Confirm the app picks up the artifact: `GET /previews/{pr}/{before,after}.svg` returns the
-      SVGs (needs the bot identity configured for Actions read — see `docs/github-app-setup.md`).
-- [ ] Compare PinPath vs `gpmlconverter` render fidelity and decide which is the default "after".
+The old PinPath render step (R + Bioconductor `SyNUM-lab/PinPath`, ~5–7 min) has been **removed** —
+it was the workaround for gpmlconverter's HTTP-400-blocked SVG, and the in-app renderer supersedes
+it. The history below is kept for context on how we got here.
 
 ## Validated on a real runner (2026-07-26, marvinm2/wikipathways-database)
 
