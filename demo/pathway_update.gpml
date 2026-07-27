@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Insulin signaling (demo)" Organism="Homo sapiens">
   <Graphics BoardWidth="620.0" BoardHeight="560.0" />
+  <Comment>Demo pathway: insulin (INS) activates INSR, which activates AKT1, which inhibits FOXO1. Now includes a Glucose metabolite.</Comment>
 
   <DataNode TextLabel="INS" Type="GeneProduct">
     <Graphics CenterX="240.0" CenterY="80.0" Width="120.0" Height="34.0" Color="1a5276" />
@@ -54,4 +55,15 @@
       <Point X="380.0" Y="320.0" ArrowHead="mim-catalysis" />
     </Graphics>
   </Interaction>
+
+  <OntologyTerm Term="insulin signaling pathway" ID="PW:0000143" Ontology="Pathway Ontology" />
+  <OntologyTerm Term="glucose homeostasis pathway" ID="PW:0000550" Ontology="Pathway Ontology" />
+  <Biopax>
+    <bp:PublicationXref xmlns:bp="http://www.biopax.org/release/biopax-level3.owl#"
+                        xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" rdf:id="ref1">
+      <bp:ID>17635937</bp:ID>
+      <bp:DB>PubMed</bp:DB>
+      <bp:TITLE>AKT/PKB signaling: navigating downstream</bp:TITLE>
+    </bp:PublicationXref>
+  </Biopax>
 </Pathway>

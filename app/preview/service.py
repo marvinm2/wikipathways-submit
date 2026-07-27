@@ -21,6 +21,7 @@ when both frames come from the same renderer.
 from __future__ import annotations
 
 import io
+import json
 import time
 import zipfile
 from collections.abc import Callable
@@ -28,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.github import GitHubClient, GitHubError
+from app.preview.metadata import parse_curation_metadata
 from app.preview.render import RenderError, render_gpml
 
 _SIDES = ("before", "after")
@@ -64,13 +66,21 @@ class PreviewService:
 
     # -- instant local render (issue #11, 1a) ---------------------------------------------
     def render_local(
-        self, pr_number: int, wpid: int, *, after_gpml: bytes, before_gpml: bytes | None = None
+        self,
+        pr_number: int,
+        wpid: int,
+        *,
+        after_gpml: bytes,
+        before_gpml: bytes | None = None,
+        submitter_note: str | None = None,
     ) -> PreviewState:
         """Render the before/after SVGs in-process at PR-creation time and cache them on disk.
 
         Best-effort: a side that can't be rendered is skipped, never raised — the preview must
         never sink the submission. Once written, ``status``/``svg_path`` serve these directly, so
-        the dashboard shows the diagram immediately instead of waiting on the CI artifact.
+        the dashboard shows the diagram immediately instead of waiting on the CI artifact. The
+        curation metadata parsed from the *after* GPML (data nodes, references, description,
+        ontology tags) plus the submitter's note is cached alongside for the dashboard panel.
         """
         out = self._cache_dir / str(pr_number)
         out.mkdir(parents=True, exist_ok=True)
@@ -84,6 +94,7 @@ class PreviewService:
                 continue
             (out / f"{side}.svg").write_bytes(svg)
             rendered[side] = True
+        self._write_metadata(out, after_gpml, submitter_note)
         state = PreviewState(
             "ready" if (rendered["before"] or rendered["after"]) else "failed",
             has_before=rendered["before"],
@@ -97,6 +108,28 @@ class PreviewService:
     def _local_side_exists(self, pr_number: int) -> bool:
         d = self._cache_dir / str(pr_number)
         return any((d / f"{s}.svg").is_file() for s in _SIDES)
+
+    # -- curation metadata sidecar (dashboard panel) --------------------------------------
+    @staticmethod
+    def _write_metadata(out: Path, after_gpml: bytes, submitter_note: str | None) -> None:
+        """Cache the parsed curation metadata + submitter note next to the SVGs (best-effort)."""
+        try:
+            data = parse_curation_metadata(after_gpml).as_dict()
+            data["submitter_note"] = (submitter_note or "").strip()
+            (out / "metadata.json").write_text(json.dumps(data), encoding="utf-8")
+        except (OSError, ValueError):
+            pass  # the panel is cosmetic; never fail the write path on it
+
+    def metadata(self, pr_number: int) -> dict | None:
+        """The cached curation metadata for a PR (data nodes, references, description, ontology
+        tags, submitter note), or None if it was never rendered locally."""
+        path = self._cache_dir / str(pr_number) / "metadata.json"
+        if not path.is_file():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
 
     # -- cheap status (queue render) -------------------------------------------------------
     def status(self, pr_number: int) -> str:

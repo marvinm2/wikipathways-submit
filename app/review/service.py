@@ -35,7 +35,8 @@ def render_mirror_comment(review: Review, repo: str) -> str:
     """
     lines = [
         MIRROR_MARKER,
-        f"### WikiPathways curation — WP{review.wpid}",
+        f"### 🤖 WikiPathways curation — WP{review.wpid}",
+        "_Automated message from the curation bot._",
         "",
         f"**Status:** `{review.status.value}` · **Submitter:** @{review.submitter} · "
         f"**Kind:** {review.kind}"

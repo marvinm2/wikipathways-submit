@@ -228,6 +228,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         after_gpml: bytes,
         github: GitHubClient,
         with_before: bool,
+        submitter_note: str | None = None,
     ) -> None:
         """Instantly render the before/after preview at PR-creation time (issue #11, 1a).
 
@@ -241,7 +242,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                     settings.content_repo, settings.default_branch, path
                 )
             request.app.state.preview.render_local(
-                pr_number, wpid, after_gpml=after_gpml, before_gpml=before_gpml
+                pr_number,
+                wpid,
+                after_gpml=after_gpml,
+                before_gpml=before_gpml,
+                submitter_note=submitter_note,
             )
         except Exception:  # noqa: BLE001 — preview is cosmetic; never fail the write path on it
             logging.getLogger("wpsubmit.preview").warning(
@@ -303,6 +308,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "wpid_str": f"WP{r.wpid}",
             "pr_url": pr_url,
             "preview": preview,
+            # Parsed curation metadata (data nodes, references, description, ontology tags,
+            # submitter note) cached at render time — a cheap disk read, None if not rendered.
+            "metadata": request.app.state.preview.metadata(r.pr_number),
         }
 
     @app.get("/", response_class=HTMLResponse)
@@ -458,6 +466,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             after_gpml=content,
             github=github,
             with_before=False,  # new pathway has no base version
+            submitter_note=description,
         )
         return SubmitResponse(
             wpid=result.wpid_str,
@@ -508,6 +517,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             after_gpml=content,
             github=github,
             with_before=True,  # render the current main version as the "before"
+            submitter_note=description,
         )
         return SubmitResponse(
             wpid=result.wpid_str,

@@ -100,6 +100,18 @@ def test_render_local_bad_gpml_fails_gracefully(tmp_path):
     assert state.status == "failed" and not state.has_after
 
 
+def test_render_local_caches_metadata_and_note(tmp_path):
+    svc = _svc(FakeGitHubClient(), tmp_path)
+    svc.render_local(
+        42, 554, after_gpml=_GPML.encode(), submitter_note="  please check the arrow  "
+    )
+    meta = svc.metadata(42)
+    assert meta is not None
+    assert [n["label"] for n in meta["data_nodes"]] == ["TP53", "MDM2"]
+    assert meta["submitter_note"] == "please check the arrow"  # trimmed
+    assert svc.metadata(999) is None  # nothing rendered for this PR
+
+
 def test_get_file_content_roundtrip():
     fake = FakeGitHubClient(existing_contents={"owner/repo#pathways/WP554/WP554.gpml": _GPML})
     got = fake.get_file_content("owner/repo", "main", "pathways/WP554/WP554.gpml")
