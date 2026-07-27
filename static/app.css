@@ -350,13 +350,16 @@ main { flex: 1; }
 }
 .hero__graphic {
   position: absolute;
-  top: -2rem; right: -4rem;
-  width: 30rem; height: 30rem;
+  top: 0; right: -1rem;
+  width: 26rem; height: 26rem;
   color: var(--moss);
-  opacity: 0.09;
+  opacity: 0.11;
   pointer-events: none;
 }
-@media (prefers-color-scheme: dark) { .hero__graphic { opacity: 0.14; } }
+/* The mark is recognisable, so it is never cropped: below the breakpoint it goes away rather
+   than bleeding off the edge as half a logo. */
+@media (prefers-color-scheme: dark) { .hero__graphic { opacity: 0.16; } }
+@media (max-width: 860px) { .hero__graphic { display: none; } }
 .hero__eyebrow {
   display: inline-flex;
   align-items: center;
