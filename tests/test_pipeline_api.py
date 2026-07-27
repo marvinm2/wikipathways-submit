@@ -16,6 +16,7 @@ from app.main import (
     get_github_client,
 )
 from app.models import Review
+from tests.test_api import _login
 
 REPO = "wikipathways/sandbox-wp-db"
 
@@ -125,3 +126,44 @@ def test_mirror_comment_names_the_placeholder(pipeline_client):
 
     comment = next(iter(fake.comments[(REPO, body["pr_number"])].values()))
     assert "WP0001 (unassigned)" in comment
+
+
+def test_a_failed_pipeline_run_is_reported_in_the_queue(pipeline_client):
+    # The submitter loses their metadata tables and draft page when the target repo cannot read
+    # the GPML, and the only other trace is a job buried in the Actions tab.
+    _submit(pipeline_client)
+    fake = pipeline_client.app.state._fake
+    fake.record_workflow_run(REPO, "1_on_pull_request.yml", conclusion="failure")
+
+    _login(pipeline_client, "marvinm2")
+    page = pipeline_client.get("/dashboard").text
+
+    assert "could not process this pathway" in page
+    assert "See the failing run" in page
+    # And it says the portal's own diagram still works, so a curator does not read the failure
+    # as "there is nothing to review".
+    assert "drawn by this portal and is unaffected" in page
+
+
+def test_a_successful_pipeline_run_shows_no_warning(pipeline_client):
+    _submit(pipeline_client)
+    fake = pipeline_client.app.state._fake
+    fake.record_workflow_run(REPO, "1_on_pull_request.yml", conclusion="success")
+
+    _login(pipeline_client, "marvinm2")
+    page = pipeline_client.get("/dashboard").text
+
+    assert "could not process this pathway" not in page
+
+
+def test_a_still_running_pipeline_shows_no_warning(pipeline_client):
+    # in_progress has conclusion None; treating that as a failure would cry wolf on every
+    # submission for the ten minutes the repository takes to process it.
+    _submit(pipeline_client)
+    fake = pipeline_client.app.state._fake
+    fake.record_workflow_run(REPO, "1_on_pull_request.yml", conclusion=None)
+
+    _login(pipeline_client, "marvinm2")
+    page = pipeline_client.get("/dashboard").text
+
+    assert "could not process this pathway" not in page

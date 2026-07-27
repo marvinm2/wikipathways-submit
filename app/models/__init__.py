@@ -118,6 +118,13 @@ class Review(Base):
     decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: Last-seen labels on the PR, refreshed by the reconcile pass and by label webhooks.
     github_labels: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    #: Last-seen state of the target repo's PR-processing workflow, as
+    #: ``{"status", "conclusion", "url"}``. Recorded during the (throttled) reconcile pass rather
+    #: than fetched per page load, so the queue can show that a submission failed upstream
+    #: without one API call per row. A failure here is the submitter's only signal that the
+    #: repository could not read their file: it costs them the metadata and the preview, and
+    #: nothing else says so.
+    pipeline_run: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

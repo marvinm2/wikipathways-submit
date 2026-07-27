@@ -990,3 +990,21 @@ main { flex: 1; }
   white-space: nowrap;
   border: 0;
 }
+
+/* Inline notices inside a review card. Used where something upstream of us went wrong and the
+   curator would otherwise have to go digging in the Actions tab to find out. */
+.notice {
+  margin: 0 0 1.1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  border-left: 3px solid transparent;
+}
+.notice strong { display: block; margin-bottom: 0.2rem; }
+.notice a { color: inherit; }
+.notice--warn {
+  background: var(--amber-tint);
+  color: var(--amber);
+  border-left-color: var(--amber);
+}

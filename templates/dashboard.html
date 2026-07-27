@@ -56,6 +56,17 @@
     Submitted by <strong>@{{ r.submitter }}</strong>{% if r.assigned_curator %} &middot; assigned to <strong>@{{ r.assigned_curator }}</strong>{% endif %}
   </p>
 
+  {# The repository ran its own processing and could not finish. In practice that means it could
+     not read the GPML, and the cost lands on the submitter: no identifier table, no reference
+     list, no draft page. Without this the only trace is a job several clicks into Actions. #}
+  {% if r.pipeline and r.pipeline.run_failed %}
+  <p class="notice notice--warn">
+    <strong>{{ repo }} could not process this pathway.</strong>
+    Its pipeline failed{% if r.pipeline.run_conclusion != 'failure' %} ({{ r.pipeline.run_conclusion }}){% endif %}, so the identifier and reference tables and the draft page were never generated. The most common cause is a GPML the repository's reader cannot parse. The diagram below is drawn by this portal and is unaffected.
+    {% if r.pipeline.run_url %}<a href="{{ r.pipeline.run_url }}" target="_blank" rel="noopener">See the failing run</a>.{% endif %}
+  </p>
+  {% endif %}
+
   <div class="preview">
     {% if r.kind == 'update' %}
       {{ preview_frame('Before', r.preview.before_svg_url if r.preview and r.preview.status == 'ready' else None, 'Pathway diagram before this change') }}

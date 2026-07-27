@@ -156,6 +156,7 @@ class CurationService:
         app_base_url: str = "",
         publish_mode: str = "direct",
         default_branch: str = "main",
+        pipeline_workflow_file: str = "",
         label_accepted: str = "accepted",
         label_rejected: str = "rejected",
         label_author_feedback: str = "author feedback required",
@@ -178,6 +179,7 @@ class CurationService:
         # keeps every existing target — wikipathways-database, a fork, the demo — unchanged.
         self._publish_mode = publish_mode
         self._default_branch = default_branch
+        self._pipeline_workflow_file = pipeline_workflow_file
         self._label_accepted = label_accepted
         self._label_rejected = label_rejected
         self._label_author_feedback = label_author_feedback
@@ -753,12 +755,34 @@ class CurationService:
             self._maybe_mirror(review)
             return review
 
+    def _pipeline_run_state(self, pr_number: int) -> dict | None:
+        """Last-seen state of the target repo's PR-processing workflow for this pull request.
+
+        Its failure is worth surfacing on its own: when that repo cannot read a submitted GPML
+        the run dies early, the submitter silently loses their metadata tables and their draft
+        page, and the only trace is a job several clicks into the Actions tab. Best-effort — this
+        is a diagnostic, and never a reason to fail a reconcile.
+        """
+        if not self.is_pipeline_mode or not self._pipeline_workflow_file:
+            return None
+        try:
+            run = self._github.latest_workflow_run_for_pr(
+                self._repo, pr_number, workflow_file=self._pipeline_workflow_file
+            )
+        except (GitHubError, httpx.HTTPError):
+            return None
+        if run is None:
+            return None
+        return {"status": run.status, "conclusion": run.conclusion, "url": run.html_url}
+
     def _reconcile_one(self, pr_number: int) -> bool:
         """Bring one review in line with GitHub. Returns True if its status changed."""
         try:
             detail = self._github.get_pull_request(self._repo, pr_number)
         except (GitHubError, httpx.HTTPError):
             return False  # transient — leave it; try again next load
+
+        pipeline_run = self._pipeline_run_state(pr_number) if detail is not None else None
 
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
@@ -768,6 +792,8 @@ class CurationService:
             review.last_checked_at = utcnow()
             if detail is not None:
                 review.github_labels = list(detail.labels)
+            if pipeline_run is not None:
+                review.pipeline_run = pipeline_run
             s.commit()
 
         if detail is None:

@@ -301,6 +301,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             app_base_url=settings.app_base_url,
             publish_mode=settings.publish_mode,
             default_branch=settings.default_branch,
+            pipeline_workflow_file=settings.pipeline_workflow_file,
             label_accepted=settings.label_accepted,
             label_rejected=settings.label_rejected,
             label_author_feedback=settings.label_author_feedback,
@@ -426,6 +427,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             return None
         slug = drafts.slug_for(kind=r.kind, wpid=r.wpid, pr_number=r.pr_number)
         artifacts = drafts.fetch(slug)
+        run = r.pipeline_run or {}
+        conclusion = run.get("conclusion")
         return {
             "slug": slug,
             "available": artifacts.available,
@@ -434,6 +437,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "thumb_url": artifacts.thumb_url,
             "datanode_count": len(artifacts.datanodes or []) or None,
             "reference_count": len(artifacts.bibliography or []) or None,
+            "run_status": run.get("status"),
+            "run_conclusion": conclusion,
+            "run_url": run.get("url"),
+            # The case worth naming: the repository ran and could not finish. Almost always it
+            # could not read the GPML, which costs the submitter their metadata and preview and
+            # is otherwise only visible several clicks into the Actions tab.
+            "run_failed": conclusion not in (None, "success"),
         }
 
     @app.get("/", response_class=HTMLResponse)
