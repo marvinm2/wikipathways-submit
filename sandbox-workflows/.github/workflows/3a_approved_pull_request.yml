@@ -1,0 +1,398 @@
+name: 3A. Approved Pull Request
+# Publishes an approved submission: the draft files produced by workflow 1 are renamed to
+# their final WPID and pushed to sandbox-wp-db, sandbox-wp.gh.io and sandbox-wp-assets.
+# This workflow never merges the PR; it pushes to main directly and closes the PR.
+#
+# This is a repaired copy of the file on main. The workflow has run exactly once, on
+# 2025-09-03 (run 17442557461, a hand dispatch off main), and failed after 19 seconds.
+# Its logs have expired and its steps array is empty, so the failing step cannot be
+# recovered. What survives is the job's annotations - two `set-output` deprecation
+# warnings and "Process completed with exit code 1" - and the fact that neither
+# sandbox-wp-db nor sandbox-wp.gh.io contains a publish commit, so the run pushed
+# nothing. Nothing has ever been published by this workflow. The changes below are read
+# from the YAML and marked "FIX:"; none of them is a diagnosis of that run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Pull Request Number'
+        required: true
+
+# FIX: the workflow had no permissions block, so it inherited the repository default.
+# Pushing to sandbox-wp-db, commenting, labelling and closing the PR are all it needs.
+# `pull-requests: write` covers PR comments and PR labels, so `issues: write` is not
+# required on top of it.
+permissions:
+  contents: write
+  pull-requests: write
+
+# Deliberately no `concurrency:` group. Serialising publication would stop two approvals
+# from reading the same max(WP*) out of _pathways/, but GitHub keeps at most one *pending*
+# run per group: a third approval cancels the pending one, and a cancelled run never
+# reaches the `if: failure()` step below, so that submission would disappear without a
+# comment or a label. A duplicate id surfaces loudly instead - the second run either finds
+# the target directory already there (the guard step) or ends up adding the same file path
+# as the first, so its rebase conflicts and its push fails with a comment on the PR.
+
+jobs:
+  process_approved_pr:
+    runs-on: ubuntu-latest
+
+    env:
+      PR_NUMBER: ${{ github.event.inputs.pr_number }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout sandbox-wp-db
+        id: checkout_db
+        uses: actions/checkout@v4
+        with:
+          repository: wikipathways/sandbox-wp-db
+          path: sandbox-wp-db
+          ref: main
+          # FIX: the push steps below run `git pull --rebase`, and a rebase on the default
+          # `fetch-depth: 1` clone cannot be relied on - the local history is one grafted
+          # commit. Workflow 1 pushes to sandbox-wp.gh.io on every processed pull request,
+          # so a sister repository moving under this run is not a rare case.
+          fetch-depth: 0
+
+      - name: Checkout sandbox-wp.gh.io
+        id: checkout_jekyll
+        uses: actions/checkout@v4
+        with:
+          repository: wikipathways/sandbox-wp.gh.io
+          path: sandbox-wp.gh.io
+          ref: main
+          fetch-depth: 0
+          # FIX: was `token: ${{ secrets.GITHUB_TOKEN }}`. That token can read this public
+          # repository, but it cannot push to a repository other than the one the workflow
+          # runs in. 3B already does the same checkout with the deploy key; match it.
+          ssh-key: ${{ secrets.ACTIONS_SANDBOX_DEPLOY_KEY }}
+
+      - name: Checkout sandbox-wp-assets
+        id: checkout_assets
+        # There is no deploy key for sandbox-wp-assets yet, so this expression is empty and
+        # actions/checkout falls back to the job's GITHUB_TOKEN. That reads the repository
+        # (it is public); it is the push below that cannot work. Both steps are
+        # continue-on-error because the assets are a second copy of files that also land in
+        # sandbox-wp-db - the SVG excepted - and a missing assets copy must not stop a
+        # pathway from being published. Once ACTIONS_SANDBOX_ASSETS_DEPLOY_KEY exists both
+        # steps start working with no further edit.
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: wikipathways/sandbox-wp-assets
+          path: sandbox-wp-assets
+          ref: main
+          fetch-depth: 0
+          ssh-key: ${{ secrets.ACTIONS_SANDBOX_ASSETS_DEPLOY_KEY }}
+
+      - name: Get WPID
+        id: get_wpid
+        working-directory: sandbox-wp.gh.io
+        run: |
+          set -euo pipefail
+          # `-print -quit` rather than `| head -n 1`: head closes the pipe after the first
+          # line, and with `pipefail` set the SIGPIPE that kills find would fail the step.
+          DRAFT_FILE=$(find _drafts -type f -name "WP*__PR${PR_NUMBER}.md" -print -quit)
+
+          if [ -z "$DRAFT_FILE" ]; then
+            echo "No draft file found for PR #${PR_NUMBER}"
+            exit 1
+          fi
+
+          # FIX: the sed ran over the full path, so "_drafts/WP0__PR54.md" reduced to
+          # "_drafts/0". The numeric test below then prints "integer expression expected",
+          # but a failing test in an `if` condition does not stop the script: control falls
+          # to the else branch, where $(( )) reads an unset name as 0 and an edit publishes
+          # as WP0. Match on the basename, and refuse anything that is not a number rather
+          # than let it become one.
+          DRAFT_BASE=$(basename "$DRAFT_FILE")
+          WPID_NUM=$(echo "$DRAFT_BASE" | sed -E 's/^WP([0-9]+)__PR.*/\1/')
+          case "$WPID_NUM" in
+            ''|*[!0-9]*)
+              echo "Could not read a WPID out of ${DRAFT_BASE}."
+              exit 1
+              ;;
+          esac
+
+          if [ "$WPID_NUM" -eq 0 ]; then
+            IS_NEW=true
+            # New pathway: take the highest published id and add one. `|| true` because
+            # grep exits 1 when _pathways/ holds nothing matching, which pipefail would
+            # otherwise turn into an unexplained step failure.
+            HIGHEST=$(ls _pathways/ | grep -E '^WP[0-9]+\.md$' | sort -V | tail -n 1 || true)
+            if [ -z "$HIGHEST" ]; then
+              echo "No published pathway in _pathways/, so the next id cannot be derived."
+              exit 1
+            fi
+            WPID_NEW=$(echo "$HIGHEST" | sed -E 's/^WP([0-9]+)\.md$/\1/')
+            WPID_NEW=$((WPID_NEW + 1))
+          else
+            # Edit of an existing pathway: keep the id it came in with.
+            IS_NEW=false
+            WPID_NEW=$((WPID_NUM))
+          fi
+
+          # FIX: `::set-output` is deprecated. On the 2025-09-03 run it still worked and
+          # produced two warnings, but GitHub has said it will be disabled, so it is
+          # replaced by $GITHUB_OUTPUT rather than left to stop working later.
+          {
+            echo "wpid=WP${WPID_NEW}"
+            echo "wpid_num=${WPID_NEW}"
+            echo "is_new=${IS_NEW}"
+            echo "old_prefix=WP${WPID_NUM}__PR${PR_NUMBER}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check target does not already exist
+        id: guard
+        # A new pathway must never be published over an existing one: if two approvals ever
+        # allocate the same id, the second would silently overwrite the first. For an edit
+        # the directory is expected to exist, so the refusal only applies to new ids.
+        env:
+          WPID: ${{ steps.get_wpid.outputs.wpid }}
+          IS_NEW: ${{ steps.get_wpid.outputs.is_new }}
+        run: |
+          set -euo pipefail
+          TARGET="sandbox-wp-db/pathways/${WPID}"
+          if [ "$IS_NEW" = "true" ] && [ -d "$TARGET" ]; then
+            echo "Refusing to publish: ${TARGET} already exists on main."
+            exit 1
+          fi
+          if [ "$IS_NEW" != "true" ] && [ ! -d "$TARGET" ]; then
+            echo "Warning: ${TARGET} does not exist yet, publishing this edit as a new directory."
+          fi
+
+      - name: Rename and Move Files
+        id: move_files
+        working-directory: sandbox-wp.gh.io
+        env:
+          OLD_PREFIX: ${{ steps.get_wpid.outputs.old_prefix }}
+          WPID: ${{ steps.get_wpid.outputs.wpid }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "../sandbox-wp-db/pathways/${WPID}"
+
+          # Each loop reads from a process substitution rather than `find ... | while`.
+          # _data/drafts and draft_assets are not guaranteed to be there, and a find that
+          # exits 1 at the head of a pipeline would abort this step under `pipefail` - the
+          # original ran without `set -e` and tolerated a missing directory.
+          MD_COUNT=0
+          while IFS= read -r file; do
+            new_file=$(basename "$file" | sed "s/${OLD_PREFIX}/${WPID}/")
+            cp "$file" "../sandbox-wp-db/pathways/${WPID}/${new_file}"
+            mv "$file" "_pathways/${new_file}"
+            MD_COUNT=$((MD_COUNT + 1))
+          done < <(find _drafts -type f -name "${OLD_PREFIX}.md")
+
+          # The page is what makes the pathway; counting it is the only check here that
+          # means anything for an edit, because the target directory already holds the
+          # previous publication and testing it for emptiness would pass either way.
+          if [ "$MD_COUNT" -eq 0 ]; then
+            echo "No draft page matched ${OLD_PREFIX}.md, so there is nothing to publish."
+            exit 1
+          fi
+
+          # Process .tsv files
+          if [ -d _data/drafts ]; then
+            while IFS= read -r file; do
+              new_file=$(basename "$file" | sed "s/${OLD_PREFIX}/${WPID}/")
+              mv "$file" "_data/${new_file}"
+            done < <(find _data/drafts -type f -name "${OLD_PREFIX}*.tsv")
+          fi
+
+          # Process files in draft_assets
+          if [ -d draft_assets ]; then
+            while IFS= read -r file; do
+              new_file=$(basename "$file" | sed "s/${OLD_PREFIX}/${WPID}/")
+              # Skip SVG files
+              if [[ $file != *.svg ]]; then
+                cp "$file" "../sandbox-wp-db/pathways/${WPID}/${new_file}"
+              fi
+              mkdir -p "../sandbox-wp-assets/pathways/${WPID}"
+              mv "$file" "../sandbox-wp-assets/pathways/${WPID}/${new_file}"
+            done < <(find draft_assets -type f -name "${OLD_PREFIX}*")
+          fi
+
+      - name: Commit and push changes to sandbox-wp.gh.io
+        id: push_jekyll
+        working-directory: sandbox-wp.gh.io
+        env:
+          WPID: ${{ steps.get_wpid.outputs.wpid }}
+        run: |
+          set -euo pipefail
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          # FIX: the commit message said "WP${{ ...wpid }}" but the output already carries
+          # the WP prefix, producing "WPWP1234". The `|| echo` matches 3B: a bare
+          # `git commit` exits 1 when there is nothing staged.
+          git commit -m "Publish approved pathway ${WPID}" || echo "No changes to commit"
+          # FIX: no rebase before pushing. Workflow 1 pushes drafts to this repository on
+          # every processed pull request, so a concurrent commit is ordinary and would make
+          # this push non-fast-forward. 3B already rebases.
+          git pull --rebase
+          git push
+
+      - name: Commit and push changes to sandbox-wp-db
+        id: push_db
+        working-directory: sandbox-wp-db
+        env:
+          WPID: ${{ steps.get_wpid.outputs.wpid }}
+        run: |
+          set -euo pipefail
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          git commit -m "Add files for approved pathway ${WPID}" || echo "No changes to commit"
+          git pull --rebase
+          git push
+
+      - name: Commit and push changes to sandbox-wp-assets
+        id: push_assets
+        # `success() &&` has to be spelled out: a custom `if:` replaces the implicit success
+        # guard, so without it this step would still run after a failed publish and push
+        # assets for a pathway that never landed anywhere else.
+        if: success() && steps.checkout_assets.outcome == 'success'
+        continue-on-error: true
+        working-directory: sandbox-wp-assets
+        env:
+          WPID: ${{ steps.get_wpid.outputs.wpid }}
+        run: |
+          set -euo pipefail
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          git commit -m "Add assets for approved pathway ${WPID}" || echo "No changes to commit"
+          git pull --rebase
+          git push
+
+      - name: Announce publication on the PR
+        id: announce
+        # The WPID is announced in a comment, not only in the PR description: workflow 1
+        # overwrites the description with `gh pr edit --body` on every run, so anything
+        # written there is lost the next time the submitter pushes. Comments survive.
+        # The HTML marker is a machine-readable contract for the submission app, which
+        # reads it back to learn the assigned id.
+        env:
+          WPID: ${{ steps.get_wpid.outputs.wpid }}
+          WPID_NUM: ${{ steps.get_wpid.outputs.wpid_num }}
+        run: |
+          set -euo pipefail
+          {
+            printf '<!-- wikipathways-publish {"pr":%s,"wpid":%s,"status":"published"} -->\n' \
+              "$PR_NUMBER" "$WPID_NUM"
+            printf 'Published as [%s](https://sandbox.wikipathways.org/pathways/%s).\n' \
+              "$WPID" "$WPID"
+          } > publish-comment.md
+          gh pr comment "$PR_NUMBER" --body-file publish-comment.md --repo "$GITHUB_REPOSITORY"
+
+      - name: Label as published
+        # Labels make the outcome visible in the PR list without opening anything.
+        # Adding a label with GITHUB_TOKEN does not start another workflow run, so this
+        # cannot loop back through pr_label_dispatcher.
+        continue-on-error: true
+        run: |
+          gh pr edit "$PR_NUMBER" --add-label "published" --repo "$GITHUB_REPOSITORY"
+
+      - name: Append Message to PR Description
+        # FIX: this step used `gh pr edit --add-body`, which is not a flag - `gh pr edit`
+        # has `--body` and `--body-file` and no append. The step would have exited 1 and
+        # taken `Close PR` with it. Whether it ever ran is unknown; the one run of this
+        # workflow ended before the three pushes, which come first.
+        #
+        # The body is cosmetic (workflow 1 rewrites it anyway) and the comment above is the
+        # real record, so a failure here must never block closing the PR.
+        continue-on-error: true
+        env:
+          WPID: ${{ steps.get_wpid.outputs.wpid }}
+        run: |
+          set -euo pipefail
+          CURRENT_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body --repo "$GITHUB_REPOSITORY")
+          NEW_DESCRIPTION="This PR has been approved and the pathway is being published"
+          NEW_DESCRIPTION="${NEW_DESCRIPTION} at WikiPathways. The new WPID is ${WPID}."
+          # printf rather than a multi-line literal so the blank line separating the two
+          # halves does not pick up this file's indentation.
+          gh pr edit "$PR_NUMBER" \
+            --body "$(printf '%s\n\n%s\n' "$CURRENT_BODY" "$NEW_DESCRIPTION")" \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Close PR
+        id: close_pr
+        # Publication happens by pushing to main, not by merging, so the PR is closed
+        # rather than merged.
+        run: |
+          gh pr close "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
+
+      - name: Report publish failure
+        # Counterpart of the success marker: a failed publish must be visible on the PR
+        # instead of only in the Actions log, which submitters and most curators never
+        # look at. What the comment can promise depends on how far the run got, so it says
+        # what actually happened rather than a fixed sentence about retrying.
+        if: failure()
+        env:
+          OUT_CHECKOUT_DB: ${{ steps.checkout_db.outcome }}
+          OUT_CHECKOUT_JEKYLL: ${{ steps.checkout_jekyll.outcome }}
+          OUT_WPID: ${{ steps.get_wpid.outcome }}
+          OUT_GUARD: ${{ steps.guard.outcome }}
+          OUT_MOVE: ${{ steps.move_files.outcome }}
+          OUT_PUSH_JEKYLL: ${{ steps.push_jekyll.outcome }}
+          OUT_PUSH_DB: ${{ steps.push_db.outcome }}
+          OUT_ANNOUNCE: ${{ steps.announce.outcome }}
+          OUT_CLOSE: ${{ steps.close_pr.outcome }}
+        run: |
+          set -euo pipefail
+          # Assign from last step to first so the earliest failure is the one reported.
+          FAILED_STEP="unknown"
+          if [ "$OUT_CLOSE" = "failure" ]; then FAILED_STEP="close-pr"; fi
+          if [ "$OUT_ANNOUNCE" = "failure" ]; then FAILED_STEP="announce-publication"; fi
+          if [ "$OUT_PUSH_DB" = "failure" ]; then FAILED_STEP="push-sandbox-wp-db"; fi
+          if [ "$OUT_PUSH_JEKYLL" = "failure" ]; then FAILED_STEP="push-sandbox-wp-gh-io"; fi
+          if [ "$OUT_MOVE" = "failure" ]; then FAILED_STEP="rename-and-move-files"; fi
+          if [ "$OUT_GUARD" = "failure" ]; then FAILED_STEP="target-already-exists"; fi
+          if [ "$OUT_WPID" = "failure" ]; then FAILED_STEP="get-wpid"; fi
+          if [ "$OUT_CHECKOUT_JEKYLL" = "failure" ]; then
+            FAILED_STEP="checkout-sandbox-wp-gh-io"
+          fi
+          if [ "$OUT_CHECKOUT_DB" = "failure" ]; then FAILED_STEP="checkout-sandbox-wp-db"; fi
+
+          # The draft files are moved, not copied, and the website repository is pushed
+          # first, so "nothing has changed yet" is only true up to that push.
+          CLEAN=false
+          if [ "$OUT_PUSH_JEKYLL" = "success" ] && [ "$OUT_PUSH_DB" = "success" ]; then
+            STATE="Both repositories were pushed before this failure, so the pathway is"
+            STATE="${STATE} published; only the steps after the pushes did not finish."
+            RETRY="Nothing needs to be re-run. The PR may still be open and can be"
+            RETRY="${RETRY} closed by hand."
+          elif [ "$OUT_PUSH_JEKYLL" = "success" ]; then
+            STATE="The website repository was already pushed: the draft files have been"
+            STATE="${STATE} moved out of _drafts into the published folders, and"
+            STATE="${STATE} sandbox-wp-db did not receive them."
+            RETRY="Re-running will stop at Get WPID because the draft is no longer in"
+            RETRY="${RETRY} _drafts, so the two repositories have to be brought back in"
+            RETRY="${RETRY} line by hand."
+          else
+            STATE="Nothing was pushed to any repository."
+            RETRY="The accepted label has been removed; applying it again starts a fresh run."
+            CLEAN=true
+          fi
+
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            printf '<!-- wikipathways-publish {"pr":%s,"status":"failed","step":"%s"} -->\n' \
+              "$PR_NUMBER" "$FAILED_STEP"
+            printf 'Publication failed at `%s`. %s %s Details: %s\n' \
+              "$FAILED_STEP" "$STATE" "$RETRY" "$RUN_URL"
+          } > publish-failure-comment.md
+          gh pr comment "$PR_NUMBER" --body-file publish-failure-comment.md \
+            --repo "$GITHUB_REPOSITORY"
+          gh pr edit "$PR_NUMBER" --add-label "publish failed" --repo "$GITHUB_REPOSITORY" || true
+          # The dispatcher listens for `labeled`, and re-applying a label the PR already
+          # carries emits no such event, so leaving `accepted` in place would make
+          # re-approval do nothing. Removing it is the retry route - offered only where a
+          # retry can actually work.
+          if [ "$CLEAN" = "true" ]; then
+            gh pr edit "$PR_NUMBER" --remove-label "accepted" --repo "$GITHUB_REPOSITORY" || true
+          fi

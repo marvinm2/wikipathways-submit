@@ -1,0 +1,75 @@
+name: PR Label Dispatcher
+# Turns a label on a pull request into a workflow run: `accepted` publishes the
+# submission, `rejected` discards it, `resubmitted` reprocesses it. This is the only way
+# 3A and 3B are ever started in normal use.
+
+on:
+  # FIX: was `pull_request`. Most submissions here come from a fork, and for a
+  # `pull_request` event on a fork GitHub caps GITHUB_TOKEN at read - a `permissions:`
+  # block cannot raise it - so `gh workflow run` gets HTTP 403 and the label does nothing.
+  # That is what run 26719401516 (2026-05-31, `accepted` on PR #45, head mkutmon/…) shows:
+  # every scope listed as read, then "403: Resource not accessible by integration". The
+  # two runs that succeeded, 16786503153 and 17838390305, both came from branches in
+  # wikipathways/sandbox-wp-db itself. `pull_request_target` runs in the base repository's
+  # context with its own token, which is what workflow 1 already relies on.
+  #
+  # `pull_request_target` is only safe because this job checks nothing out and runs no code
+  # from the pull request: it reads two fields off the event and calls the API. Do not add
+  # a checkout step here.
+  pull_request_target:
+    types: [labeled]
+
+# The base-context token is not capped, so the scopes it gets are the repository default.
+# Declaring them keeps this workflow working if that default is ever narrowed, and keeps
+# the token to what dispatching actually needs.
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch based on label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # FIX: the label name and PR number were spliced into the script with ${{ }},
+          # which pastes repository text into the shell before bash parses it. A label is
+          # repository-controlled, so this is hardening rather than a live hole, but the
+          # values cost nothing to pass through the environment, where bash sees them as
+          # data and never as syntax.
+          LABEL: ${{ github.event.label.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          case "$LABEL" in
+            "accepted")
+              workflow="3a_approved_pull_request.yml"
+              input="pr_number"
+              ;;
+            "rejected")
+              workflow="3b_rejected_pull_request.yml"
+              input="pr_number"
+              ;;
+            "resubmitted")
+              # FIX: this case passed `-f pr_number=`, but workflow 1's dispatch input is
+              # named `manual-pr-number`, so GitHub rejected the call as an unexpected
+              # input. The name is corrected rather than the case dropped: workflow 1
+              # triggers on `pull_request_target` filtered to `**/*.gpml`, so a push that
+              # does not touch a GPML never reprocesses a submission, and this label is
+              # the only way to ask for it by hand.
+              workflow="1_on_pull_request.yml"
+              input="manual-pr-number"
+              ;;
+            *)
+              echo "Label '$LABEL' does not trigger any workflow."
+              exit 0
+              ;;
+          esac
+
+          echo "Triggering workflow: $workflow"
+          # No --ref: the dispatched workflow is the copy on the default branch, which is
+          # what should run in production.
+          gh workflow run "$workflow" -R "$REPO" -f "${input}=${PR_NUMBER}"
