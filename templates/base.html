@@ -40,7 +40,9 @@
     </main>
 
     <footer class="site-footer">
-      <p>A portal for uploading, updating, and reviewing pathways. Opens pull requests on <a href="https://github.com/wikipathways/wikipathways-database">wikipathways/wikipathways-database</a>.</p>
+      {# The target repo is configurable, so naming a fixed one here would eventually lie —
+         it already did, once the portal was pointed at the sandbox. #}
+      <p>A portal for uploading, updating, and reviewing pathways. Opens pull requests on <a href="https://github.com/{{ repo }}">{{ repo }}</a>.</p>
     </footer>
   </div>
 

@@ -123,3 +123,19 @@ def test_upsert_issue_comment_surfaces_api_error():
     client = HttpGitHubClient("tok", transport=httpx.MockTransport(handler))
     with pytest.raises(GitHubError):
         client.upsert_issue_comment("o/r", 1, "body", marker="m")
+
+
+def test_an_unreadable_private_key_disables_the_bot_instead_of_crashing(tmp_path):
+    # A deployment that sets the key path before the secret exists must degrade to "no bot"
+    # (503 on the routes that need it), not crash-loop on startup with the site already live.
+    from app.config import Settings
+    from app.main import _make_bot_app
+
+    settings = Settings(
+        _env_file=None,
+        github_app_id="4403728",
+        github_app_installation_id="149294202",
+        github_app_private_key_path=str(tmp_path / "definitely-not-there.pem"),
+    )
+
+    assert _make_bot_app(settings) is None

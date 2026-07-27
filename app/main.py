@@ -180,7 +180,19 @@ def _make_bot_app(settings: Settings) -> GitHubApp | None:
         return None
     key = settings.github_app_private_key
     if not key and settings.github_app_private_key_path:
-        key = Path(settings.github_app_private_key_path).read_text()
+        # A configured-but-unreadable key must not take the whole service down. Everywhere else
+        # an absent bot identity degrades to 503 on the routes that need it, and a deployment
+        # that sets the path before creating the secret should behave the same way rather than
+        # crash-looping on startup with the site already live.
+        try:
+            key = Path(settings.github_app_private_key_path).read_text()
+        except OSError:
+            logging.getLogger("wpsubmit.auth").error(
+                "GitHub App private key is not readable at %s; the bot identity is disabled "
+                "and the routes that need it will return 503",
+                settings.github_app_private_key_path,
+            )
+            return None
     if not key:
         return None
     return GitHubApp(
@@ -360,6 +372,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "request": request,
             "login": login,
             "is_curator": request.app.state.curators.is_curator(login),
+            # Every page's footer names the target repo, so it belongs in the shared context
+            # rather than in each route that happens to remember to pass it.
+            "repo": settings.content_repo,
         }
 
     def _review_view(request: Request, r) -> dict:
