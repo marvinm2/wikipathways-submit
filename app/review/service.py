@@ -22,6 +22,15 @@ from app.wpid import WpidAllocator
 #: Hidden token embedded in the mirror comment so we update the same one instead of spamming.
 MIRROR_MARKER = "<!-- wikipathways-submit:mirror -->"
 
+#: Review states and checklist states, in words rather than the stored enum values.
+_PLAIN_STATUS = {
+    "open": "waiting on review",
+    "changes_requested": "waiting on the submitter to make changes",
+    "merged": "merged",
+    "closed": "closed without merging",
+}
+_PLAIN_STATE = {"pass": "ok", "fail": "not ok", "pending": "not checked yet", "na": "not relevant"}
+
 #: How many times to re-read-and-retry a checklist write that lost the optimistic-version race
 #: (issue #15). Ample: contention is between a handful of curators on one review, not a hot loop.
 _CHECKLIST_WRITE_RETRIES = 10
@@ -36,35 +45,36 @@ def render_mirror_comment(review: Review, repo: str, *, base_url: str = "") -> s
     ``base_url`` is the app's public URL. When set, the comment links to the review page — the
     only place the before/after render exists, since CI publishes tables and pvjson but no image.
     """
+    kind = "new pathway" if review.kind == "new" else "edit"
+    where = _PLAIN_STATUS.get(review.status.value, review.status.value)
+    assigned = (
+        f" @{review.assigned_curator} is reviewing it." if review.assigned_curator else ""
+    )
     lines = [
         MIRROR_MARKER,
-        f"### 🤖 WikiPathways curation — WP{review.wpid}",
-        "_Automated message from the curation bot._",
+        f"### Curation status for WP{review.wpid}",
         "",
-        f"**Status:** `{review.status.value}` · **Submitter:** @{review.submitter} · "
-        f"**Kind:** {review.kind}"
-        + (f" · **Assigned:** @{review.assigned_curator}" if review.assigned_curator else ""),
+        f"Written by the curation bot. A {kind} from @{review.submitter}, {where}.{assigned}",
         "",
-        "| Check | State |",
-        "|---|---|",
+        "| Check | State | Notes |",
+        "|---|---|---|",
     ]
     for item in review.checklist:
-        req = " *(required)*" if item.get("required") else ""
-        note = f" — {item['note']}" if item.get("note") else ""
-        lines.append(f"| {item['label']}{req}{note} | `{item.get('state', 'pending')}` |")
+        req = " (required)" if item.get("required") else ""
+        state = _PLAIN_STATE.get(item.get("state", "pending"), item.get("state", "pending"))
+        lines.append(f"| {item['label']}{req} | {state} | {item.get('note') or ''} |")
     if review.approved_by:
-        lines += ["", f"**Approved & merged by** @{review.approved_by}."]
+        lines += ["", f"Approved and merged by @{review.approved_by}."]
     if base_url:
         lines += [
             "",
-            f"**Before/after render:** {base_url.rstrip('/')}/dashboard/{review.pr_number} — "
-            "the pathway is drawn in the app; this PR carries only the validation tables.",
+            f"The pathway is drawn at {base_url.rstrip('/')}/dashboard/"
+            f"{review.pr_number}. This pull request holds the GPML.",
         ]
     lines += [
         "",
-        "> This comment is **read-only** and auto-generated. Review and approve in the "
-        "curation dashboard — approval flows through the app so this comment and the dashboard "
-        "cannot disagree.",
+        "Edits here are overwritten. The comment is generated from the curation dashboard, "
+        "which is where reviewing and approving actually happen.",
     ]
     return "\n".join(lines)
 
@@ -250,10 +260,13 @@ class CurationService:
             review.status = ReviewStatus.CHANGES_REQUESTED
             s.commit()
             if self._github is not None:
-                body = f"**Changes requested** by @{curator}."
+                body = f"@{curator} asked for changes before this can be merged."
                 if note.strip():
                     body += f"\n\n{note.strip()}"
-                body += "\n\nRe-upload to revise — it reuses this PR and re-opens the review."
+                body += (
+                    "\n\nUpload the fixed GPML again in the curation portal. It lands on this "
+                    "same pull request and puts the review back in the queue."
+                )
                 try:
                     self._github.create_issue_comment(self._repo, pr_number, body)
                 except (GitHubError, httpx.HTTPError):
@@ -329,8 +342,8 @@ class CurationService:
             )
             if status != "ready":
                 raise PreviewNotReady(
-                    f"PR #{pr_number}: PR-preview check is '{status}', not 'ready' — the render "
-                    f"and validation must pass before this can be merged"
+                    f"the PR-preview check on #{pr_number} is '{status}', not 'ready'. "
+                    f"Validation has to pass before this can merge."
                 )
 
         # Merge first; only mutate our state if GitHub accepts the merge.

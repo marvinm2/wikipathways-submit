@@ -149,11 +149,11 @@
           wpidInput.dataset.state = info.state;
           if (info.state === 'on_main') {
             wpidStatus.className = 'wpid-status wpid-status--ok';
-            wpidStatus.textContent = info.wpid + (info.name ? ' — ' + info.name : '') + ' found. Submitting opens an update.';
+            wpidStatus.textContent = 'Found ' + info.wpid + (info.name ? ': ' + info.name : '') + '. Uploading opens an update.';
             document.getElementById('update-btn').textContent = 'Submit update';
           } else if (info.state === 'pending_new') {
             wpidStatus.className = 'wpid-status wpid-status--pending';
-            wpidStatus.textContent = info.wpid + ' is a pending new submission (PR #' + info.pr_number + '). Submitting revises it.';
+            wpidStatus.textContent = info.wpid + ' is still an open submission (pull request #' + info.pr_number + '). Uploading revises it.';
             document.getElementById('update-btn').textContent = 'Submit revision';
           } else {
             wpidStatus.className = 'wpid-status wpid-status--err';
@@ -179,14 +179,14 @@
       var detail = updateDesc ? (updateDesc.value || '').trim() : '';
       var otherBox = document.getElementById('update-change-other');
       if (otherBox && otherBox.checked && !detail) {
-        toast('You ticked "Other" — please describe the change in Details.', 'error'); return;
+        toast('You ticked Other, so say what changed in Details.', 'error'); return;
       }
       var changes = [];
       document.querySelectorAll('.update-change:checked').forEach(function (cb) {
         changes.push(cb.getAttribute('data-label'));
       });
       var parts = [];
-      if (changes.length) { parts.push('Changed: ' + changes.join('; ') + '.'); }
+      if (changes.length) { parts.push(changes.join('; ') + '.'); }
       if (detail) { parts.push(detail); }
       var description = parts.join('\n');
       var btn = document.getElementById('update-btn');
@@ -217,7 +217,7 @@
           }
           if (info.state === 'absent') {
             reset();
-            toast(info.wpid + ' does not exist yet — use the "New pathway" tab.', 'error');
+            toast(info.wpid + ' does not exist yet. Use the "New pathway" tab.', 'error');
             return null;
           }
           var verb = info.state === 'pending_new' ? 'revise' : 'update';

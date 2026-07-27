@@ -55,8 +55,8 @@ def test_update_happy_path(locks, session_factory):
     assert meta["title"] == "Update WP5636"
     assert meta["base"] == "main"
     assert meta["head"] == "update/WP5636"
-    assert "**WPID:** WP5636" in meta["body"]
-    assert "**Submitter:** @alice" in meta["body"]
+    assert "@alice edited WP5636" in meta["body"]
+    assert "curation portal" in meta["body"]
     assert "What changed" not in meta["body"]  # no note supplied
 
     # Lock is held for the duration of the PR, with the PR number attached.
@@ -76,7 +76,7 @@ def test_update_description_flows_into_pr_body(locks):
     )
 
     body = gh.pull_meta[1]["body"]
-    assert "**What changed**" in body
+    assert "What changed:" in body
     assert "Fixed the arrow direction" in body
 
 

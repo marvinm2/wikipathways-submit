@@ -96,7 +96,7 @@ jobs:
             echo "<!-- wikipathways-pr-preview -->"
             echo "## WikiPathways PR preview"
             echo
-            echo "No GPML changes to check in this PR."
+            echo "No GPML files changed in this pull request."
           } > preview/comment.md
 
       - name: Setup Java
@@ -270,7 +270,7 @@ jobs:
           header="<!-- wikipathways-pr-preview -->
           ## WikiPathways PR preview
 
-          Validation and metadata for the changed pathway(s). The **pr-preview** artifact on this run holds the tables (\`-datanodes.tsv\`, \`-refs.tsv\`, \`-bibliography.tsv\`, \`-info.json\`) and the pvjson.
+          Checks on the pathways this pull request changes. The pr-preview artifact on this run holds the generated tables (\`-datanodes.tsv\`, \`-refs.tsv\`, \`-bibliography.tsv\`, \`-info.json\`) and the pvjson.
 
           "
           printf '%s\n%s' "$header" "$full" > preview/comment.md
@@ -278,7 +278,7 @@ jobs:
           # GitHub rejects comment bodies over 65536 chars — fall back to the compact
           # roll-up on big batch PRs so the comment still posts.
           if [ "$(wc -c < preview/comment.md)" -gt 60000 ]; then
-            printf '%s\n%s\n_Per-pathway tables omitted (large PR) — see the **pr-preview** artifact._\n' \
+            printf '%s\n%s\n_Per-pathway tables left out because this pull request is large. They are in the pr-preview artifact._\n' \
               "$header" "$rollup" > preview/comment.md
           fi
 

@@ -161,7 +161,7 @@ def test_request_changes_sets_status_and_posts_comment(session_factory):
     assert review.status == ReviewStatus.CHANGES_REQUESTED
     comments = gh.issue_comments[(REPO, 1)]
     assert len(comments) == 1
-    assert "Changes requested" in comments[0]
+    assert "asked for changes" in comments[0]
     assert "@curator" in comments[0]
     assert "Annotate the AKT1 node." in comments[0]
 
@@ -330,15 +330,15 @@ def test_mirror_comment_written_when_bot_present(session_factory):
     svc = _service(session_factory, github=gh)
     svc.register(pr_number=3, wpid=5639, submitter="bob", kind="new")
     body = gh.comments[(REPO, 3)]["<!-- wikipathways-submit:mirror -->"]
-    assert "WP5639" in body and "read-only" in body
+    assert "WP5639" in body and "generated from the curation dashboard" in body
     assert body.startswith("<!-- wikipathways-submit:mirror -->")
-    # Marked as a bot message (robot marker + automated line), so GitHub-native reviewers know
-    # it is not a human curator's comment.
-    assert "### 🤖 WikiPathways curation — WP5639" in body
-    assert "Automated message from the curation bot" in body
-    # House style: no decorative emoji beyond the bot marker.
-    for emoji in ("🧬", "✅", "❌", "➖", "⬜"):
+    # Says plainly that a bot wrote it, so GitHub-native reviewers know it is not a curator.
+    assert "### Curation status for WP5639" in body
+    assert "Written by the curation bot" in body
+    # House style: no decorative emoji at all, and no AI-writing tells.
+    for emoji in ("🤖", "🧬", "✅", "❌", "➖", "⬜"):
         assert emoji not in body
+    assert "—" not in body
 
 
 def test_mirror_comment_links_to_the_render_when_a_public_url_is_set(session_factory):

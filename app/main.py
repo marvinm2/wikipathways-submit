@@ -94,7 +94,7 @@ def get_github_client(request: Request) -> GitHubClient:
         # Key rotated / tampered cookie: force a fresh login rather than 500.
         request.session.clear()
         raise HTTPException(
-            status_code=401, detail="session expired — please log in again"
+            status_code=401, detail="your session expired, log in again"
         ) from exc
     return HttpGitHubClient(token)
 

@@ -193,17 +193,13 @@ def _pr_body(
     description: str | None = None,
 ) -> str:
     body = (
-        f"Automated submission via wikipathways-submit.\n\n"
-        f"- **Pathway:** {name or '(unnamed)'}\n"
-        f"- **WPID:** {wpid_str} (assigned by the app)\n"
-        f"- **Organism:** {organism or '(unset)'}\n"
-        f"- **Submitter:** @{submitter}\n"
+        f"@{submitter} submitted this pathway through the WikiPathways curation portal.\n\n"
+        f"- Pathway: {name or '(unnamed)'}\n"
+        f"- WPID: {wpid_str}, assigned by the app\n"
+        f"- Organism: {organism or '(unset)'}\n"
     )
     note = (description or "").strip()
     if note:
-        body += f"\n**Submitter note**\n\n{note}\n"
-    body += (
-        "\nThe PR-preview workflow will post a validation and metadata summary here. "
-        "The pathway itself is drawn in the curation dashboard, not in this pull request."
-    )
+        body += f"\nNote from the submitter:\n\n{note}\n"
+    body += "\nThe drawn pathway is in the curation dashboard; this pull request holds the GPML."
     return body

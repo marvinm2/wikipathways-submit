@@ -57,7 +57,7 @@ class Report:
 
     def to_markdown(self) -> str:
         lines = [
-            f"### Pathway validation — `{self.wpid}`",
+            f"### Pathway validation for `{self.wpid}`",
             "",
             f"**Overall: {self.status.upper()}**",
             "",
@@ -69,8 +69,8 @@ class Report:
             lines.append(f"| {severity.upper()} | {name} | {detail} |")
         lines.append("")
         lines.append(
-            "_This is an automated preview, not a merge gate. A curator makes the "
-            "final call._"
+            "These checks are automated and do not block anything. A curator makes the "
+            "call."
         )
         return "\n".join(lines)
 
@@ -106,8 +106,8 @@ def check_gpml(report: Report, gpml_path: Path) -> None:
         report.add(
             WARN,
             "Empty citation IDs",
-            f"{empty_bp_id} empty <bp:ID> element(s); auto-rewritten to NA for "
-            "rendering — fix at source.",
+            f"{empty_bp_id} empty <bp:ID> element(s), rewritten to NA so the converter "
+            "could run. Worth fixing in the source file.",
         )
     else:
         report.add(PASS, "Empty citation IDs", "none")
@@ -115,7 +115,7 @@ def check_gpml(report: Report, gpml_path: Path) -> None:
     # DataNode count is a cheap sanity signal — a pathway with zero is malformed.
     datanode_count = len(re.findall(r"<DataNode\b", text))
     if datanode_count == 0:
-        report.add(FAIL, "DataNodes in GPML", "0 — pathway has no data nodes")
+        report.add(FAIL, "DataNodes in GPML", "none, so the pathway is empty")
     else:
         report.add(PASS, "DataNodes in GPML", str(datanode_count))
 
@@ -125,7 +125,7 @@ def check_info_json(report: Report, info_path: Path) -> None:
         report.add(
             FAIL,
             "Metadata generated",
-            f"{info_path.name} missing — meta-data-action did not produce info.json",
+            f"{info_path.name} is missing, so meta-data-action did not run to completion",
         )
         return
     try:
@@ -170,7 +170,7 @@ def check_info_json(report: Report, info_path: Path) -> None:
         "Ontology tags",
         f"{len(ontology_ids)} tag(s)"
         if ontology_ids
-        else "none — add Pathway/Disease/Cell-type ontology terms",
+        else "none; add Pathway, Disease or Cell-type ontology terms",
     )
 
 
@@ -179,7 +179,7 @@ def check_datanodes(report: Report, datanodes_path: Path) -> None:
         report.add(
             FAIL,
             "Datanode table",
-            f"{datanodes_path.name} missing — meta-data-action did not run",
+            f"{datanodes_path.name} is missing, so meta-data-action did not run",
         )
         return
     try:

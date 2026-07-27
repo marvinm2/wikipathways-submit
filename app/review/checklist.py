@@ -84,9 +84,11 @@ def _auto_references(m) -> AutoResult:
         return AutoResult(ChecklistState.NA.value, "No literature references to resolve.")
     # Resolvability needs the network; the References panel lists each one as a clickable link, so
     # point the curator there rather than guessing pass/fail.
+    n = len(m.references)
     return AutoResult(
         ChecklistState.PENDING.value,
-        f"Open each of the {len(m.references)} reference(s) above to confirm it resolves.",
+        f"Open the {n} reference{'' if n == 1 else 's'} listed above and check "
+        f"{'it resolves' if n == 1 else 'they resolve'}.",
     )
 
 
@@ -96,7 +98,8 @@ def _auto_naming(m) -> AutoResult:
 
 def _auto_ontology(m) -> AutoResult:
     if m.ontology_tags:
-        return AutoResult(ChecklistState.PASS.value, f"{len(m.ontology_tags)} ontology tag(s).")
+        n = len(m.ontology_tags)
+        return AutoResult(ChecklistState.PASS.value, f"{n} ontology tag{'' if n == 1 else 's'}.")
     return AutoResult(ChecklistState.NA.value, "No ontology tags (optional).")
 
 
@@ -194,7 +197,7 @@ def build_checklist(*, metadata=None, before=None, kind: str = "new") -> list[di
                     "label": d.label,
                     "required": False,
                     "state": ChecklistState.NA.value,
-                    "note": "Not relevant — unchanged in this update.",
+                    "note": "Not relevant: this update did not touch it.",
                     "auto": True,
                 }
             )

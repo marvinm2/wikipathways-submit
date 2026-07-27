@@ -129,16 +129,15 @@ class UpdateService:
 
 def _pr_body(wpid_str: str, submitter: str, description: str | None = None) -> str:
     body = (
-        f"Automated update via wikipathways-submit.\n\n"
-        f"- **WPID:** {wpid_str}\n"
-        f"- **Submitter:** @{submitter}\n"
-        f"- Branch cut from the latest base, so this never rebases across a GPML conflict.\n"
+        f"@{submitter} edited {wpid_str} through the WikiPathways curation portal.\n\n"
+        f"The branch was cut from the latest base, so this never rebases across a GPML "
+        f"conflict.\n"
     )
     note = (description or "").strip()
     if note:
-        body += f"\n**What changed**\n\n{note}\n"
+        body += f"\nWhat changed:\n\n{note}\n"
     body += (
-        "\nThe PR-preview workflow will post a validation and metadata summary here. "
-        "The before/after diagrams are drawn in the curation dashboard, not in this pull request."
+        "\nThe before and after drawings are in the curation dashboard; this pull request holds "
+        "the GPML."
     )
     return body
