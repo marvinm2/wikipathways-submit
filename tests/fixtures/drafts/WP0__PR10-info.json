@@ -1,0 +1,17 @@
+{
+    "wpid": "WP0__PR10",
+    "organisms": ["Homo sapiens"],
+    "description": "Vitamin A5/X pathway which shows how our food results in precursors from which Vitamin A5/X (9CBC, 9CDHBC, 9CDHROL-ES and 9CDKHROL) is metabolized which is converted into Vitamin A5/X acid (9CDHRA) which binds to RXR.",
+    "ontology-ids": [
+        "PW:0000135",
+        "PW:0000141",
+        "PW:0001116"
+    ],
+    "last-edited": "2025-08-11",
+    "title": "Vitamin A1 and A5/X pathways",
+    "authors": [
+        "Egonw",
+        "AlexanderPico"
+    ],
+    "revision": "20231104"
+}

@@ -13,6 +13,9 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
 
+#: ElementTree expands the rdf prefix, so the attribute arrives fully qualified.
+_RDF_ID = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}id"
+
 
 def _localname(tag: str) -> str:
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag
@@ -96,6 +99,12 @@ class CurationMetadata:
     data_nodes: list[DataNode] = field(default_factory=list)
     references: list[Reference] = field(default_factory=list)
     ontology_tags: list[OntologyTag] = field(default_factory=list)
+    #: How many of ``references`` are actually cited by a ``<BiopaxRef>`` somewhere in the
+    #: pathway. A GPML can carry a PublicationXref nothing points at — PathVisio leaves them
+    #: behind when an annotation is removed — and downstream generators only emit the cited ones.
+    #: Comparing a generator's output against ``len(references)`` therefore reports a shortfall
+    #: that is not one. Defaulted so a metadata blob cached before this field existed still loads.
+    cited_reference_count: int = 0
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -123,6 +132,10 @@ def parse_curation_metadata(gpml: bytes | str) -> CurationMetadata:
     references: list[Reference] = []
     ontology_tags: list[OntologyTag] = []
     comments: list[str] = []
+    # rdf:id of each PublicationXref, in parse order, paired with the set of ids the pathway
+    # actually cites — see CurationMetadata.cited_reference_count.
+    reference_ids: list[str] = []
+    cited_ids: set[str] = set()
 
     for el in root.iter():
         kind = _localname(el.tag)
@@ -147,8 +160,12 @@ def parse_curation_metadata(gpml: bytes | str) -> CurationMetadata:
                     ontology=(el.get("Ontology") or "").strip(),
                 )
             )
+        elif kind == "BiopaxRef":
+            cited_ids.add((el.text or "").strip())
         elif kind == "PublicationXref":
-            # Biopax literature reference: bp:ID / bp:DB / bp:TITLE children.
+            # Biopax literature reference: bp:ID / bp:DB / bp:TITLE children. The rdf:id
+            # attribute is the handle a <BiopaxRef> elsewhere in the pathway points at.
+            reference_ids.append(el.get(_RDF_ID) or el.get("id") or "")
             ref_id = _text(_find_child(el, "ID"))
             ref_db = _text(_find_child(el, "DB")) or "PubMed"
             references.append(
@@ -173,4 +190,5 @@ def parse_curation_metadata(gpml: bytes | str) -> CurationMetadata:
         data_nodes=data_nodes,
         references=references,
         ontology_tags=ontology_tags,
+        cited_reference_count=sum(1 for rid in reference_ids if rid and rid in cited_ids),
     )

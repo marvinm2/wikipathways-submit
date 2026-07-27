@@ -64,3 +64,46 @@ def test_non_gpml_returns_empty_metadata():
 def test_malformed_xml_does_not_raise():
     m = parse_curation_metadata("<Pathway><unclosed>")
     assert m.data_nodes == []
+
+
+# A PublicationXref that nothing cites: PathVisio leaves these behind when an annotation is
+# removed, and the downstream generators only emit the cited ones. Counting all of them made a
+# required checklist item auto-FAIL on a shortfall that was not one — see
+# CurationMetadata.cited_reference_count.
+_GPML_WITH_UNCITED_REF = """<?xml version="1.0" encoding="UTF-8"?>
+<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Refs" Organism="Homo sapiens">
+  <DataNode TextLabel="TP53" Type="GeneProduct">
+    <BiopaxRef>aaa</BiopaxRef>
+    <Xref Database="Ensembl" ID="ENSG00000141510"/>
+  </DataNode>
+  <Biopax>
+    <bp:PublicationXref xmlns:bp="http://www.biopax.org/release/biopax-level3.owl#"
+        xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" rdf:id="aaa">
+      <bp:ID>111</bp:ID><bp:DB>PubMed</bp:DB><bp:TITLE>Cited</bp:TITLE>
+    </bp:PublicationXref>
+    <bp:PublicationXref xmlns:bp="http://www.biopax.org/release/biopax-level3.owl#"
+        xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" rdf:id="bbb">
+      <bp:ID>222</bp:ID><bp:DB>PubMed</bp:DB><bp:TITLE>Orphaned</bp:TITLE>
+    </bp:PublicationXref>
+  </Biopax>
+</Pathway>
+"""
+
+
+def test_uncited_references_are_counted_separately():
+    m = parse_curation_metadata(_GPML_WITH_UNCITED_REF)
+
+    # Both are still listed — the References panel shows everything the file carries.
+    assert len(m.references) == 2
+    # Only one is pointed at by a <BiopaxRef>, and that is the number comparable to what a
+    # downstream generator emits.
+    assert m.cited_reference_count == 1
+
+
+def test_a_reference_nothing_points_at_is_not_counted_as_cited():
+    # The module fixture carries one PublicationXref and no <BiopaxRef> anywhere, which is the
+    # degenerate version of the same problem: every reference present, none of them cited.
+    m = parse_curation_metadata(GPML)
+
+    assert len(m.references) == 1
+    assert m.cited_reference_count == 0
