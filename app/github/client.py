@@ -77,6 +77,13 @@ class GitHubClient(ABC):
         """Open a PR from ``head`` into ``base`` and return it."""
 
     @abstractmethod
+    def request_pr_reviewer(self, repo: str, pr_number: int, reviewer: str) -> None:
+        """Request ``reviewer`` as a reviewer on the PR (mirrors an app-side assignment).
+
+        GitHub refuses to request a review from the PR author or a non-collaborator, so callers
+        treat this as best-effort."""
+
+    @abstractmethod
     def get_pull_request_state(self, repo: str, pr_number: int) -> str | None:
         """State of a PR: ``"open"``, ``"closed"``, ``"merged"``, or None if it does not exist.
 
@@ -161,6 +168,8 @@ class FakeGitHubClient(GitHubClient):
         self.merged: set[int] = set()
         # PRs closed without merging (tests set this to simulate an out-of-band close).
         self.closed: set[int] = set()
+        # {pr_number: [reviewer, ...]} — reviewers requested via request_pr_reviewer.
+        self.review_requests: dict[int, list[str]] = {}
         # {(repo, issue_number): {marker: body}} — one comment per marker (upsert semantics).
         self.comments: dict[tuple[str, int], dict[str, str]] = {}
         # {"org/team-slug": [login, ...]}
@@ -240,6 +249,10 @@ class FakeGitHubClient(GitHubClient):
         self._next_pr += 1
         self.pulls.append(pr)
         return pr
+
+    def request_pr_reviewer(self, repo: str, pr_number: int, reviewer: str) -> None:
+        self._maybe_fail("request_pr_reviewer")
+        self.review_requests.setdefault(pr_number, []).append(reviewer)
 
     def get_pull_request_state(self, repo: str, pr_number: int) -> str | None:
         self._maybe_fail("get_pull_request_state")
@@ -388,6 +401,15 @@ class HttpGitHubClient(GitHubClient):
         self._raise_for(resp, "open_pull_request")
         data = resp.json()
         return PullRequest(number=data["number"], html_url=data["html_url"], head_branch=head)
+
+    def request_pr_reviewer(self, repo: str, pr_number: int, reviewer: str) -> None:
+        resp = self._client.post(
+            f"/repos/{repo}/pulls/{pr_number}/requested_reviewers",
+            json={"reviewers": [reviewer]},
+        )
+        # 422 = GitHub declined (author can't review, or not a collaborator). Surface as a
+        # GitHubError so the caller can swallow it without failing the app-side assignment.
+        self._raise_for(resp, f"request_pr_reviewer({reviewer})")
 
     def get_pull_request_state(self, repo: str, pr_number: int) -> str | None:
         resp = self._client.get(f"/repos/{repo}/pulls/{pr_number}")
