@@ -14,19 +14,24 @@
 :root {
   color-scheme: light dark;
 
-  --bg: #eef1ec;
+  --bg: #f4f5f7;
   --surface: #ffffff;
-  --surface-2: #f6f8f3;
-  --ink: #16231c;
-  --ink-muted: #51605a;
-  --ink-faint: #7c8a82;
-  --line: #d4dbcc;
-  --line-strong: #b6c2ac;
+  --surface-2: #f7f8fa;
+  --ink: #1c2634;
+  --ink-muted: #5a6472;
+  --ink-faint: #828282;
+  --line: #e2e5ea;
+  --line-strong: #cdd2db;
 
-  --moss: #235c40;
-  --moss-strong: #163f2b;
-  --moss-tint: #e2ede5;
+  /* WikiPathways brand: indigo primary (#3955E7) + green accent (#008558). */
+  --moss: #3955e7;
+  --moss-strong: #2740b8;
+  --moss-tint: #eaedfc;
   --moss-contrast: #ffffff;
+
+  --wp-green: #008558;
+  --wp-green-strong: #036b48;
+  --wp-green-tint: #e2f1ea;
 
   --amber: #8a5a10;
   --amber-tint: #f4e8d2;
@@ -37,14 +42,14 @@
   --slate: #46565f;
   --slate-tint: #e6ebec;
 
-  --focus: #2f6fd6;
+  --focus: #3955e7;
 
   --container: 1080px;
   --radius-s: 6px;
   --radius-m: 10px;
   --radius-l: 18px;
-  --shadow-card: 0 1px 2px rgba(22, 35, 28, 0.06), 0 10px 28px -18px rgba(22, 35, 28, 0.35);
-  --shadow-pop: 0 4px 10px rgba(22, 35, 28, 0.1), 0 18px 40px -20px rgba(22, 35, 28, 0.4);
+  --shadow-card: 0 1px 2px rgba(28, 38, 52, 0.06), 0 10px 28px -18px rgba(28, 38, 52, 0.35);
+  --shadow-pop: 0 4px 10px rgba(28, 38, 52, 0.1), 0 18px 40px -20px rgba(28, 38, 52, 0.4);
 
   --font-display: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-body: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -54,19 +59,23 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0f1a15;
-    --surface: #16241e;
-    --surface-2: #101c17;
-    --ink: #e9efe9;
-    --ink-muted: #a3b6ab;
-    --ink-faint: #7b8d82;
-    --line: #24382e;
-    --line-strong: #33503f;
+    --bg: #10151c;
+    --surface: #182029;
+    --surface-2: #121821;
+    --ink: #e8ecf2;
+    --ink-muted: #a6b0be;
+    --ink-faint: #7c8794;
+    --line: #263141;
+    --line-strong: #37475c;
 
-    --moss: #64c493;
-    --moss-strong: #86d6ac;
-    --moss-tint: rgba(100, 196, 147, 0.14);
-    --moss-contrast: #08150f;
+    --moss: #8ea2ff;
+    --moss-strong: #adbcff;
+    --moss-tint: rgba(89, 110, 231, 0.20);
+    --moss-contrast: #0b1020;
+
+    --wp-green: #4cc795;
+    --wp-green-strong: #6fd6ab;
+    --wp-green-tint: rgba(0, 133, 88, 0.20);
 
     --amber: #d8ab5c;
     --amber-tint: rgba(216, 171, 92, 0.14);
@@ -77,7 +86,7 @@
     --slate: #a7bcc4;
     --slate-tint: rgba(167, 188, 196, 0.12);
 
-    --focus: #7fb0ff;
+    --focus: #8ea2ff;
 
     --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 28px -18px rgba(0, 0, 0, 0.6);
     --shadow-pop: 0 4px 10px rgba(0, 0, 0, 0.4), 0 18px 40px -20px rgba(0, 0, 0, 0.7);
@@ -154,10 +163,21 @@ button { font: inherit; }
   text-decoration: none;
   font-size: 1.05rem;
 }
-.site-header__brand:hover { color: var(--moss); }
-.site-header__mark {
-  width: 1.6rem; height: 1.6rem; flex: none;
-  color: var(--moss);
+.site-header__logo {
+  height: 2rem; width: auto; flex: none; display: block;
+}
+.site-header__portal {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--ink-muted);
+  padding-left: 0.6rem;
+  margin-left: 0.1rem;
+  border-left: 1px solid var(--line-strong);
+}
+/* The WikiPathways logo is a dark monochrome SVG; lift it on dark backgrounds. */
+@media (prefers-color-scheme: dark) {
+  .site-header__logo { filter: invert(1) hue-rotate(180deg) brightness(1.1); }
 }
 .site-header__nav {
   display: flex;
@@ -292,7 +312,7 @@ main { flex: 1; }
 .badge--open { background: var(--amber-tint); color: var(--amber); }
 .badge--merged { background: var(--moss-tint); color: var(--moss-strong); }
 .badge--closed { background: var(--brick-tint); color: var(--brick); }
-.badge--curator { background: var(--moss-tint); color: var(--moss-strong); }
+.badge--curator { background: var(--wp-green-tint); color: var(--wp-green-strong); }
 
 /* ---------- accession tag (signature element) ---------- */
 .tag-wpid {

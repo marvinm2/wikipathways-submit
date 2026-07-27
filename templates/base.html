@@ -13,13 +13,9 @@
     <header class="site-header">
      <div class="site-header__inner">
       <a class="site-header__brand" href="/">
-        <svg class="site-header__mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <circle cx="5" cy="6" r="2.4" stroke="currentColor" stroke-width="1.6"/>
-          <circle cx="19" cy="6" r="2.4" stroke="currentColor" stroke-width="1.6"/>
-          <circle cx="12" cy="18" r="2.4" stroke="currentColor" stroke-width="1.6"/>
-          <path d="M7.2 7.1L10 16.2M16.8 7.1L14 16.2M7.4 6H16.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-        </svg>
-        wikipathways-submit
+        <img class="site-header__logo" src="/static/wikipathways-logo.svg"
+             width="132" height="40" alt="WikiPathways">
+        <span class="site-header__portal">Pathway portal</span>
       </a>
       <nav class="site-header__nav" aria-label="Primary">
         <a href="/"{% if request and request.url.path == '/' %} aria-current="page"{% endif %}>Submit</a>
@@ -44,7 +40,7 @@
     </main>
 
     <footer class="site-footer">
-      <p>wikipathways-submit &middot; opens real pull requests on <a href="https://github.com/wikipathways/wikipathways-database">wikipathways/wikipathways-database</a></p>
+      <p>A portal for uploading, updating, and reviewing pathways. Opens pull requests on <a href="https://github.com/wikipathways/wikipathways-database">wikipathways/wikipathways-database</a>.</p>
     </footer>
   </div>
 
