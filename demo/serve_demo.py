@@ -55,6 +55,29 @@ def _gh(*args: str) -> str:
     return subprocess.check_output(["gh", *args], text=True).strip()
 
 
+_OAUTH_KEYS = (
+    "WPSUBMIT_GITHUB_OAUTH_CLIENT_ID",
+    "WPSUBMIT_GITHUB_OAUTH_CLIENT_SECRET",
+    "WPSUBMIT_OAUTH_REDIRECT_URI",
+)
+
+
+def _load_oauth_from_env_file() -> None:
+    """Pull just the OAuth keys from a local .env into the environment (the demo is otherwise
+    hermetic). Lets a pre-registered OAuth App enable real login without exporting anything."""
+    path = _ROOT / ".env"
+    if not path.is_file():
+        return
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if key in _OAUTH_KEYS and key not in os.environ:
+            os.environ[key] = val.strip().strip('"').strip("'")
+
+
 def _real_config():
     token = os.environ.get("WPSUBMIT_DEMO_TOKEN") or _gh("auth", "token")
     user = os.environ.get("WPSUBMIT_DEMO_USER") or _gh("api", "user", "--jq", ".login")
@@ -94,11 +117,15 @@ def make_demo_app():
     # Real GitHub login: if you register an OAuth App and pass its credentials, the demo uses the
     # actual "Log in with GitHub" flow (writes act as whoever logs in). Without them, a one-click
     # shim signs you in as the token owner so the demo still runs offline / without an OAuth App.
+    if not fake_mode:
+        _load_oauth_from_env_file()
     oauth_id = os.environ.get("WPSUBMIT_GITHUB_OAUTH_CLIENT_ID")
     oauth_secret = os.environ.get("WPSUBMIT_GITHUB_OAUTH_CLIENT_SECRET")
     real_login = bool(oauth_id and oauth_secret) and not fake_mode
-    redirect_uri = os.environ.get(
-        "WPSUBMIT_DEMO_OAUTH_REDIRECT", "http://localhost:8000/auth/callback"
+    redirect_uri = (
+        os.environ.get("WPSUBMIT_DEMO_OAUTH_REDIRECT")
+        or os.environ.get("WPSUBMIT_OAUTH_REDIRECT_URI")
+        or "http://localhost:8000/auth/callback"
     )
 
     settings = Settings(
