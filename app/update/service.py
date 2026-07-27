@@ -76,7 +76,9 @@ class UpdateService:
                     f"{wpid_str} does not exist on {self._base_branch}; use submit for new pathways"
                 )
 
-            gpml_out = assign_wpid(gpml, wpid)  # force the WPID; an update can't renumber
+            # Force the WPID; an update can't renumber. Author only fills in when absent, so an
+            # existing pathway keeps its original authorship.
+            gpml_out = assign_wpid(gpml, wpid, author=submitter)
             branch = f"update/{wpid_str}"
             base_sha = self._github.get_branch_sha(self._repo, self._base_branch)
             try:

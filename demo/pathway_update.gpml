@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Insulin signaling (demo)" Organism="Homo sapiens">
   <Graphics BoardWidth="620.0" BoardHeight="520.0" />
-  <Comment>Demo pathway: insulin (INS) activates its receptor INSR, which signals through IRS1.</Comment>
+  <Comment Source="WikiPathways-description">Demo pathway: insulin (INS) activates its receptor INSR, which signals through IRS1.</Comment>
 
   <DataNode TextLabel="INS" Type="GeneProduct">
     <Graphics CenterX="240.0" CenterY="80.0" Width="120.0" Height="34.0" Color="1a5276" />

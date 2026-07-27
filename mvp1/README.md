@@ -115,6 +115,12 @@ To test on a fork, use the ready-to-drop tree in [`../fork-staging/`](../fork-st
 
 ## Open items before upstreaming
 
+- `meta-data-action` is invoked with the literal `local` as its first argument, **not** a repo
+  name. Given a repo it downloads `raw.githubusercontent.com/<repo>/main/<file>` and describes
+  the version already on `main`, so the preview would silently describe a different pathway
+  (found 2026-07-27 on fork PR #16: a new WP5641 previewed as upstream's "Oxidative stress
+  response"). It also dereferences the GPML `Author` attribute unconditionally, which is why the
+  app fills it with the submitter when an upload has none.
 - Confirmed on a real run (2026-07-26): `meta-data-action` **v1.1.4** invocation, and that
   `gpmlconverter` generates locally without the assets-repo SSH keys. (gpmlconverter's *SVG*
   rasterisation is separately blocked by upstream HTTP-400s; the human preview is rendered in the

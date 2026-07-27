@@ -100,11 +100,18 @@ def _now_revision() -> str:
     return datetime.now(UTC).strftime("r%Y%m%d%H%M%S")
 
 
-def assign_wpid(content: bytes | str, wpid: int, *, revision: str | None = None) -> str:
+def assign_wpid(
+    content: bytes | str, wpid: int, *, revision: str | None = None, author: str | None = None
+) -> str:
     """Return the GPML with its root ``Version`` set to ``WP<wpid>_r<revision>``.
 
     Adds the Version attribute if the upload lacks one. Idempotent in shape: re-assigning
     overwrites any previous WPID, so a mis-numbered submission (audit #94) is normalized.
+
+    ``author`` fills the GPML2013a ``Author="[name]"`` attribute **only when the upload has
+    none**: existing authorship is never rewritten, but a hand-made GPML that omits it gets the
+    submitter. meta-data-action dereferences that attribute unconditionally, so a file without
+    it crashes the generator and the PR preview loses its metadata tables.
     """
     text = _as_text(content)
     m = _PATHWAY_TAG_RE.search(text)
@@ -117,6 +124,8 @@ def assign_wpid(content: bytes | str, wpid: int, *, revision: str | None = None)
         new_tag = re.sub(r'\bVersion="[^"]*"', f'Version="{version_value}"', tag, count=1)
     else:
         new_tag = tag.replace("<Pathway", f'<Pathway Version="{version_value}"', 1)
+    if author and not _attr(new_tag, "Author"):
+        new_tag = new_tag.replace("<Pathway", f'<Pathway Author="[{author}]"', 1)
     return text[: m.start()] + new_tag + text[m.end() :]
 
 

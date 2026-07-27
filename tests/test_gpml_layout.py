@@ -81,6 +81,25 @@ def test_assign_wpid_generates_revision_when_omitted():
     assert meta.version is not None and meta.version.startswith("WP5639_r")
 
 
+def test_assign_wpid_fills_missing_author():
+    # meta-data-action dereferences Author unconditionally, so a GPML without one crashes the
+    # preview's metadata generation. The submitter fills the gap.
+    out = assign_wpid(GPML_NO_VERSION, 5640, author="alice")
+    assert 'Author="[alice]"' in out
+
+
+def test_assign_wpid_keeps_existing_author():
+    gpml = GPML.replace("<Pathway ", '<Pathway Author="[MadhushriMSV]" ', 1)
+    out = assign_wpid(gpml, 5641, author="alice")
+    assert 'Author="[MadhushriMSV]"' in out
+    assert "alice" not in out
+
+
+def test_assign_wpid_without_author_leaves_the_tag_alone():
+    out = assign_wpid(GPML_NO_VERSION, 5642)
+    assert "Author=" not in out
+
+
 def test_assign_wpid_on_junk_raises():
     with pytest.raises(InvalidGpml):
         assign_wpid("not xml at all", 1)
