@@ -4,7 +4,7 @@ import pytest
 
 from app.github import FakeGitHubClient
 from app.models import WpidReservation
-from app.submit import InvalidGpml, SubmissionService
+from app.submit import InvalidGpml, NoPendingSubmission, SubmissionService
 from app.wpid import WpidAllocator
 
 REPO = "wikipathways/wikipathways-database"
@@ -67,6 +67,35 @@ def test_submit_new_pathway_happy_path(allocator, session_factory):
     assert len(rows) == 1
     assert rows[0].wpid == 5637
     assert rows[0].pr_number == 1
+
+
+REVISED_GPML = (
+    '<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Mitophagy v2" '
+    'Organism="Homo sapiens"></Pathway>'
+)
+
+
+def test_revise_commits_onto_the_open_submission_pr(allocator):
+    gh = _fake_github()
+    svc = SubmissionService(allocator, gh, repo=REPO)
+    first = svc.submit_new_pathway(gpml=GOOD_GPML, submitter="alice")  # WP5637, PR #1
+
+    revised = svc.revise_new_pathway(wpid=first.wpid, gpml=REVISED_GPML, submitter="alice")
+
+    assert revised.pr_number == first.pr_number  # same PR, no new one
+    assert revised.branch == "submit/WP5637"
+    assert len(gh.pulls) == 1
+    content, message, _sha = gh.files[(REPO, "submit/WP5637", "pathways/WP5637/WP5637.gpml")]
+    assert message == "Revise WP5637"
+    assert "Mitophagy v2" in content
+    assert 'Version="WP5637_r' in content  # WPID re-stamped, not renumbered
+
+
+def test_revise_without_open_submission_raises(allocator):
+    gh = _fake_github()
+    svc = SubmissionService(allocator, gh, repo=REPO)
+    with pytest.raises(NoPendingSubmission):
+        svc.revise_new_pathway(wpid=5637, gpml=GOOD_GPML, submitter="alice")
 
 
 def test_submit_description_flows_into_pr_body(allocator):

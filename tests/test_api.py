@@ -178,13 +178,12 @@ def test_pathway_info_reports_presence(tmp_path):
     )
     app, _current = _authed_app(tmp_path, fake=fake)
     with TestClient(app) as c:
-        assert c.get("/api/pathways/5636").json() == {
-            "exists": True,
-            "wpid": "WP5636",
-            "name": "Mitophagy",
-        }
+        found = c.get("/api/pathways/5636").json()
+        assert found["exists"] is True and found["wpid"] == "WP5636"
+        assert found["name"] == "Mitophagy" and found["state"] == "on_main"
         missing = c.get("/api/pathways/9999").json()
         assert missing["exists"] is False and missing["wpid"] == "WP9999"
+        assert missing["state"] == "absent"
 
 
 def test_request_changes_endpoint(tmp_path):
@@ -210,6 +209,64 @@ def test_request_changes_endpoint(tmp_path):
         # The note went out as a PR comment.
         comments = app.state._fake.issue_comments[(app.state.settings.content_repo, pr)]
         assert any("Annotate the nodes." in b for b in comments)
+
+
+def test_pathway_info_detects_pending_new_submission(tmp_path):
+    settings = _settings(database_url=f"sqlite:///{tmp_path / 'reg.db'}")
+    repo, branch = settings.content_repo, settings.default_branch
+    fake = FakeGitHubClient(default_branches={f"{repo}#{branch}": "base"})
+    fake.open_pull_request(repo, head="submit/WP5642", base=branch, title="t", body="b")  # PR #1
+    app, _current = _authed_app(tmp_path, fake=fake)
+    with TestClient(app) as c:
+        info = c.get("/api/pathways/5642").json()
+        assert info["exists"] is False
+        assert info["state"] == "pending_new"
+        assert info["pr_number"] == 1
+
+
+def test_revise_new_submission_end_to_end(tmp_path):
+    app, current = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        sub = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()
+        pr, wnum = sub["pr_number"], sub["wpid"].replace("WP", "")
+
+        current["user"] = "curator"
+        c.post(f"/api/reviews/{pr}/request-changes", data={"note": "annotate the nodes"})
+        assert c.get(f"/api/reviews/{pr}").json()["status"] == "changes_requested"
+
+        # A stranger cannot revise someone else's submission.
+        current["user"] = "mallory"
+        forbidden = c.post(
+            f"/api/pathways/{wnum}/revise",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        )
+        assert forbidden.status_code == 403
+
+        # The submitter revises → commits onto the SAME PR and re-opens the review.
+        current["user"] = "bob"
+        rev = c.post(
+            f"/api/pathways/{wnum}/revise",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+            data={"description": "added identifiers"},
+        )
+        assert rev.status_code == 201
+        assert rev.json()["pr_number"] == pr  # no new PR
+        assert c.get(f"/api/reviews/{pr}").json()["status"] == "open"  # back in the queue
+
+
+def test_revise_without_pending_submission_404(tmp_path):
+    app, current = _authed_app(tmp_path)
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        r = c.post(
+            "/api/pathways/9999/revise",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        )
+        assert r.status_code == 404
 
 
 def test_dashboard_end_to_end(tmp_path):

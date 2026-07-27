@@ -454,6 +454,7 @@ main { flex: 1; }
 .wpid-status { margin: 0.2rem 0 0; font-size: 0.85rem; }
 .wpid-status--checking { color: var(--ink-faint); }
 .wpid-status--ok { color: #15803d; }
+.wpid-status--pending { color: #b45309; }
 .wpid-status--err { color: #b91c1c; }
 
 .step-card {

@@ -43,7 +43,13 @@ from app.review.service import (
     PreviewNotReady,
     ReviewNotFound,
 )
-from app.submit import InvalidGpml, SubmissionService, layout_paths, validate_gpml
+from app.submit import (
+    InvalidGpml,
+    NoPendingSubmission,
+    SubmissionService,
+    layout_paths,
+    validate_gpml,
+)
 from app.update import PathwayNotFound, UpdateService
 from app.wpid import WpidAllocator
 from app.wpid.github_floor import github_wpid_floor
@@ -550,13 +556,68 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             path=result.path,
         )
 
+    @app.post("/api/pathways/{wpid}/revise", response_model=SubmitResponse, status_code=201)
+    async def revise(
+        request: Request,
+        wpid: int,
+        file: UploadFile,
+        description: str = Form(""),
+        submitter: str = Depends(get_current_user),
+        github: GitHubClient = Depends(get_github_client),
+        bot: GitHubClient | None = Depends(get_bot_optional),
+    ) -> SubmitResponse:
+        """Commit a revised GPML onto an open new-pathway PR and re-open its review."""
+        content = await file.read()
+        curation = _curation(request, bot)
+        review = curation.find_open_new_review(wpid)
+        if review is None:
+            raise HTTPException(
+                status_code=404, detail=f"WP{wpid} has no open submission to revise"
+            )
+        if review.submitter != submitter and not request.app.state.curators.is_curator(submitter):
+            raise HTTPException(
+                status_code=403, detail="only the submitter or a curator can revise this submission"
+            )
+        service = SubmissionService(
+            request.app.state.allocator,
+            github,
+            repo=settings.content_repo,
+            base_branch=settings.default_branch,
+        )
+        try:
+            result = service.revise_new_pathway(wpid=wpid, gpml=content, submitter=submitter)
+        except InvalidGpml as exc:
+            raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc
+        except NoPendingSubmission as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except GitHubError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        # Re-open the review and rebuild its checklist from the revised content.
+        curation.revise(result.pr_number, metadata=parse_curation_metadata(content))
+        _render_preview(
+            request,
+            pr_number=result.pr_number,
+            wpid=result.wpid,
+            after_gpml=content,
+            before_gpml=None,
+            submitter_note=description,
+        )
+        return SubmitResponse(
+            wpid=result.wpid_str,
+            pr_number=result.pr_number,
+            pr_url=result.pr_url,
+            path=result.path,
+        )
+
     @app.get("/api/pathways/{wpid}", response_model=PathwayInfo)
     def pathway_info(
         request: Request,
         wpid: int,
         github: GitHubClient = Depends(get_github_client),
     ) -> PathwayInfo:
-        """Does ``WP<wpid>`` exist on the base branch? Backs the update form's presence check."""
+        """Where does ``WP<wpid>`` live — on the base branch (an update), an open new-submission PR
+        (a revise), or nowhere? Backs the update form's presence check and revise routing."""
+        wpid_str = f"WP{wpid}"
         path = layout_paths(wpid)["gpml"]
         try:
             content = github.get_file_content(
@@ -564,11 +625,23 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             )
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        if content is None:
-            return PathwayInfo(exists=False, wpid=f"WP{wpid}")
-        return PathwayInfo(
-            exists=True, wpid=f"WP{wpid}", name=parse_curation_metadata(content).name
-        )
+        if content is not None:
+            return PathwayInfo(
+                exists=True,
+                state="on_main",
+                wpid=wpid_str,
+                name=parse_curation_metadata(content).name,
+            )
+        # Not on main — is there still an open new-submission PR to revise?
+        try:
+            pr = github.find_open_pr(settings.content_repo, f"submit/{wpid_str}")
+        except GitHubError:
+            pr = None
+        if pr is not None:
+            return PathwayInfo(
+                exists=False, state="pending_new", wpid=wpid_str, pr_number=pr.number
+            )
+        return PathwayInfo(exists=False, state="absent", wpid=wpid_str)
 
     # -- Curation dashboard (MVP-4) --------------------------------------------------------
 
@@ -729,9 +802,11 @@ class SubmitResponse(BaseModel):
 
 
 class PathwayInfo(BaseModel):
-    exists: bool
+    exists: bool  # present on the base branch (an update target)
     wpid: str
     name: str | None = None
+    state: str = "absent"  # "on_main" | "pending_new" | "absent"
+    pr_number: int | None = None  # the open new-submission PR, when state == pending_new
 
 
 class ReviewSummary(BaseModel):

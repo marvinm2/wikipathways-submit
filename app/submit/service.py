@@ -16,9 +16,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.github import GitHubClient, PullRequest
+from app.github import GitHubClient, GitHubError, PullRequest
 from app.submit.gpml import assign_wpid, layout_paths, validate_gpml
 from app.wpid import WpidAllocator, format_wpid
+
+
+class NoPendingSubmission(RuntimeError):
+    """Revise targeted a WPID with no open new-pathway submission branch/PR to commit onto."""
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,57 @@ class SubmissionService:
         # 7. Record the PR number on the reservation.
         self._allocator.attach_pr(wpid, pr.number)
 
+        return SubmissionResult(
+            wpid=wpid,
+            wpid_str=wpid_str,
+            branch=branch,
+            path=path,
+            pr_number=pr.number,
+            pr_url=pr.html_url,
+        )
+
+    def revise_new_pathway(
+        self,
+        *,
+        wpid: int,
+        gpml: bytes | str,
+        submitter: str,
+        author_email: str | None = None,
+    ) -> SubmissionResult:
+        """Commit a revised GPML onto an **already-open** new-pathway PR (design: the revise loop).
+
+        Unlike ``submit_new_pathway`` this reserves no WPID and opens no PR — it adds a commit to
+        the existing ``submit/WP<id>`` branch, reusing the open PR. Used when a curator requested
+        changes on a new submission (which, unlike an update, isn't on ``main`` yet). Raises
+        ``NoPendingSubmission`` if there is no open submission branch/PR for the WPID.
+        """
+        validate_gpml(gpml)
+        wpid_str = format_wpid(wpid)
+        path = layout_paths(wpid)["gpml"]
+        branch = f"submit/{wpid_str}"
+
+        try:
+            self._github.get_branch_sha(self._repo, branch)
+        except GitHubError as exc:
+            raise NoPendingSubmission(
+                f"no open submission branch for {wpid_str} to revise"
+            ) from exc
+        pr = self._github.find_open_pr(self._repo, branch)
+        if pr is None:
+            raise NoPendingSubmission(f"no open submission PR for {wpid_str} to revise")
+
+        gpml_out = assign_wpid(gpml, wpid)  # keep the assigned WPID; a revise can't renumber
+        branch_file_sha = self._github.get_file_sha(self._repo, branch, path)
+        self._github.put_file(
+            self._repo,
+            branch,
+            path,
+            gpml_out,
+            message=f"Revise {wpid_str}",
+            sha=branch_file_sha,
+            author_name=submitter,
+            author_email=author_email,
+        )
         return SubmissionResult(
             wpid=wpid,
             wpid_str=wpid_str,

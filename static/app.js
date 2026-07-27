@@ -120,12 +120,18 @@
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (info) {
           if (!info) { wpidStatus.hidden = true; return; }
-          if (info.exists) {
+          wpidInput.dataset.state = info.state;
+          if (info.state === 'on_main') {
             wpidStatus.className = 'wpid-status wpid-status--ok';
-            wpidStatus.textContent = info.wpid + (info.name ? ' — ' + info.name : '') + ' found.';
+            wpidStatus.textContent = info.wpid + (info.name ? ' — ' + info.name : '') + ' found. Submitting opens an update.';
+            document.getElementById('update-btn').textContent = 'Submit update';
+          } else if (info.state === 'pending_new') {
+            wpidStatus.className = 'wpid-status wpid-status--pending';
+            wpidStatus.textContent = info.wpid + ' is a pending new submission (PR #' + info.pr_number + '). Submitting revises it.';
+            document.getElementById('update-btn').textContent = 'Submit revision';
           } else {
             wpidStatus.className = 'wpid-status wpid-status--err';
-            wpidStatus.textContent = info.wpid + ' does not exist on main. Use "New pathway" for a new one.';
+            wpidStatus.textContent = info.wpid + ' does not exist yet. Use the "New pathway" tab.';
           }
         })
         .catch(function () { wpidStatus.hidden = true; });
@@ -156,28 +162,42 @@
       if (detail) { parts.push(detail); }
       var description = parts.join('\n');
       var btn = document.getElementById('update-btn');
+      var label = btn.textContent;
       btn.disabled = true;
       btn.textContent = 'Submitting…';
       var fd = new FormData();
       fd.append('file', file);
       fd.append('description', description);
-      fetch('/api/pathways/' + wpid + '/update', { method: 'POST', body: fd })
-        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
+      function reset() { btn.disabled = false; btn.textContent = label; }
+      // Route by where the WPID lives: an existing pathway → update; a still-open new
+      // submission → revise (commit onto its PR); nowhere → tell the user.
+      fetch('/api/pathways/' + wpid)
+        .then(function (r) { return r.ok ? r.json() : { state: 'absent', wpid: 'WP' + wpid }; })
+        .then(function (info) {
+          if (info.state === 'absent') {
+            reset();
+            toast(info.wpid + ' does not exist yet — use the "New pathway" tab.', 'error');
+            return null;
+          }
+          var verb = info.state === 'pending_new' ? 'revise' : 'update';
+          return fetch('/api/pathways/' + wpid + '/' + verb, { method: 'POST', body: fd })
+            .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, body: j, verb: verb }; }); });
+        })
         .then(function (res) {
-          btn.disabled = false;
-          btn.textContent = 'Submit update';
+          if (!res) return;
+          reset();
           if (!res.ok) { toast(describeError(res.status, res.body), 'error'); return; }
+          var word = res.verb === 'revise' ? 'Revised' : 'Updated';
           var out = document.getElementById('update-result');
           out.innerHTML =
-            'Updated <strong>' + res.body.wpid + '</strong>. Opened pull request ' +
+            word + ' <strong>' + res.body.wpid + '</strong> on pull request ' +
             '<a href="' + res.body.pr_url + '" target="_blank" rel="noopener">#' + res.body.pr_number + '</a> ' +
             '(<code>' + res.body.path + '</code>). <a href="/dashboard">Go to the dashboard</a>.';
           out.hidden = false;
-          toast('Update submitted.', 'success');
+          toast(word + ' submitted.', 'success');
         })
         .catch(function () {
-          btn.disabled = false;
-          btn.textContent = 'Submit update';
+          reset();
           toast('Could not reach the server. Try again.', 'error');
         });
     });
