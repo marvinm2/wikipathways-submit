@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 
+import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -34,6 +35,7 @@ from app.db import make_engine, make_session_factory
 from app.github import GitHubClient, GitHubError, HttpGitHubClient
 from app.locks import LockUnavailable, PathwayLockRegistry
 from app.models import Base, ReviewStatus
+from app.pipeline import DraftsReader
 from app.preview import PreviewService
 from app.preview.metadata import parse_curation_metadata
 from app.review.service import (
@@ -50,6 +52,8 @@ from app.submit import (
     layout_paths,
     validate_gpml,
 )
+from app.submit.gpml import PLACEHOLDER_GPML_PATH
+from app.submit.service import SubmissionMode
 from app.update import PathwayNotFound, UpdateService
 from app.wpid import WpidAllocator
 from app.wpid.github_floor import github_wpid_floor
@@ -122,6 +126,54 @@ def get_bot_client(request: Request) -> GitHubClient:
     return client
 
 
+def _writer_client(
+    settings: Settings, user_client: GitHubClient, bot: GitHubClient | None
+) -> GitHubClient:
+    """Whose credentials push the branch and open the PR.
+
+    On a shared target repo an ordinary submitter has no push access, so the bot has to do it;
+    authorship survives because the commit carries the submitter as its git author. Where the
+    submitter *can* push (a fork, the demo), their own token is better — the PR is then genuinely
+    theirs.
+    """
+    if settings.submit_identity != "bot":
+        return user_client
+    if bot is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "submit_identity=bot, but the GitHub App (bot) identity is not configured. "
+                "Submitters cannot push to the target repo without it."
+            ),
+        )
+    return bot
+
+
+def _submitter_email(settings: Settings, submitter: str) -> str:
+    """GitHub's noreply address, so a bot-pushed commit still shows the submitter as author."""
+    return f"{submitter}@{settings.noreply_email_domain}"
+
+
+def _label_submission(
+    settings: Settings, bot: GitHubClient | None, pr_number: int, *, kind: str
+) -> None:
+    """Tag the PR with the target repo's own new/edit vocabulary.
+
+    Best-effort on purpose: these labels are descriptive, not the mechanism, so a repo that has
+    not defined them (or a bot without Issues:write) must not cost anyone their submission.
+    Contrast the `accepted` label, where a failure has to fail the call.
+    """
+    if bot is None or not settings.is_pipeline_mode:
+        return
+    label = (
+        settings.label_new_submission if kind == "new" else settings.label_edited_submission
+    )
+    try:
+        bot.add_labels(settings.content_repo, pr_number, [label])
+    except (GitHubError, httpx.HTTPError):
+        pass
+
+
 def _make_bot_app(settings: Settings) -> GitHubApp | None:
     """Construct the GitHub App from settings, loading the private key from PEM or a secret file."""
     if not (settings.github_app_id and settings.github_app_installation_id):
@@ -188,6 +240,19 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         )
         # Pathway preview: the app draws before/after itself and caches it (issue #11).
         app.state.preview = PreviewService(cache_dir=settings.preview_cache_dir)
+        # The target repo's own derived artifacts (pipeline mode). Read anonymously — the App is
+        # not installed on the site repo and does not need to be, since those files are public.
+        app.state.drafts = (
+            DraftsReader(
+                repo=settings.drafts_repo,
+                branch=settings.drafts_branch,
+                site_base_url=settings.drafts_site_base_url,
+                cache_dir=str(Path(settings.preview_cache_dir) / "drafts"),
+                ttl_seconds=settings.preview_cache_ttl_seconds,
+            )
+            if settings.is_pipeline_mode and settings.drafts_repo
+            else None
+        )
         app.state.allocator = WpidAllocator(
             session_factory,
             _make_floor_provider(settings, bot_app),
@@ -222,6 +287,17 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             preview_workflow_file=settings.preview_workflow_file,
             preview_artifact_name=settings.preview_artifact_name,
             app_base_url=settings.app_base_url,
+            publish_mode=settings.publish_mode,
+            default_branch=settings.default_branch,
+            label_accepted=settings.label_accepted,
+            label_rejected=settings.label_rejected,
+            label_author_feedback=settings.label_author_feedback,
+            publish_timeout=timedelta(minutes=settings.publish_timeout_minutes),
+            close_rejected_after_timeout=settings.close_rejected_after_timeout,
+            reconcile_min_interval=timedelta(
+                seconds=settings.reconcile_min_interval_seconds
+            ),
+            drafts=st.drafts,
         )
 
     def _fetch_base_gpml(github: GitHubClient, path: str) -> bytes | None:
@@ -310,12 +386,39 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # 'pending' → leave None so the template shows the "generating" empty state
         return {
             **_detail(r).model_dump(),
-            "wpid_str": f"WP{r.wpid}",
+            "wpid_str": r.wpid_str,
             "pr_url": pr_url,
             "preview": preview,
             # Parsed curation metadata (data nodes, references, description, ontology tags,
             # submitter note) cached at render time — a cheap disk read, None if not rendered.
             "metadata": request.app.state.preview.metadata(r.pr_number),
+            "labels": r.github_labels or [],
+            "decision_note": r.decision_note,
+            "pipeline": _pipeline_view(request, r),
+        }
+
+    def _pipeline_view(request: Request, r) -> dict | None:
+        """What the target repo's own pipeline has produced for this PR, if anything.
+
+        The repo renders the pathway, resolves its identifiers and its references, and publishes
+        a draft page, which is richer than anything the app makes for itself. It also fails more
+        often than it succeeds: of the last 20 runs of its PR workflow, 5 succeeded and 14 failed
+        (measured 2026-07-27). So every field here is optional, and the template has to read as
+        "the app's own render still works" when all of them are absent.
+        """
+        drafts = request.app.state.drafts
+        if drafts is None:
+            return None
+        slug = drafts.slug_for(kind=r.kind, wpid=r.wpid, pr_number=r.pr_number)
+        artifacts = drafts.fetch(slug)
+        return {
+            "slug": slug,
+            "available": artifacts.available,
+            "draft_url": artifacts.draft_url,
+            "svg_url": artifacts.svg_url,
+            "thumb_url": artifacts.thumb_url,
+            "datanode_count": len(artifacts.datanodes or []) or None,
+            "reference_count": len(artifacts.bibliography or []) or None,
         }
 
     @app.get("/", response_class=HTMLResponse)
@@ -367,11 +470,27 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         return FileResponse(path, media_type="image/svg+xml", headers=_SVG_HEADERS)
 
     @app.get("/dashboard/{pr_number}", response_class=HTMLResponse)
-    def review_page(request: Request, pr_number: int):
+    def review_page(
+        request: Request, pr_number: int, bot: GitHubClient | None = Depends(get_bot_optional)
+    ):
+        curation = _curation(request, bot)
         try:
-            r = _curation(request).get(pr_number)
+            r = curation.get(pr_number)
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # Fill in whatever the target repo's pipeline has already worked out, so the curator is
+        # confirming answers rather than deriving them. Best-effort, and it never overwrites a
+        # state a curator set by hand.
+        meta = request.app.state.preview.metadata(pr_number)
+        # The *cited* count, not the total: the target repo's generator only emits references a
+        # <BiopaxRef> actually points at, so comparing its output against every PublicationXref
+        # in the file reports a shortfall that is not one — and that item is required, so the
+        # false FAIL would block approval and read as the submitter's fault.
+        refreshed = curation.refresh_pipeline_checks(
+            pr_number,
+            gpml_reference_count=getattr(meta, "cited_reference_count", None) if meta else None,
+        )
+        r = refreshed or r
         return templates.TemplateResponse(
             request,
             "review_detail.html",
@@ -440,7 +559,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             name=meta.name,
             organism=meta.organism,
             embedded_wpid=meta.wpid,
-            will_layout_to=layout_paths(0)["gpml"].replace("WP0", "WP<assigned>"),
+            # In pipeline mode the file is committed under a placeholder and the target repo
+            # renames it at publication, so promising "WP<assigned>" here would be a lie.
+            will_layout_to=(
+                PLACEHOLDER_GPML_PATH
+                if settings.is_pipeline_mode
+                else layout_paths(0)["gpml"].replace("WP0", "WP<assigned>")
+            ),
         )
 
     @app.post("/api/submit", response_model=SubmitResponse, status_code=201)
@@ -455,13 +580,17 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         content = await file.read()
         service = SubmissionService(
             request.app.state.allocator,
-            github,
+            _writer_client(settings, github, bot),
             repo=settings.content_repo,
             base_branch=settings.default_branch,
+            mode=SubmissionMode(settings.publish_mode),
         )
         try:
             result = service.submit_new_pathway(
-                gpml=content, submitter=submitter, description=description
+                gpml=content,
+                submitter=submitter,
+                author_email=_submitter_email(settings, submitter),
+                description=description,
             )
         except InvalidGpml as exc:
             raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc
@@ -474,7 +603,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             submitter=submitter,
             kind="new",
             metadata=after_meta,  # pre-fills the checklist with auto-derived states
+            head_branch=result.branch,
         )
+        _label_submission(settings, bot, result.pr_number, kind="new")
         _render_preview(
             request,
             pr_number=result.pr_number,
@@ -501,15 +632,20 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         bot: GitHubClient | None = Depends(get_bot_optional),
     ) -> SubmitResponse:
         content = await file.read()
+        writer = _writer_client(settings, github, bot)
         service = UpdateService(
             request.app.state.locks,
-            github,
+            writer,
             repo=settings.content_repo,
             base_branch=settings.default_branch,
         )
         try:
             result = service.update_pathway(
-                wpid=wpid, gpml=content, submitter=submitter, description=description
+                wpid=wpid,
+                gpml=content,
+                submitter=submitter,
+                author_email=_submitter_email(settings, submitter),
+                description=description,
             )
         except InvalidGpml as exc:
             raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc
@@ -523,7 +659,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         # Fetch the base version once — it is both the render 'before' and the baseline the
         # checklist uses to skip checks for things this update didn't change.
-        before_gpml = _fetch_base_gpml(github, result.path)
+        before_gpml = _fetch_base_gpml(writer, result.path)
         after_meta = parse_curation_metadata(content)
         before_meta = parse_curation_metadata(before_gpml) if before_gpml else None
         _curation(request, bot).register(
@@ -533,7 +669,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             kind="update",
             metadata=after_meta,
             before_metadata=before_meta,
+            head_branch=result.branch,
         )
+        _label_submission(settings, bot, result.pr_number, kind="update")
         _render_preview(
             request,
             pr_number=result.pr_number,
@@ -711,10 +849,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         curator: str = Depends(get_current_user),
         bot: GitHubClient = Depends(get_bot_client),
     ):
-        # Merge runs as the bot (App installation token), never the curator's personal token
-        # (scaffolding-plan §3) — so it can satisfy branch protection and stays attributable.
+        # Approval runs as the bot (App installation token), never the curator's personal token
+        # (scaffolding-plan §3) — merging that way satisfies branch protection, and labelling
+        # that way works even for a curator without write access to the target repo.
         try:
-            r = _curation(request, bot).approve_and_merge(pr_number, curator)
+            r = _curation(request, bot).approve(pr_number, curator)
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except NotACurator as exc:
@@ -725,6 +864,45 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return _detail(r)
+
+    @app.post("/api/reviews/{pr_number}/reject", response_model=ReviewDetail)
+    def reject_review(
+        request: Request,
+        pr_number: int,
+        note: str = Form(""),
+        curator: str = Depends(get_current_user),
+        bot: GitHubClient = Depends(get_bot_client),
+    ):
+        # Terminal, unlike request-changes: in pipeline mode this hands the PR to the target
+        # repo's rejection workflow, which deletes the generated drafts and closes it.
+        try:
+            r = _curation(request, bot).reject(pr_number, curator, note)
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except NotACurator as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except GitHubError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return _detail(r)
+
+    @app.post("/api/reviews/{pr_number}/published-wpid", response_model=ReviewDetail)
+    def record_published_wpid(
+        request: Request,
+        pr_number: int,
+        wpid: int = Form(...),
+        curator: str = Depends(get_current_user),
+        bot: GitHubClient | None = Depends(get_bot_optional),
+    ):
+        # The manual way out of PUBLISH_FAILED: the target repo's publish workflow is the one
+        # part of the loop the app does not control, so a curator has to be able to say what it
+        # actually did.
+        try:
+            r = _curation(request, bot).record_published_wpid(pr_number, wpid, curator)
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except NotACurator as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         return _detail(r)
 
     @app.post("/api/pathways/{wpid}/release")
@@ -762,15 +940,34 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             payload = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail="invalid JSON") from exc
-        if payload.get("action") != "closed":
-            return {"ok": True, "ignored": f"action:{payload.get('action')}"}
+        action = payload.get("action")
+        if action not in ("closed", "labeled", "unlabeled"):
+            return {"ok": True, "ignored": f"action:{action}"}
 
         pr = payload.get("pull_request") or {}
         pr_number = payload.get("number") or pr.get("number")
         if pr_number is None:
             raise HTTPException(status_code=422, detail="no PR number in payload")
+        curation = _curation(request, bot)
+
+        if action in ("labeled", "unlabeled"):
+            # A curator may well reach for the label on GitHub rather than the dashboard — those
+            # labels are the target repo's own vocabulary. Recording it here is what keeps the
+            # two venues from diverging.
+            label = ((payload.get("label") or {}).get("name")) or ""
+            actor = (payload.get("sender") or {}).get("login") or "github"
+            review = curation.handle_label_event(
+                int(pr_number), label, added=(action == "labeled"), actor=actor
+            )
+            return {
+                "ok": True,
+                "pr_number": int(pr_number),
+                "label": label,
+                "applied": review is not None,
+            }
+
         merged = bool(pr.get("merged"))
-        review = _curation(request, bot).handle_pr_closed(int(pr_number), merged=merged)
+        review = curation.handle_pr_closed(int(pr_number), merged=merged)
         return {
             "ok": True,
             "pr_number": int(pr_number),
@@ -805,7 +1002,8 @@ class PathwayInfo(BaseModel):
 
 class ReviewSummary(BaseModel):
     pr_number: int
-    wpid: int
+    #: None until the target repo assigns one (pipeline mode); see Review.wpid.
+    wpid: int | None = None
     submitter: str
     kind: str
     status: str
