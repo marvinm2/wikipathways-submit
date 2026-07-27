@@ -113,12 +113,29 @@ def assign_wpid(
     submitter. meta-data-action dereferences that attribute unconditionally, so a file without
     it crashes the generator and the PR preview loses its metadata tables.
     """
+    return assign_wpid_str(content, f"WP{wpid}", revision=revision, author=author)
+
+
+def assign_wpid_str(
+    content: bytes | str,
+    wpid_str: str,
+    *,
+    revision: str | None = None,
+    author: str | None = None,
+) -> str:
+    """``assign_wpid`` for an identifier that is not a plain integer.
+
+    Exists for the placeholder a pipeline-mode submission carries before the target repo assigns
+    a real id: the file is committed as ``WP0001.gpml``, so the ``Version`` attribute has to say
+    ``WP0001`` too. Going through ``assign_wpid(1)`` would write ``WP1`` — a different, real
+    pathway — and leave the file and its own metadata disagreeing.
+    """
     text = _as_text(content)
     m = _PATHWAY_TAG_RE.search(text)
     if not m:
         raise InvalidGpml("no <Pathway> root element found")
     rev = revision or _now_revision()
-    version_value = f"WP{wpid}_{rev}"
+    version_value = f"{wpid_str}_{rev}"
     tag = m.group(0)
     if re.search(r'\bVersion="[^"]*"', tag):
         new_tag = re.sub(r'\bVersion="[^"]*"', f'Version="{version_value}"', tag, count=1)
@@ -137,3 +154,10 @@ def layout_paths(wpid: int) -> dict[str, str]:
     """
     base = f"pathways/WP{wpid}"
     return {"gpml": f"{base}/WP{wpid}.gpml"}
+
+
+#: The id a new pathway carries until the target repo assigns a real one (pipeline mode).
+#: ``WP1`` was never available — ``pathways/WP1/`` is a real pathway — and the target repo's own
+#: test submission used ``WP0001``, so this matches what its maintainers already expect.
+PLACEHOLDER_WPID_STR = "WP0001"
+PLACEHOLDER_GPML_PATH = f"pathways/{PLACEHOLDER_WPID_STR}/{PLACEHOLDER_WPID_STR}.gpml"
