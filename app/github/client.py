@@ -44,6 +44,10 @@ class GitHubClient(ABC):
         """Return the blob SHA of ``path`` at ``ref`` (branch/sha), or None if absent."""
 
     @abstractmethod
+    def get_file_content(self, repo: str, ref: str, path: str) -> bytes | None:
+        """Return the raw bytes of ``path`` at ``ref`` (branch/sha), or None if absent."""
+
+    @abstractmethod
     def put_file(
         self,
         repo: str,
@@ -121,6 +125,7 @@ class FakeGitHubClient(GitHubClient):
         *,
         default_branches: dict[str, str] | None = None,
         existing_files: dict[str, str] | None = None,
+        existing_contents: dict[str, str] | None = None,
         fail_on: set[str] | None = None,
         team_members: dict[str, list[str]] | None = None,
         previews: dict[int, dict] | None = None,
@@ -136,6 +141,11 @@ class FakeGitHubClient(GitHubClient):
         for key, sha in (existing_files or {}).items():
             repo, path = key.split("#", 1)
             self.existing_files[(repo, path)] = sha
+        # Base-branch file *contents* (for get_file_content), seeded as {"repo#path": content}.
+        self.existing_contents: dict[tuple[str, str], str] = {}
+        for key, content in (existing_contents or {}).items():
+            repo, path = key.split("#", 1)
+            self.existing_contents[(repo, path)] = content
         # {(repo, branch, path): (content, message, sha)}
         self.files: dict[tuple[str, str, str], tuple[str, str, str | None]] = {}
         self.pulls: list[PullRequest] = []
@@ -173,6 +183,14 @@ class FakeGitHubClient(GitHubClient):
             return entry[2]
         # Not written on this branch yet → fall back to what exists in the repo base.
         return self.existing_files.get((repo, path))
+
+    def get_file_content(self, repo: str, ref: str, path: str) -> bytes | None:
+        self._maybe_fail("get_file_content")
+        entry = self.files.get((repo, ref, path))
+        if entry is not None:
+            return entry[0].encode("utf-8")
+        content = self.existing_contents.get((repo, path))
+        return content.encode("utf-8") if content is not None else None
 
     def put_file(
         self,
@@ -287,6 +305,17 @@ class HttpGitHubClient(GitHubClient):
             return None
         self._raise_for(resp, f"get_file_sha({path})")
         return resp.json()["sha"]
+
+    def get_file_content(self, repo: str, ref: str, path: str) -> bytes | None:
+        # The contents API inlines base64 for blobs up to 1 MB (GPML files are ~tens of KB).
+        resp = self._client.get(f"/repos/{repo}/contents/{path}", params={"ref": ref})
+        if resp.status_code == 404:
+            return None
+        self._raise_for(resp, f"get_file_content({path})")
+        body = resp.json()
+        if body.get("encoding") != "base64" or "content" not in body:
+            return None
+        return base64.b64decode(body["content"])
 
     def put_file(
         self,

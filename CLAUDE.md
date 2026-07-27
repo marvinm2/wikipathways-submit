@@ -42,11 +42,16 @@ repos.
   + finalises the reservation (MERGED if merged, returned to the pool if closed unmerged) +
   terminalises the review — idempotent, so a PR closed *outside* the app no longer waits for the
   TTL. TTL tuning against real behaviour remains open.
-  **The before/after pathway preview is wired** (issue #11, `app/preview/`): the app reads the
-  SVGs the PR-preview workflow uploads as a run artifact (via the bot's Actions read), extracts
-  `WP<id>-after.svg`/`WP<id>.svg` (after, prefers the dedicated `-after`) + `WP<id>-before.svg`
-  (before), caches them, and serves them at `GET /previews/{pr}/{before,after}.svg` (locked-down
-  CSP + sandbox so a hostile SVG can't run script). `_review_view` fills the dashboard `preview`
+  **The before/after pathway preview is wired** (issue #11, `app/preview/`), two sources with the
+  **in-app renderer preferred**: (1) **instant in-app render** (`app/preview/render.py`, 1a) — a
+  dependency-free GPML→SVG drawer runs at PR-creation time (`render_local`, wired into submit +
+  update via `_render_preview`), rendering the uploaded GPML as *after* and the base-`main` GPML
+  (fetched via the new `GitHubClient.get_file_content`) as *before*, cached to disk so the preview
+  is ready immediately with no CI wait; (2) fallback — the SVGs the PR-preview workflow uploads as
+  a run artifact (via the bot's Actions read), `WP<id>-after.svg`/`WP<id>.svg` + `WP<id>-before.svg`.
+  Both serve at `GET /previews/{pr}/{before,after}.svg` (locked-down CSP + sandbox so a hostile SVG
+  can't run script). Because 1a renders the live preview, **PinPath in CI is now optional** (its
+  slow R/Bioconductor render is no longer on the preview path; retire it when convenient). `_review_view` fills the dashboard `preview`
   slot from a cheap `PreviewService.status()`; bytes stream lazily. The renderer is external:
   `fork-staging` adds a **PinPath** (`drawGPML`) render step producing before+after SVGs
   (**validated on a real runner** 2026-07-26, fork PR #4 — #6 closed: needs `GITHUB_PAT` for the
