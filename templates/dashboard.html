@@ -182,6 +182,9 @@
     <p class="review-card__resolved review-card__resolved--closed">Closed without merging</p>
   {% elif is_curator %}
     {% set blocking = r.checklist | selectattr('required') | rejectattr('state', 'equalto', 'pass') | list %}
+    {% if r.status == 'changes_requested' %}
+    <p class="review-card__resolved review-card__resolved--changes">Changes requested &middot; waiting for the submitter to revise. Re-uploading re-opens review.</p>
+    {% endif %}
     <div class="review-card__actions">
       <label class="assign">
         <span>Assign reviewer</span>
@@ -193,9 +196,16 @@
           {% endfor %}
         </select>
       </label>
-      <button type="button" class="btn btn--approve"{% if blocking %} aria-disabled="true" disabled{% endif %}>
-        Approve &amp; merge
-      </button>
+      <div class="action-buttons">
+        <button type="button" class="btn btn--ghost btn--changes">Request changes</button>
+        <button type="button" class="btn btn--approve"{% if blocking %} aria-disabled="true" disabled{% endif %}>
+          Approve &amp; merge
+        </button>
+      </div>
+    </div>
+    <div class="changes-panel" hidden>
+      <textarea class="changes-note" rows="2" placeholder="What needs fixing? (optional — also posted as a comment on the PR)"></textarea>
+      <button type="button" class="btn btn--sm btn--changes-send">Send request</button>
     </div>
   {% else %}
     <p class="review-card__readonly">Only curators can update the checklist, assign a reviewer, or approve.</p>
@@ -213,6 +223,7 @@
   <nav class="queue-filter" aria-label="Filter by status">
     {% set current = request.query_params.get('status', 'open') if request else 'open' %}
     <a href="/dashboard?status=open"{% if current == 'open' %} aria-current="page"{% endif %}>Open</a>
+    <a href="/dashboard?status=changes_requested"{% if current == 'changes_requested' %} aria-current="page"{% endif %}>Changes requested</a>
     <a href="/dashboard?status=merged"{% if current == 'merged' %} aria-current="page"{% endif %}>Merged</a>
     <a href="/dashboard?status=closed"{% if current == 'closed' %} aria-current="page"{% endif %}>Closed</a>
   </nav>
