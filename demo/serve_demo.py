@@ -91,6 +91,16 @@ def make_demo_app():
     else:
         token, user, repo = _real_config()
 
+    # Real GitHub login: if you register an OAuth App and pass its credentials, the demo uses the
+    # actual "Log in with GitHub" flow (writes act as whoever logs in). Without them, a one-click
+    # shim signs you in as the token owner so the demo still runs offline / without an OAuth App.
+    oauth_id = os.environ.get("WPSUBMIT_GITHUB_OAUTH_CLIENT_ID")
+    oauth_secret = os.environ.get("WPSUBMIT_GITHUB_OAUTH_CLIENT_SECRET")
+    real_login = bool(oauth_id and oauth_secret) and not fake_mode
+    redirect_uri = os.environ.get(
+        "WPSUBMIT_DEMO_OAUTH_REDIRECT", "http://localhost:8000/auth/callback"
+    )
+
     settings = Settings(
         _env_file=None,  # ignore any local .env so the demo is self-contained
         database_url=f"sqlite:///{tmp / 'registry.db'}",
@@ -103,6 +113,9 @@ def make_demo_app():
         curators=[user],
         preview_cache_dir=str(tmp / "preview-cache"),
         session_secret="demo-only-not-secret",
+        github_oauth_client_id=oauth_id if real_login else None,
+        github_oauth_client_secret=oauth_secret if real_login else None,
+        oauth_redirect_uri=redirect_uri,
     )
     app = build_app(settings)
 
@@ -113,16 +126,31 @@ def make_demo_app():
         # A fresh real client per request (mirrors how the app builds one per user request).
         provider = lambda: HttpGitHubClient(token)  # noqa: E731
 
-    # One identity for everything: your token acts as submitter and as the "bot" (merge + mirror
-    # comment). On your own fork you can merge your own PRs, so this is enough for the demo.
-    app.dependency_overrides[get_github_client] = provider
+    # The bot identity (merge, mirror comment, review request) always runs as the token owner —
+    # on your own fork you can merge your own PRs, so this stands in for the GitHub App.
     app.dependency_overrides[get_bot_optional] = provider
     app.dependency_overrides[get_bot_client] = provider
-    app.dependency_overrides[get_current_user] = lambda: user
+
+    if real_login:
+        # Leave get_github_client / get_current_user to the real OAuth session, so writes are
+        # attributed to whoever logs in with GitHub. The real /auth/login flow handles login.
+        pass
+    else:
+        # Shim: one identity for everything, and make "Log in with GitHub" a one-click sign-in.
+        app.dependency_overrides[get_github_client] = provider
+        app.dependency_overrides[get_current_user] = lambda: user
+        app.router.routes = [
+            r for r in app.router.routes if getattr(r, "path", "") != "/auth/login"
+        ]
+
+        @app.get("/auth/login")
+        def demo_auth_login(request: Request):
+            request.session["gh_login"] = user
+            return RedirectResponse("/", status_code=303)
 
     @app.get("/demo/login")
     def demo_login(request: Request):
-        request.session["gh_login"] = user  # satisfies the landing-page "signed in" gate
+        request.session["gh_login"] = user  # escape hatch for shim mode
         return RedirectResponse("/", status_code=303)
 
     @app.get("/demo/logout")
@@ -130,7 +158,7 @@ def make_demo_app():
         request.session.clear()
         return RedirectResponse("/", status_code=303)
 
-    app.state._demo = {"user": user, "repo": repo, "fake": fake_mode}
+    app.state._demo = {"user": user, "repo": repo, "fake": fake_mode, "real_login": real_login}
     return app
 
 
@@ -140,12 +168,16 @@ if __name__ == "__main__":
     info = app.state._demo
     mode = "FAKE (offline, in-memory)" if info["fake"] else "REAL GitHub"
     print("\n  wikipathways-submit demo")
-    print(f"  mode : {mode}")
-    print(f"  as   : @{info['user']}")
-    print(f"  repo : {info['repo']}")
+    print(f"  mode  : {mode}")
+    print(f"  repo  : {info['repo']}")
+    if info["real_login"]:
+        print("  login : REAL GitHub OAuth — click 'Log in with GitHub'")
+        print("  open  : http://localhost:8000")
+    else:
+        print(f"  login : one-click shim as @{info['user']} (no OAuth App configured)")
+        print("  open  : http://localhost:8000  (click 'Log in with GitHub')")
     if not info["fake"]:
-        print("  NOTE : submitting/approving opens and merges REAL pull requests on that fork.")
-    print("  open : http://127.0.0.1:8000/demo/login")
+        print("  NOTE  : submitting/approving opens and merges REAL pull requests on that fork.")
     print("  (auto-reloads on code changes — no stale-server surprises)\n")
     # Auto-reload: the worker re-imports demo.serve_demo (rebuilding a fresh app) whenever the
     # app/templates/static/demo sources change, so edits during a session can't run stale.
