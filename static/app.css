@@ -344,22 +344,25 @@ main { flex: 1; }
 
 /* ---------- hero (index, anonymous) ---------- */
 .hero {
-  position: relative;
   padding: 3.5rem 0 2.5rem;
-  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3rem;
 }
+/* The mark sits beside the headline at full strength, never cropped: no absolute positioning,
+   no overflow clipping, and it drops out entirely when the column no longer fits. */
 .hero__graphic {
-  position: absolute;
-  top: 0; right: -1rem;
-  width: 26rem; height: 26rem;
-  color: var(--moss);
-  opacity: 0.11;
+  width: 17rem;
+  height: 17rem;
+  /* --ink, not black, so it stays the headline's colour and flips with the dark theme. */
+  color: var(--ink);
   pointer-events: none;
 }
-/* The mark is recognisable, so it is never cropped: below the breakpoint it goes away rather
-   than bleeding off the edge as half a logo. */
-@media (prefers-color-scheme: dark) { .hero__graphic { opacity: 0.16; } }
-@media (max-width: 860px) { .hero__graphic { display: none; } }
+@media (max-width: 860px) {
+  .hero { grid-template-columns: minmax(0, 1fr); }
+  .hero__graphic { display: none; }
+}
 .hero__eyebrow {
   display: inline-flex;
   align-items: center;
