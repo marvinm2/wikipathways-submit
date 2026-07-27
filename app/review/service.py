@@ -29,7 +29,9 @@ _PLAIN_STATUS = {
     "merged": "merged",
     "closed": "closed without merging",
 }
-_PLAIN_STATE = {"pass": "ok", "fail": "not ok", "pending": "not checked yet", "na": "not relevant"}
+#: Matches the pills in the dashboard and the PASS/FAIL column of the validation table that
+#: sits in the same pull request, so a reader sees one vocabulary, not three.
+_PLAIN_STATE = {"pass": "PASS", "fail": "FAIL", "pending": "PENDING", "na": "N/A"}
 
 #: How many times to re-read-and-retry a checklist write that lost the optimistic-version race
 #: (issue #15). Ample: contention is between a handful of curators on one review, not a hot loop.
