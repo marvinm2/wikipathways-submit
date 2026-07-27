@@ -22,6 +22,46 @@ class PullRequest:
     head_branch: str
 
 
+@dataclass(frozen=True)
+class PullRequestDetail:
+    """Everything the publication handshake needs from one PR read.
+
+    Deliberately a single fetch: reconciling a review against a target repo that publishes via
+    its own Actions needs the state, the merge flag, the labels and the body together, and doing
+    that as four calls would multiply the dashboard's request count by the size of the queue.
+    """
+
+    number: int
+    html_url: str
+    head_branch: str
+    head_sha: str
+    state: str  # "open" | "closed"
+    merged: bool
+    title: str
+    body: str
+    labels: list[str]
+    author: str
+
+
+@dataclass(frozen=True)
+class WorkflowRun:
+    id: int
+    html_url: str
+    status: str  # "queued" | "in_progress" | "completed"
+    conclusion: str | None  # "success" | "failure" | ... | None while running
+    created_at: str
+
+
+def _workflow_run(data: dict) -> WorkflowRun:
+    return WorkflowRun(
+        id=data["id"],
+        html_url=data.get("html_url", ""),
+        status=data.get("status", ""),
+        conclusion=data.get("conclusion"),
+        created_at=data.get("created_at", ""),
+    )
+
+
 class GitHubError(RuntimeError):
     """A GitHub operation failed."""
 
@@ -123,6 +163,59 @@ class GitHubClient(ABC):
         missing), ``"absent"`` (no such PR). Cheap: no artifact bytes are transferred.
         """
 
+    # --- Labels -------------------------------------------------------------------------
+    # On a target repo that publishes through its own Actions, a label is not decoration: its
+    # label dispatcher turns `accepted`/`rejected` into workflow runs. Applying one is the
+    # approval, so these are write operations with real consequences.
+
+    @abstractmethod
+    def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None:
+        """Add labels to an issue/PR, leaving existing ones in place."""
+
+    @abstractmethod
+    def remove_label(self, repo: str, issue_number: int, label: str) -> None:
+        """Remove one label. A label that isn't there is not an error."""
+
+    @abstractmethod
+    def list_labels(self, repo: str, issue_number: int) -> list[str]:
+        """Return the label names currently on an issue/PR."""
+
+    # --- Pull-request reads -------------------------------------------------------------
+
+    @abstractmethod
+    def get_pull_request(self, repo: str, pr_number: int) -> PullRequestDetail | None:
+        """Full PR state in one call, or None if it does not exist."""
+
+    @abstractmethod
+    def list_issue_comments(self, repo: str, issue_number: int) -> list[str]:
+        """Return the bodies of an issue/PR's comments, oldest first.
+
+        The target repo's publish workflow announces the assigned WPID in a comment, which
+        survives the PR-description rewrites its own pipeline performs.
+        """
+
+    @abstractmethod
+    def close_pull_request(self, repo: str, pr_number: int) -> None:
+        """Close a PR without merging."""
+
+    # --- Actions (read-only) ------------------------------------------------------------
+
+    @abstractmethod
+    def latest_workflow_run_for_pr(
+        self, repo: str, pr_number: int, *, workflow_file: str
+    ) -> WorkflowRun | None:
+        """Newest run of ``workflow_file`` against the PR's head SHA, or None if there is none."""
+
+    @abstractmethod
+    def recent_workflow_runs(
+        self, repo: str, workflow_file: str, *, limit: int = 5
+    ) -> list[WorkflowRun]:
+        """Newest runs of ``workflow_file``, whatever triggered them.
+
+        For display only. A ``workflow_dispatch`` run carries no head SHA or PR reference, so
+        there is no reliable way to join it to a review — never drive state from this.
+        """
+
 
 class FakeGitHubClient(GitHubClient):
     """In-memory GitHubClient for tests. Records every mutation; can simulate failures.
@@ -176,8 +269,16 @@ class FakeGitHubClient(GitHubClient):
         self.team_members = dict(team_members or {})
         # {pr_number: {"status": str}} — PR-preview CI state, the merge gate (issue #11).
         self.previews = dict(previews or {})
+        # {(repo, issue_number): {label, ...}}
+        self.labels: dict[tuple[str, int], set[str]] = {}
+        # [(repo, issue_number, "add"|"remove", label)] — ordered, so a test can assert that the
+        # reason comment was posted *before* the label that triggers the repo's workflow.
+        self.label_log: list[tuple[str, int, str, str]] = []
+        # {(repo, workflow_file): [WorkflowRun, ...]}, newest last.
+        self.workflow_runs: dict[tuple[str, str], list[WorkflowRun]] = {}
         self.fail_on = fail_on or set()
         self._next_pr = 1
+        self._next_run = 1000
 
     def _maybe_fail(self, op: str) -> None:
         if op in self.fail_on:
@@ -232,7 +333,10 @@ class FakeGitHubClient(GitHubClient):
     def find_open_pr(self, repo: str, head_branch: str) -> PullRequest | None:
         self._maybe_fail("find_open_pr")
         for pr in reversed(self.pulls):
-            if pr.head_branch == head_branch:
+            # "open" is part of the contract: the real client filters on state=open. Without
+            # this a revise would happily commit onto a branch whose PR the target repo's
+            # publish workflow already closed.
+            if pr.head_branch == head_branch and pr.number not in self.closed | self.merged:
                 return pr
         return None
 
@@ -287,6 +391,138 @@ class FakeGitHubClient(GitHubClient):
     ) -> str:
         self._maybe_fail("pr_preview_status")
         return self.previews.get(pr_number, {}).get("status", "absent")
+
+    def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None:
+        self._maybe_fail("add_labels")
+        current = self.labels.setdefault((repo, issue_number), set())
+        for label in labels:
+            current.add(label)
+            self.label_log.append((repo, issue_number, "add", label))
+
+    def remove_label(self, repo: str, issue_number: int, label: str) -> None:
+        self._maybe_fail("remove_label")
+        self.labels.setdefault((repo, issue_number), set()).discard(label)
+        self.label_log.append((repo, issue_number, "remove", label))
+
+    def list_labels(self, repo: str, issue_number: int) -> list[str]:
+        self._maybe_fail("list_labels")
+        return sorted(self.labels.get((repo, issue_number), set()))
+
+    def get_pull_request(self, repo: str, pr_number: int) -> PullRequestDetail | None:
+        self._maybe_fail("get_pull_request")
+        pr = next((p for p in self.pulls if p.number == pr_number), None)
+        if pr is None:
+            return None
+        meta = self.pull_meta.get(pr_number, {})
+        merged = pr_number in self.merged
+        return PullRequestDetail(
+            number=pr.number,
+            html_url=pr.html_url,
+            head_branch=pr.head_branch,
+            head_sha=self.branches.get((repo, pr.head_branch), f"sha-{pr.head_branch}"),
+            state="closed" if merged or pr_number in self.closed else "open",
+            merged=merged,
+            title=meta.get("title", ""),
+            body=meta.get("body", ""),
+            labels=sorted(self.labels.get((repo, pr_number), set())),
+            author=meta.get("author", ""),
+        )
+
+    def list_issue_comments(self, repo: str, issue_number: int) -> list[str]:
+        self._maybe_fail("list_issue_comments")
+        plain = self.issue_comments.get((repo, issue_number), [])
+        upserted = list(self.comments.get((repo, issue_number), {}).values())
+        return [*plain, *upserted]
+
+    def close_pull_request(self, repo: str, pr_number: int) -> None:
+        self._maybe_fail("close_pull_request")
+        self.closed.add(pr_number)
+
+    def latest_workflow_run_for_pr(
+        self, repo: str, pr_number: int, *, workflow_file: str
+    ) -> WorkflowRun | None:
+        self._maybe_fail("latest_workflow_run_for_pr")
+        runs = self.workflow_runs.get((repo, workflow_file), [])
+        return runs[-1] if runs else None
+
+    def recent_workflow_runs(
+        self, repo: str, workflow_file: str, *, limit: int = 5
+    ) -> list[WorkflowRun]:
+        self._maybe_fail("recent_workflow_runs")
+        runs = self.workflow_runs.get((repo, workflow_file), [])
+        return list(reversed(runs[-limit:]))
+
+    # --- Simulating the target repo's own pipeline --------------------------------------
+    # Modelled on wikipathways/sandbox-wp-db (docs/sandbox-pipeline.md). These exist because the
+    # whole integration is a handshake with workflows we do not run: label goes on, PR gets
+    # closed *unmerged*, and the assigned WPID comes back in a comment. Without a way to replay
+    # that sequence there is nothing to test.
+
+    def record_workflow_run(
+        self, repo: str, workflow_file: str, *, conclusion: str | None = "success"
+    ) -> WorkflowRun:
+        run = WorkflowRun(
+            id=self._next_run,
+            html_url=f"https://github.com/{repo}/actions/runs/{self._next_run}",
+            status="completed" if conclusion else "in_progress",
+            conclusion=conclusion,
+            created_at="2026-07-27T12:00:00Z",
+        )
+        self._next_run += 1
+        self.workflow_runs.setdefault((repo, workflow_file), []).append(run)
+        return run
+
+    def simulate_workflow1(
+        self,
+        repo: str,
+        pr_number: int,
+        *,
+        ok: bool = True,
+        workflow_file: str = "1_on_pull_request.yml",
+    ) -> None:
+        """The target repo's PR processor: it rewrites the PR body wholesale, twice.
+
+        The body clobbering is the point — it is why the app's durable record is a comment and
+        not the description.
+        """
+        meta = self.pull_meta.setdefault(pr_number, {})
+        meta["body"] = (
+            f"## Pathway Information\n\n**WPID**: WP0__PR{pr_number}\n\n---\n"
+            if ok
+            else "\n## Pathway Information\n\nProcessing...\n"
+        )
+        self.record_workflow_run(repo, workflow_file, conclusion="success" if ok else "failure")
+
+    def simulate_3a(
+        self,
+        repo: str,
+        pr_number: int,
+        *,
+        wpid: int | None,
+        marker: str = "<!-- wikipathways-publish ",
+    ) -> None:
+        """The target repo's publish workflow: announce the WPID, then close **unmerged**.
+
+        ``wpid=None`` replays the failure this repo has actually shown — the PR gets closed with
+        no announcement, so the app has to notice rather than assume success.
+        """
+        if wpid is not None:
+            self.create_issue_comment(
+                repo,
+                pr_number,
+                f'{marker}{{"pr":{pr_number},"wpid":{wpid},"status":"published"}} -->\n'
+                f"Published as WP{wpid}.",
+            )
+        self.closed.add(pr_number)
+
+    def simulate_3b(self, repo: str, pr_number: int) -> None:
+        """The target repo's rejection workflow: comment, then close unmerged."""
+        self.create_issue_comment(repo, pr_number, "This pull request has been rejected.")
+        self.closed.add(pr_number)
+
+    def simulate_dispatcher_failure(self, repo: str, pr_number: int) -> None:
+        """The label goes on and nothing happens. Historically the most likely outcome."""
+        return None
 
 
 @dataclass
@@ -415,15 +651,93 @@ class HttpGitHubClient(GitHubClient):
         # GitHubError so the caller can swallow it without failing the app-side assignment.
         self._raise_for(resp, f"request_pr_reviewer({reviewer})")
 
-    def get_pull_request_state(self, repo: str, pr_number: int) -> str | None:
+    def get_pull_request(self, repo: str, pr_number: int) -> PullRequestDetail | None:
         resp = self._client.get(f"/repos/{repo}/pulls/{pr_number}")
         if resp.status_code == 404:
             return None
-        self._raise_for(resp, f"get_pull_request_state({pr_number})")
+        self._raise_for(resp, f"get_pull_request({pr_number})")
         data = resp.json()
-        if data.get("merged"):
-            return "merged"
-        return data.get("state")  # "open" | "closed"
+        return PullRequestDetail(
+            number=data["number"],
+            html_url=data.get("html_url", ""),
+            head_branch=(data.get("head") or {}).get("ref", ""),
+            head_sha=(data.get("head") or {}).get("sha", ""),
+            state=data.get("state", ""),
+            merged=bool(data.get("merged")),
+            title=data.get("title") or "",
+            body=data.get("body") or "",
+            labels=[label["name"] for label in data.get("labels") or []],
+            author=(data.get("user") or {}).get("login", ""),
+        )
+
+    def get_pull_request_state(self, repo: str, pr_number: int) -> str | None:
+        detail = self.get_pull_request(repo, pr_number)
+        if detail is None:
+            return None
+        return "merged" if detail.merged else detail.state  # "open" | "closed"
+
+    def list_issue_comments(self, repo: str, issue_number: int) -> list[str]:
+        bodies: list[str] = []
+        page = 1
+        while True:
+            resp = self._client.get(
+                f"/repos/{repo}/issues/{issue_number}/comments",
+                params={"per_page": 100, "page": page},
+            )
+            self._raise_for(resp, f"list_issue_comments({issue_number})")
+            batch = resp.json()
+            bodies.extend(c.get("body") or "" for c in batch)
+            if len(batch) < 100:
+                return bodies
+            page += 1
+
+    def close_pull_request(self, repo: str, pr_number: int) -> None:
+        resp = self._client.patch(f"/repos/{repo}/pulls/{pr_number}", json={"state": "closed"})
+        self._raise_for(resp, f"close_pull_request({pr_number})")
+
+    def add_labels(self, repo: str, issue_number: int, labels: list[str]) -> None:
+        # Labels live on the Issues API even for a PR, so this needs Issues:write on the App.
+        resp = self._client.post(
+            f"/repos/{repo}/issues/{issue_number}/labels", json={"labels": labels}
+        )
+        self._raise_for(resp, f"add_labels({labels})")
+
+    def remove_label(self, repo: str, issue_number: int, label: str) -> None:
+        resp = self._client.delete(f"/repos/{repo}/issues/{issue_number}/labels/{label}")
+        if resp.status_code == 404:
+            return  # not on the PR — the caller's intent is already satisfied
+        self._raise_for(resp, f"remove_label({label})")
+
+    def list_labels(self, repo: str, issue_number: int) -> list[str]:
+        resp = self._client.get(
+            f"/repos/{repo}/issues/{issue_number}/labels", params={"per_page": 100}
+        )
+        self._raise_for(resp, f"list_labels({issue_number})")
+        return [label["name"] for label in resp.json()]
+
+    def latest_workflow_run_for_pr(
+        self, repo: str, pr_number: int, *, workflow_file: str
+    ) -> WorkflowRun | None:
+        detail = self.get_pull_request(repo, pr_number)
+        if detail is None:
+            return None
+        resp = self._client.get(
+            f"/repos/{repo}/actions/workflows/{workflow_file}/runs",
+            params={"head_sha": detail.head_sha, "per_page": 1},
+        )
+        self._raise_for(resp, "list_workflow_runs")
+        items = resp.json().get("workflow_runs", [])
+        return _workflow_run(items[0]) if items else None
+
+    def recent_workflow_runs(
+        self, repo: str, workflow_file: str, *, limit: int = 5
+    ) -> list[WorkflowRun]:
+        resp = self._client.get(
+            f"/repos/{repo}/actions/workflows/{workflow_file}/runs",
+            params={"per_page": limit},
+        )
+        self._raise_for(resp, "recent_workflow_runs")
+        return [_workflow_run(run) for run in resp.json().get("workflow_runs", [])]
 
     def merge_pull_request(self, repo: str, pr_number: int, *, method: str = "squash") -> None:
         resp = self._client.put(
@@ -478,25 +792,14 @@ class HttpGitHubClient(GitHubClient):
 
         status ∈ pending|success|failed|absent; run_id is None unless the run completed OK.
         """
-        pr = self._client.get(f"/repos/{repo}/pulls/{pr_number}")
-        if pr.status_code == 404:
+        if self.get_pull_request(repo, pr_number) is None:
             return "absent", None
-        self._raise_for(pr, f"get_pull({pr_number})")
-        head_sha = pr.json()["head"]["sha"]
-        runs = self._client.get(
-            f"/repos/{repo}/actions/workflows/{workflow_file}/runs",
-            params={"head_sha": head_sha, "per_page": 1},
-        )
-        self._raise_for(runs, "list_workflow_runs")
-        items = runs.json().get("workflow_runs", [])
-        if not items:
+        run = self.latest_workflow_run_for_pr(repo, pr_number, workflow_file=workflow_file)
+        if run is None or run.status != "completed":
             return "pending", None
-        run = items[0]
-        if run.get("status") != "completed":
-            return "pending", None
-        if run.get("conclusion") != "success":
+        if run.conclusion != "success":
             return "failed", None
-        return "success", run["id"]
+        return "success", run.id
 
     def _preview_artifact_id(self, repo: str, run_id: int, artifact_name: str) -> int | None:
         resp = self._client.get(f"/repos/{repo}/actions/runs/{run_id}/artifacts")

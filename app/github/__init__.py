@@ -12,6 +12,8 @@ from app.github.client import (
     GitHubError,
     HttpGitHubClient,
     PullRequest,
+    PullRequestDetail,
+    WorkflowRun,
 )
 
 __all__ = [
@@ -21,4 +23,6 @@ __all__ = [
     "GitHubError",
     "HttpGitHubClient",
     "PullRequest",
+    "PullRequestDetail",
+    "WorkflowRun",
 ]
