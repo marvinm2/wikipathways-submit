@@ -362,6 +362,39 @@
       return;
     }
 
+    var reviseBtn = e.target.closest('.btn--revise');
+    if (reviseBtn) {
+      var cardR = reviseBtn.closest('.review-card');
+      var prR = cardR.getAttribute('data-pr');
+      var fileEl = cardR.querySelector('.revise-file');
+      if (!fileEl || !fileEl.files || !fileEl.files.length) {
+        toast('Choose a GPML file first.', 'error');
+        return;
+      }
+      reviseBtn.disabled = true;
+      reviseBtn.textContent = 'Uploading\u2026';
+      postForm('/api/reviews/' + prR + '/revise', { file: fileEl.files[0] })
+        .then(function (res) {
+          if (res.ok) {
+            toast('Revision committed onto pull request #' + res.body.pr_number + '.', 'ok');
+            setTimeout(function () { location.reload(); }, 900);
+            return;
+          }
+          // 422 carries the per-reason validation list; anything else has a plain detail string.
+          var d = res.body && res.body.detail;
+          var msg = d && d.errors ? d.errors.join('; ') : (d || 'Upload failed.');
+          toast(msg, 'error');
+          reviseBtn.disabled = false;
+          reviseBtn.textContent = 'Commit onto this pull request';
+        })
+        .catch(function () {
+          toast('Could not reach the server. Try again.', 'error');
+          reviseBtn.disabled = false;
+          reviseBtn.textContent = 'Commit onto this pull request';
+        });
+      return;
+    }
+
     var sendBtn = e.target.closest('.btn--changes-send');
     if (sendBtn) {
       var card3 = sendBtn.closest('.review-card');

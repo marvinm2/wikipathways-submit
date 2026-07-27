@@ -224,6 +224,17 @@
         </button>
       </div>
     </div>
+    {# Without this the loop has no closing move: a curator asks for changes and the submitter
+       has nowhere in the portal to answer, which is the whole reason they are not using git. #}
+    {% if expanded and r.kind == 'new' and r.status in ('changes_requested', 'open') %}
+    <div class="revise-panel">
+      <label class="revise-panel__label" for="revise-{{ r.pr_number }}">Upload a revision</label>
+      <input type="file" id="revise-{{ r.pr_number }}" class="revise-file" accept=".gpml,application/xml,text/xml">
+      <button type="button" class="btn btn--sm btn--revise">Commit onto this pull request</button>
+      <p class="revise-panel__hint">Replaces the file on the existing branch. No new pull request is opened, and the review returns to the queue.</p>
+    </div>
+    {% endif %}
+
     <div class="changes-panel" hidden>
       <textarea class="changes-note" rows="2" placeholder="What needs fixing? (optional, also posted as a comment on the pull request)"></textarea>
       <button type="button" class="btn btn--sm btn--changes-send">Send request</button>

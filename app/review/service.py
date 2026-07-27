@@ -338,7 +338,7 @@ class CurationService:
             review.status = ReviewStatus.CHANGES_REQUESTED
             s.commit()
             if self._github is not None:
-                body = f"@{curator} asked for changes before this can be merged."
+                body = f"@{curator} asked for changes before this can be accepted."
                 if note.strip():
                     body += f"\n\n{note.strip()}"
                 body += (

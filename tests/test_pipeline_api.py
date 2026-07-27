@@ -234,3 +234,18 @@ def test_the_approve_button_does_not_promise_a_merge(tmp_path):
 
     assert "Approve for publication" in page
     assert "Approve &amp; merge" not in page
+
+
+def test_the_review_page_offers_a_revision_upload(tmp_path):
+    # Without this the loop has no closing move: a curator asks for changes and the submitter
+    # has nowhere in the portal to answer.
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        body = _submit(client)
+        pr = body["pr_number"]
+        client.post(f"/api/reviews/{pr}/request-changes", data={"note": "annotate IRS1"})
+        _login(client, "marvinm2")
+        page = client.get(f"/dashboard/{pr}").text
+
+    assert 'class="revise-file"' in page
+    assert "Commit onto this pull request" in page

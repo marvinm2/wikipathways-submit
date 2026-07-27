@@ -1008,3 +1008,10 @@ main { flex: 1; }
   color: var(--amber);
   border-left-color: var(--amber);
 }
+
+/* Revision upload on an open new-pathway review — the submitter's way to answer a change
+   request without touching git, which is the point of the portal. */
+.revise-panel { margin: 0 0 1.1rem; padding: 0.9rem 1rem; border: 1px dashed var(--line); border-radius: 10px; }
+.revise-panel__label { display: block; font-size: 0.82rem; font-weight: 600; margin-bottom: 0.5rem; }
+.revise-panel__hint { margin: 0.5rem 0 0; font-size: 0.82rem; color: var(--ink-muted); }
+.revise-file { display: block; margin-bottom: 0.6rem; font-size: 0.85rem; }
