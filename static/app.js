@@ -124,6 +124,41 @@
     });
   }
 
+  var updateBtn0 = document.getElementById('update-btn');
+  if (updateBtn0) {
+    updateBtn0.addEventListener('click', function (e) {
+      e.preventDefault();
+      var wpid = (document.getElementById('update-wpid').value || '').trim().replace(/^WP/i, '');
+      var file = document.getElementById('update-file').files[0];
+      if (!/^\d+$/.test(wpid)) { toast('Enter a numeric WPID, like 554.', 'error'); return; }
+      if (!file) { toast('Choose a .gpml file first.', 'error'); return; }
+      var btn = document.getElementById('update-btn');
+      btn.disabled = true;
+      btn.textContent = 'Submitting…';
+      var fd = new FormData();
+      fd.append('file', file);
+      fetch('/api/pathways/' + wpid + '/update', { method: 'POST', body: fd })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
+        .then(function (res) {
+          btn.disabled = false;
+          btn.textContent = 'Submit update';
+          if (!res.ok) { toast(describeError(res.status, res.body), 'error'); return; }
+          var out = document.getElementById('update-result');
+          out.innerHTML =
+            'Updated <strong>' + res.body.wpid + '</strong>. Opened pull request ' +
+            '<a href="' + res.body.pr_url + '" target="_blank" rel="noopener">#' + res.body.pr_number + '</a> ' +
+            '(<code>' + res.body.path + '</code>). <a href="/dashboard">Go to the dashboard</a>.';
+          out.hidden = false;
+          toast('Update submitted.', 'success');
+        })
+        .catch(function () {
+          btn.disabled = false;
+          btn.textContent = 'Submit update';
+          toast('Could not reach the server. Try again.', 'error');
+        });
+    });
+  }
+
   // ---------- review cards (dashboard.html / review_detail.html) ----------
   function recomputeApprove(card) {
     var approveBtn = card.querySelector('.btn--approve');

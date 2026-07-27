@@ -472,6 +472,39 @@ main { flex: 1; }
 }
 .file-field input[type="file"]::file-selector-button:hover { border-color: var(--moss); }
 
+/* Update an existing pathway */
+.update-card { margin-top: 1.25rem; }
+.update-fields {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin: 1rem 0;
+}
+.update-fields .file-field { margin: 0; flex: 1 1 14rem; }
+.wpid-field { display: flex; flex-direction: column; gap: 0.35rem; flex: none; }
+.wpid-field__label {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+}
+.wpid-field input {
+  width: 8rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+.wpid-field input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-color: var(--focus);
+}
+
 .preview-card {
   margin-top: 1rem;
   border: 1px dashed var(--line-strong);
