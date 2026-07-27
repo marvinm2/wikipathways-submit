@@ -1068,6 +1068,9 @@ jobs:
           ## Copy to _authors
           if [ -d "authors" ]; then
             cp authors/*.md wikipathways.github.io/_authors/.
+            # sandbox-wp.gh.io has no scripts/ directory; the copy below created
+            # nothing and failed the job on a first-time contributor.
+            mkdir -p wikipathways.github.io/scripts
             cp authors/author_list.csv wikipathways.github.io/scripts/.
           fi
 

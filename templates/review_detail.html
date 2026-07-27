@@ -1,5 +1,8 @@
 {% extends "base.html" %}
-{% from "dashboard.html" import review_card %}
+{# `with context` matters: an imported macro cannot see the calling template's context without
+   it, so anything the macro reads from the page context — the target repo's name, for one —
+   silently renders empty here while working on the queue page, where the macro is local. #}
+{% from "dashboard.html" import review_card with context %}
 {% block title %}{{ review.wpid_str }} &middot; PR #{{ review.pr_number }} &middot; WikiPathways portal{% endblock %}
 
 {% block content %}

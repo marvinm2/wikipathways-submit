@@ -500,9 +500,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     ):
         curation = _curation(request, bot)
         try:
-            r = curation.get(pr_number)
+            curation.get(pr_number)
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # This page is reached directly as often as it is reached from the queue — a link in a
+        # comment, a refresh after acting — so it cannot rely on a queue load having run.
+        curation.reconcile_review(pr_number)
         # Fill in whatever the target repo's pipeline has already worked out, so the curator is
         # confirming answers rather than deriving them. Best-effort, and it never overwrites a
         # state a curator set by hand.
@@ -511,11 +514,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # <BiopaxRef> actually points at, so comparing its output against every PublicationXref
         # in the file reports a shortfall that is not one — and that item is required, so the
         # false FAIL would block approval and read as the submitter's fault.
-        refreshed = curation.refresh_pipeline_checks(
+        curation.refresh_pipeline_checks(
             pr_number,
             gpml_reference_count=getattr(meta, "cited_reference_count", None) if meta else None,
         )
-        r = refreshed or r
+        # Read the row last. Both calls above write to it, and rendering the copy fetched before
+        # them would show the page as it was one refresh ago.
+        r = curation.get(pr_number)
         return templates.TemplateResponse(
             request,
             "review_detail.html",

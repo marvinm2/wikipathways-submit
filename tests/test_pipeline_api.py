@@ -167,3 +167,17 @@ def test_a_still_running_pipeline_shows_no_warning(pipeline_client):
     page = pipeline_client.get("/dashboard").text
 
     assert "could not process this pathway" not in page
+
+
+def test_the_review_page_names_the_target_repo_in_the_notice(pipeline_client):
+    # The card macro is imported into review_detail.html, and an imported macro sees none of the
+    # calling template's context without `with context` — so this rendered "could not process
+    # this pathway" with the repo name silently missing, but only on the detail page.
+    body = _submit(pipeline_client)
+    fake = pipeline_client.app.state._fake
+    fake.record_workflow_run(REPO, "1_on_pull_request.yml", conclusion="failure")
+    _login(pipeline_client, "marvinm2")
+
+    page = pipeline_client.get(f"/dashboard/{body['pr_number']}").text
+
+    assert f"{REPO} could not process this pathway" in page

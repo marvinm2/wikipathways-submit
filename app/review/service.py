@@ -762,6 +762,12 @@ class CurationService:
         the run dies early, the submitter silently loses their metadata tables and their draft
         page, and the only trace is a job several clicks into the Actions tab. Best-effort — this
         is a diagnostic, and never a reason to fail a reconcile.
+
+        Keyed on the pull request's head SHA, so it reports the run *this* revision triggered. A
+        run someone dispatched by hand carries the default branch's SHA and no reference to any
+        pull request, so it is invisible here — deliberately, since there is no reliable way to
+        join one to a review. In the ordinary flow that costs nothing: a revise pushes a new
+        commit, which starts a fresh run against the new head, and this follows it.
         """
         if not self.is_pipeline_mode or not self._pipeline_workflow_file:
             return None
@@ -844,6 +850,25 @@ class CurationService:
             s.commit()
             self._maybe_mirror(review)
         return True
+
+    def reconcile_review(self, pr_number: int) -> bool:
+        """Bring a single review in line with GitHub, honouring the same throttle.
+
+        The queue reconciles everything on load, but a review page reached directly — a link in
+        a comment, a bookmark, a page refresh after acting — would otherwise render from whatever
+        the last queue load happened to record, and show no upstream failure at all.
+        """
+        if self._github is None:
+            return False
+        cutoff = utcnow() - self._reconcile_min_interval
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            if review is None or review.status in self._TERMINAL:
+                return False
+            last = _aware(review.last_checked_at)
+        if last is not None and last > cutoff:
+            return False
+        return self._reconcile_one(pr_number)
 
     def reconcile(self) -> int:
         """Bring every non-terminal review in line with GitHub (issue #1).
