@@ -8,10 +8,11 @@ from app.submit.gpml import (
     parse_pathway_meta,
     validate_gpml,
 )
-from app.submit.service import SubmissionResult, SubmissionService
+from app.submit.service import NoPendingSubmission, SubmissionResult, SubmissionService
 
 __all__ = [
     "InvalidGpml",
+    "NoPendingSubmission",
     "PathwayMeta",
     "SubmissionResult",
     "SubmissionService",

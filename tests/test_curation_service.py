@@ -148,6 +148,26 @@ def test_request_changes_sets_status_and_posts_comment(session_factory):
     assert "Annotate the AKT1 node." in comments[0]
 
 
+def test_find_open_new_review_and_revise_rebuilds_checklist(session_factory):
+    from app.preview.metadata import parse_curation_metadata
+
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
+    svc.request_changes(1, "curator")
+    assert svc.find_open_new_review(5637).pr_number == 1
+
+    revised = (
+        '<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="X" Organism="Homo sapiens">'
+        '<DataNode TextLabel="INSR"><Xref Database="Ensembl" ID="ENSG00000171105"/></DataNode>'
+        "</Pathway>"
+    )
+    review = svc.revise(1, metadata=parse_curation_metadata(revised))
+    assert review.status == ReviewStatus.OPEN  # re-opened
+    dn = next(i for i in review.checklist if i["key"] == "datanodes_mapped")
+    assert dn["state"] == "pass" and dn["auto"] is True  # checklist rebuilt from new content
+
+
 def test_reupload_after_changes_requested_reopens_review(session_factory):
     svc = _service(session_factory)  # no github → comment step is skipped
     svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")

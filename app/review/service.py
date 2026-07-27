@@ -202,6 +202,32 @@ class CurationService:
         except (GitHubError, httpx.HTTPError):
             pass
 
+    def find_open_new_review(self, wpid: int) -> Review | None:
+        """The still-open (or changes-requested) new-pathway review for ``wpid``, if any — used to
+        route a re-upload of that WPID to the revise flow."""
+        with self._session_factory() as s:
+            return s.execute(
+                select(Review).where(
+                    Review.wpid == wpid,
+                    Review.kind == "new",
+                    Review.status.in_([ReviewStatus.OPEN, ReviewStatus.CHANGES_REQUESTED]),
+                )
+            ).scalars().first()
+
+    def revise(self, pr_number: int, metadata=None) -> Review:
+        """A revision landed on a review's PR: re-open it and rebuild the checklist from the new
+        metadata, so the curator re-reviews the changed content from a fresh auto-derived baseline.
+        """
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            if review is None:
+                raise ReviewNotFound(f"no review for PR #{pr_number}")
+            review.status = ReviewStatus.OPEN
+            review.checklist = build_checklist(metadata=metadata, kind=review.kind)
+            s.commit()
+            self._maybe_mirror(review)
+            return review
+
     def request_changes(self, pr_number: int, curator: str, note: str = "") -> Review:
         """Ask the submitter to revise: move the review to CHANGES_REQUESTED and post the note as a
         PR comment so it reaches them on GitHub. The lock/reservation stay held — the PR is still
