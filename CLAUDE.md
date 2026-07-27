@@ -15,7 +15,7 @@ repos.
 - `mvp1/` + `fork-staging/` — MVP-1 PR-preview pipeline (two GitHub Actions workflows +
   `validate_pathway.py`), adversarially reviewed and hardened. Ships to a **fork** of
   `wikipathways-database`; `fork-staging/CHECKLIST.md` is the test procedure. See `mvp1/README.md`.
-- `app/` — the FastAPI app (MVP-2 → MVP-4). Implemented + tested (96 tests): the transactional
+- `app/` — the FastAPI app (MVP-2 → MVP-4). Implemented + tested (147 tests): the transactional
   registry (`app/wpid/` atomic allocator, `app/locks/` pathway check-out lock — both with
   threaded race tests), app-owned GPML naming/layout (`app/submit/gpml.py`), the `GitHubClient`
   abstraction (`app/github/` — ABC + `FakeGitHubClient` + httpx impl), the **submission service**
@@ -50,13 +50,15 @@ repos.
   is ready immediately with no CI wait; (2) fallback — the SVGs the PR-preview workflow uploads as
   a run artifact (via the bot's Actions read), `WP<id>-after.svg`/`WP<id>.svg` + `WP<id>-before.svg`.
   Both serve at `GET /previews/{pr}/{before,after}.svg` (locked-down CSP + sandbox so a hostile SVG
-  can't run script). Because 1a renders the live preview, **PinPath in CI is now optional** (its
-  slow R/Bioconductor render is no longer on the preview path; retire it when convenient). `_review_view` fills the dashboard `preview`
-  slot from a cheap `PreviewService.status()`; bytes stream lazily. The renderer is external:
-  `fork-staging` adds a **PinPath** (`drawGPML`) render step producing before+after SVGs
-  (**validated on a real runner** 2026-07-26, fork PR #4 — #6 closed: needs `GITHUB_PAT` for the
-  GitHub install and R `release` since PinPath v0.99.x requires R ≥ 4.6.0; PinPath runs before
-  validation and its `-after.svg` counts as the render, since gpmlconverter's SVG is upstream-broken).
+  can't run script). `_review_view` fills the dashboard `preview` slot from a cheap
+  `PreviewService.status()`; bytes stream lazily.
+  **CI draws no image at all** (2026-07-27): PinPath was retired once 1a existed, and
+  `pr-preview.yml` now converts to **pvjson only** — a GPML `gpml2pvjson` refuses is broken, so
+  the `.json` is a validity signal, not a picture. A PR comment cannot embed an artifact anyway,
+  and camo refuses SVG, so an image in the PR would need deployment plus a PNG endpoint. That
+  makes source (2) dead code — remove it when convenient. Marvin's call: the PR does not need an
+  image; it carries the validation and metadata tables, and `WPSUBMIT_APP_BASE_URL` (when set)
+  links the mirror comment to the dashboard page that holds the render.
   **Alembic is wired** (issue #2): `migrations/` + `alembic.ini`; `create_all` now runs **only**
   for SQLite dev, Postgres deploys run `alembic upgrade head` (`docs/migrations.md`); a test
   asserts zero drift between the migration and the models. Checklist/assign endpoints are now
