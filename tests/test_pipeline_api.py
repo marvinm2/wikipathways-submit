@@ -181,3 +181,45 @@ def test_the_review_page_names_the_target_repo_in_the_notice(pipeline_client):
     page = pipeline_client.get(f"/dashboard/{body['pr_number']}").text
 
     assert f"{REPO} could not process this pathway" in page
+
+
+def test_revise_commits_onto_the_same_pr_without_a_wpid(pipeline_client):
+    # The revise route is keyed by pull request, not WPID: in pipeline mode a new submission has
+    # no id until the target repo publishes it, so there is nothing to look it up by.
+    body = _submit(pipeline_client)
+    pr, branch = body["pr_number"], None
+    factory = pipeline_client.app.state.session_factory
+    with factory() as s:
+        branch = s.get(Review, pr).head_branch
+
+    revised = pipeline_client.post(
+        f"/api/reviews/{pr}/revise",
+        files={"file": ("mito.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        data={"description": "added identifiers"},
+    )
+
+    assert revised.status_code == 201, revised.text
+    assert revised.json()["pr_number"] == pr  # same PR, no second one
+    assert revised.json()["wpid"] == "WP0001"
+    fake = pipeline_client.app.state._fake
+    # Committed onto the branch recorded at submission, which carries a timestamp and could not
+    # have been derived.
+    content, message, _ = fake.files[(REPO, branch, "pathways/WP0001/WP0001.gpml")]
+    assert message == "Revise WP0001"
+    assert 'Version="WP0001_r' in content
+
+
+def test_revise_refuses_an_update_review(pipeline_client):
+    body = _submit(pipeline_client)
+    pr = body["pr_number"]
+    factory = pipeline_client.app.state.session_factory
+    with factory() as s:
+        s.get(Review, pr).kind = "update"
+        s.commit()
+
+    resp = pipeline_client.post(
+        f"/api/reviews/{pr}/revise",
+        files={"file": ("mito.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+    )
+
+    assert resp.status_code == 409

@@ -717,23 +717,31 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             path=result.path,
         )
 
-    @app.post("/api/pathways/{wpid}/revise", response_model=SubmitResponse, status_code=201)
-    async def revise(
+    @app.post("/api/reviews/{pr_number}/revise", response_model=SubmitResponse, status_code=201)
+    async def revise_review(
         request: Request,
-        wpid: int,
+        pr_number: int,
         file: UploadFile,
         description: str = Form(""),
         submitter: str = Depends(get_current_user),
         github: GitHubClient = Depends(get_github_client),
         bot: GitHubClient | None = Depends(get_bot_optional),
     ) -> SubmitResponse:
-        """Commit a revised GPML onto an open new-pathway PR and re-open its review."""
+        """Commit a revised GPML onto an open new-pathway PR and re-open its review.
+
+        Keyed by pull request, not by WPID: in pipeline mode a new submission has no id until
+        the target repo publishes it, so there is nothing to look it up by until then.
+        """
         content = await file.read()
         curation = _curation(request, bot)
-        review = curation.find_open_new_review(wpid)
-        if review is None:
+        try:
+            review = curation.get(pr_number)
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if review.kind != "new":
             raise HTTPException(
-                status_code=404, detail=f"WP{wpid} has no open submission to revise"
+                status_code=409,
+                detail="this is an update, not a new submission; upload it as an update instead",
             )
         if review.submitter != submitter and not request.app.state.curators.is_curator(submitter):
             raise HTTPException(
@@ -741,12 +749,19 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             )
         service = SubmissionService(
             request.app.state.allocator,
-            github,
+            _writer_client(settings, github, bot),
             repo=settings.content_repo,
             base_branch=settings.default_branch,
+            mode=SubmissionMode(settings.publish_mode),
         )
         try:
-            result = service.revise_new_pathway(wpid=wpid, gpml=content, submitter=submitter)
+            result = service.revise_new_pathway(
+                gpml=content,
+                submitter=submitter,
+                wpid=review.wpid,
+                branch=review.head_branch,
+                author_email=_submitter_email(settings, submitter),
+            )
         except InvalidGpml as exc:
             raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc
         except NoPendingSubmission as exc:

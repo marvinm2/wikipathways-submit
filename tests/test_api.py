@@ -233,7 +233,7 @@ def test_revise_new_submission_end_to_end(tmp_path):
             "/api/submit",
             files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
         ).json()
-        pr, wnum = sub["pr_number"], sub["wpid"].replace("WP", "")
+        pr = sub["pr_number"]
 
         current["user"] = "curator"
         c.post(f"/api/reviews/{pr}/request-changes", data={"note": "annotate the nodes"})
@@ -242,7 +242,7 @@ def test_revise_new_submission_end_to_end(tmp_path):
         # A stranger cannot revise someone else's submission.
         current["user"] = "mallory"
         forbidden = c.post(
-            f"/api/pathways/{wnum}/revise",
+            f"/api/reviews/{pr}/revise",
             files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
         )
         assert forbidden.status_code == 403
@@ -250,7 +250,7 @@ def test_revise_new_submission_end_to_end(tmp_path):
         # The submitter revises → commits onto the SAME PR and re-opens the review.
         current["user"] = "bob"
         rev = c.post(
-            f"/api/pathways/{wnum}/revise",
+            f"/api/reviews/{pr}/revise",
             files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
             data={"description": "added identifiers"},
         )
@@ -264,7 +264,7 @@ def test_revise_without_pending_submission_404(tmp_path):
     with TestClient(app) as c:
         current["user"] = "bob"
         r = c.post(
-            "/api/pathways/9999/revise",
+            "/api/reviews/9999/revise",
             files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
         )
         assert r.status_code == 404
