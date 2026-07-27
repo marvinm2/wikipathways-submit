@@ -223,3 +223,14 @@ def test_revise_refuses_an_update_review(pipeline_client):
     )
 
     assert resp.status_code == 409
+
+
+def test_the_approve_button_does_not_promise_a_merge(tmp_path):
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        body = _submit(client)
+        _login(client, "marvinm2")
+        page = client.get(f"/dashboard/{body['pr_number']}").text
+
+    assert "Approve for publication" in page
+    assert "Approve &amp; merge" not in page

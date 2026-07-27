@@ -216,8 +216,11 @@
       </label>
       <div class="action-buttons">
         <button type="button" class="btn btn--ghost btn--changes">Request changes</button>
+        {# "merge" is wrong wherever the target repository publishes through its own Actions:
+           approving applies a label there and nothing is ever merged, so promising a merge sets
+           the curator up to go looking for one. #}
         <button type="button" class="btn btn--approve"{% if blocking %} aria-disabled="true" disabled{% endif %}>
-          Approve &amp; merge
+          {% if pipeline_mode %}Approve for publication{% else %}Approve &amp; merge{% endif %}
         </button>
       </div>
     </div>

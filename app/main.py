@@ -376,6 +376,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             # Every page's footer names the target repo, so it belongs in the shared context
             # rather than in each route that happens to remember to pass it.
             "repo": settings.content_repo,
+            # Changes what approval *means* on screen: a label handed to the repository, not a
+            # merge this app performs.
+            "pipeline_mode": settings.is_pipeline_mode,
         }
 
     def _review_view(request: Request, r) -> dict:
