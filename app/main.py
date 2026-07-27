@@ -550,6 +550,26 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             path=result.path,
         )
 
+    @app.get("/api/pathways/{wpid}", response_model=PathwayInfo)
+    def pathway_info(
+        request: Request,
+        wpid: int,
+        github: GitHubClient = Depends(get_github_client),
+    ) -> PathwayInfo:
+        """Does ``WP<wpid>`` exist on the base branch? Backs the update form's presence check."""
+        path = layout_paths(wpid)["gpml"]
+        try:
+            content = github.get_file_content(
+                settings.content_repo, settings.default_branch, path
+            )
+        except GitHubError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if content is None:
+            return PathwayInfo(exists=False, wpid=f"WP{wpid}")
+        return PathwayInfo(
+            exists=True, wpid=f"WP{wpid}", name=parse_curation_metadata(content).name
+        )
+
     # -- Curation dashboard (MVP-4) --------------------------------------------------------
 
     @app.get("/api/reviews", response_model=list[ReviewSummary])
@@ -690,6 +710,12 @@ class SubmitResponse(BaseModel):
     pr_number: int
     pr_url: str
     path: str
+
+
+class PathwayInfo(BaseModel):
+    exists: bool
+    wpid: str
+    name: str | None = None
 
 
 class ReviewSummary(BaseModel):

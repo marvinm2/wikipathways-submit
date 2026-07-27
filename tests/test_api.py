@@ -169,6 +169,24 @@ def test_update_success_lock_and_release(tmp_path):
 # -- curation dashboard --------------------------------------------------------------------
 
 
+def test_pathway_info_reports_presence(tmp_path):
+    settings = _settings(database_url=f"sqlite:///{tmp_path / 'reg.db'}")
+    repo, branch = settings.content_repo, settings.default_branch
+    fake = FakeGitHubClient(
+        default_branches={f"{repo}#{branch}": "base"},
+        existing_contents={f"{repo}#pathways/WP5636/WP5636.gpml": GOOD_GPML.decode()},
+    )
+    app, _current = _authed_app(tmp_path, fake=fake)
+    with TestClient(app) as c:
+        assert c.get("/api/pathways/5636").json() == {
+            "exists": True,
+            "wpid": "WP5636",
+            "name": "Mitophagy",
+        }
+        missing = c.get("/api/pathways/9999").json()
+        assert missing["exists"] is False and missing["wpid"] == "WP9999"
+
+
 def test_dashboard_end_to_end(tmp_path):
     app, current = _authed_app(tmp_path, curators=["curator"])
     with TestClient(app) as c:

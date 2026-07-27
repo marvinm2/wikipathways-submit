@@ -427,6 +427,35 @@ main { flex: 1; }
 
 /* ---------- submit flow (index, logged in) ---------- */
 .stepper-flow { display: flex; flex-direction: column; gap: 1.6rem; max-width: 640px; }
+
+/* new / update tabs */
+.tabs { display: flex; gap: 0.4rem; max-width: 640px; margin: 0 0 1rem; border-bottom: 1px solid var(--line); }
+.tab {
+  appearance: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink-faint);
+  padding: 0.6rem 1rem;
+  border-radius: var(--radius-s) var(--radius-s) 0 0;
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+.tab:hover { color: var(--ink); }
+.tab--active {
+  color: var(--moss-strong);
+  border-color: var(--line);
+  border-bottom-color: var(--surface);
+  background: var(--surface);
+}
+.tab-panel--hidden { display: none; }
+.wpid-status { margin: 0.2rem 0 0; font-size: 0.85rem; }
+.wpid-status--checking { color: var(--ink-faint); }
+.wpid-status--ok { color: #15803d; }
+.wpid-status--err { color: #b91c1c; }
+
 .step-card {
   background: var(--surface);
   border: 1px solid var(--line);

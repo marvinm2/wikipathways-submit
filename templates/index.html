@@ -52,42 +52,32 @@
   <code>{{ repo }}</code>, attributed to your GitHub account.
 </p>
 
-<div class="stepper-flow">
-  <form id="validate-form" class="step-card">
-    <span class="step-card__eyebrow">Step 1 &middot; Validate</span>
-    <h2>Check your file before it becomes a pull request</h2>
-    <p class="hint">We'll parse the GPML, confirm the organism, and show where it will be saved.</p>
+<div class="tabs" role="tablist" aria-label="Submission type">
+  <button type="button" class="tab tab--active" role="tab" aria-selected="true" data-tab="new" id="tab-new">New pathway</button>
+  <button type="button" class="tab" role="tab" aria-selected="false" data-tab="update" id="tab-update">Update existing</button>
+</div>
+
+<section class="tab-panel" data-panel="new" role="tabpanel" aria-labelledby="tab-new">
+  <form id="submit-form" class="step-card">
+    <h2>Add a new pathway</h2>
+    <p class="hint">Choose a <code>.gpml</code> file. The app validates it, assigns the WPID, lays it
+      out, and opens a pull request on <code>{{ repo }}</code> as you.</p>
     <div class="file-field">
-      <input type="file" id="file-input" accept=".gpml,.xml" required aria-describedby="file-hint">
+      <input type="file" id="new-file" accept=".gpml,.xml" required aria-describedby="new-file-hint">
     </div>
-    <span id="file-hint" class="visually-hidden">Accepts .gpml or .xml pathway files</span>
-    <button type="submit" id="validate-btn" class="btn btn--primary">Validate &amp; preview</button>
-
-    <dl class="preview-card" id="preview-card" hidden>
-      <dt>Name</dt><dd id="preview-name" class="muted">not read yet</dd>
-      <dt>Organism</dt><dd id="preview-organism" class="muted">not read yet</dd>
-      <dt>Embedded WPID</dt><dd id="preview-wpid" class="muted">not read yet</dd>
-      <dt>Will save to</dt><dd id="preview-path" class="muted">not read yet</dd>
-    </dl>
-  </form>
-
-  <form id="submit-step" class="step-card" data-disabled="true">
-    <span class="step-card__eyebrow">Step 2 &middot; Submit</span>
-    <h2>Open the pull request</h2>
-    <p class="hint">Uses the file you validated above. This creates a real PR on <code>{{ repo }}</code>.</p>
+    <span id="new-file-hint" class="visually-hidden">Accepts .gpml or .xml pathway files</span>
     <label class="note-field">
       <span class="note-field__label">Note for reviewers <span class="muted">(optional)</span></span>
       <textarea id="submit-description" rows="3"
                 placeholder="Anything a curator should know: the source, what this pathway covers, open questions."></textarea>
     </label>
-    <button type="submit" id="submit-btn" class="btn btn--primary" disabled>Submit new pathway</button>
-
+    <button type="submit" id="submit-btn" class="btn btn--primary">Submit new pathway</button>
     <div class="result-card" id="result-card" hidden></div>
   </form>
-</div>
+</section>
 
+<section class="tab-panel tab-panel--hidden" data-panel="update" role="tabpanel" aria-labelledby="tab-update">
 <form id="update-form" class="step-card update-card">
-  <span class="step-card__eyebrow">Update</span>
   <h2>Update an existing pathway</h2>
   <p class="hint">
     Give the WPID and an edited GPML. The pathway is checked out, branched off the latest
@@ -97,13 +87,14 @@
   <div class="update-fields">
     <label class="wpid-field">
       <span class="wpid-field__label">WPID</span>
-      <input type="text" id="update-wpid" inputmode="numeric" placeholder="554"
-             autocomplete="off">
+      <input type="text" id="update-wpid" placeholder="WP554" autocomplete="off"
+             aria-describedby="update-wpid-status">
     </label>
     <div class="file-field">
       <input type="file" id="update-file" accept=".gpml,.xml">
     </div>
   </div>
+  <p class="wpid-status" id="update-wpid-status" role="status" hidden></p>
   <fieldset class="change-set">
     <legend>What changed? <span class="muted">(optional — helps the reviewer)</span></legend>
     <div class="change-set__grid">
@@ -125,5 +116,6 @@
   <button type="button" id="update-btn" class="btn btn--primary">Submit update</button>
   <div class="result-card" id="update-result" hidden></div>
 </form>
+</section>
 {% endif %}
 {% endblock %}

@@ -51,53 +51,30 @@
     fetch('/auth/logout', { method: 'POST' }).then(function () { location.href = '/'; });
   });
 
-  // ---------- submit flow (index.html, logged in) ----------
-  var validateForm = document.getElementById('validate-form');
-  var submitForm = document.getElementById('submit-step');
-  var fileInput = document.getElementById('file-input');
-  var previewCard = document.getElementById('preview-card');
-  var submitStep = document.getElementById('submit-step');
-  var resultCard = document.getElementById('result-card');
-  var submitBtn = document.getElementById('submit-btn');
-
-  if (validateForm) {
-    validateForm.addEventListener('submit', function (e) {
-      e.preventDefault();
-      var file = fileInput.files[0];
-      if (!file) { toast('Choose a .gpml file first.', 'error'); return; }
-      var validateBtn = document.getElementById('validate-btn');
-      var originalLabel = validateBtn.textContent;
-      validateBtn.disabled = true;
-      validateBtn.textContent = 'Validating…';
-      var fd = new FormData();
-      fd.append('file', file);
-      fetch('/api/validate', { method: 'POST', body: fd })
-        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
-        .then(function (res) {
-          validateBtn.disabled = false;
-          validateBtn.textContent = originalLabel;
-          if (!res.ok) { toast(describeError(res.status, res.body), 'error'); return; }
-          document.getElementById('preview-name').textContent = res.body.name || 'not set';
-          document.getElementById('preview-organism').textContent = res.body.organism || 'not set';
-          document.getElementById('preview-wpid').textContent = res.body.embedded_wpid || 'None (a new WPID will be assigned)';
-          document.getElementById('preview-path').textContent = res.body.will_layout_to || 'not set';
-          previewCard.hidden = false;
-          if (submitStep) submitStep.dataset.disabled = 'false';
-          if (submitBtn) submitBtn.disabled = false;
-          toast('Looks good. Review the preview, then submit.', 'success');
-        })
-        .catch(function () {
-          validateBtn.disabled = false;
-          validateBtn.textContent = originalLabel;
-          toast('Could not reach the server. Try again.', 'error');
-        });
+  // ---------- tabs (index.html, logged in) ----------
+  var tabs = document.querySelectorAll('.tab');
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      var name = t.getAttribute('data-tab');
+      tabs.forEach(function (x) {
+        var on = x === t;
+        x.classList.toggle('tab--active', on);
+        x.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      document.querySelectorAll('.tab-panel').forEach(function (p) {
+        p.classList.toggle('tab-panel--hidden', p.getAttribute('data-panel') !== name);
+      });
     });
-  }
+  });
 
+  // ---------- new-pathway submit (single action — validate + open PR together) ----------
+  var submitForm = document.getElementById('submit-form');
   if (submitForm) {
     submitForm.addEventListener('submit', function (e) {
       e.preventDefault();
-      var file = fileInput.files[0];
+      var file = document.getElementById('new-file').files[0];
+      var submitBtn = document.getElementById('submit-btn');
+      var resultCard = document.getElementById('result-card');
       if (!file) { toast('Choose a .gpml file first.', 'error'); return; }
       submitBtn.disabled = true;
       submitBtn.textContent = 'Submitting…';
@@ -123,6 +100,35 @@
           submitBtn.textContent = 'Submit new pathway';
           toast('Could not reach the server. Try again.', 'error');
         });
+    });
+  }
+
+  // ---------- WPID field: normalise to WP#### and verify the pathway exists ----------
+  var wpidInput = document.getElementById('update-wpid');
+  var wpidStatus = document.getElementById('update-wpid-status');
+  function wpidNumber(v) { return (v || '').replace(/\D/g, ''); }
+  if (wpidInput) {
+    wpidInput.addEventListener('blur', function () {
+      var num = wpidNumber(wpidInput.value);
+      if (!num) { wpidInput.value = ''; if (wpidStatus) wpidStatus.hidden = true; return; }
+      wpidInput.value = 'WP' + num;  // always display WP####
+      if (!wpidStatus) return;
+      wpidStatus.hidden = false;
+      wpidStatus.className = 'wpid-status wpid-status--checking';
+      wpidStatus.textContent = 'Checking WP' + num + '…';
+      fetch('/api/pathways/' + num)
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (info) {
+          if (!info) { wpidStatus.hidden = true; return; }
+          if (info.exists) {
+            wpidStatus.className = 'wpid-status wpid-status--ok';
+            wpidStatus.textContent = info.wpid + (info.name ? ' — ' + info.name : '') + ' found.';
+          } else {
+            wpidStatus.className = 'wpid-status wpid-status--err';
+            wpidStatus.textContent = info.wpid + ' does not exist on main. Use "New pathway" for a new one.';
+          }
+        })
+        .catch(function () { wpidStatus.hidden = true; });
     });
   }
 
