@@ -17,11 +17,14 @@ no network and no repo.
 
 ## Files
 
-| File | What it is |
-|---|---|
-| `pathway_new.gpml` | A new pathway — *Insulin signaling (demo)*, three gene nodes (INS → INSR → AKT1). No WPID; the app assigns the next real one. |
-| `pathway_update.gpml` | The **same** pathway, edited — adds FOXO1, an AKT1 → FOXO1 arrow, and a Glucose metabolite. Use this in the update step. |
-| `serve_demo.py` | Launches the app wired to real GitHub (or the offline fake). |
+Three GPML files tell one story (*Insulin signaling (demo)*), each staged to show off a feature:
+
+| File | Role in the story | What the checklist does |
+|---|---|---|
+| `pathway_new.gpml` | **Submit** — INS → INSR → IRS1, but **IRS1 has no identifier** and there are no references. | "Data nodes annotated" auto-**fails** (names IRS1); references N/A. A curator requests changes. |
+| `pathway_revised.gpml` | **Revise** — same pathway with IRS1 now annotated **and a reference added**. Re-upload it on the Update tab; it commits onto the same PR. | Data nodes auto-**pass**; "References resolve" becomes a **pending** check with a clickable identifiers.org link. |
+| `pathway_update.gpml` | **Update** — after merge, extends the pathway with AKT1, a Glucose metabolite, and a second reference (title unchanged). | Data nodes / references relevant; "Title and description meaningful" is auto-**N/A** (unchanged → scoped out). |
+| `serve_demo.py` | Launches the app wired to real GitHub (or the offline fake). | |
 
 ## Run it
 
@@ -42,23 +45,31 @@ The app assigns the next free WPID over the fork's tree. At the time of writing 
 it will differ once you merge (each merged pathway advances the floor). Substitute the WPID you
 actually get below.
 
-### 1. Submit the new pathway
+### 1. Submit the new pathway (with a deliberate gap)
 
-1. **Step 1 · Validate**: choose `demo/pathway_new.gpml`, click **Validate & preview**.
-2. **Step 2 · Submit**: optionally add a note for reviewers, then **Submit new pathway**.
-3. You get a WPID (e.g. **WP5641**) and a link to a **real PR** on the fork. The uploaded file has no WPID — the app assigns it and lays it out at `pathways/WP5641/WP5641.gpml`.
+1. **New pathway** tab: choose `demo/pathway_new.gpml`, optionally add a note, **Submit new pathway**.
+2. You get a WPID (substitute yours below) and a **real PR** on the fork, laid out at `pathways/WP<id>/WP<id>.gpml`.
 
-### 2. Review and merge it
+### 2. As a curator, request changes
 
-1. Go to **/dashboard**. The submission is in the queue with its rendered **after** preview.
-2. Expand the card, mark every **required** checklist item (the dotted ones) as **Pass**. **Approve & merge** stays disabled until they all pass.
-3. Click **Approve & merge**. This performs a real merge of the PR into the fork's `main`, so `WP5641.gpml` now lives on the fork.
+1. Go to **/dashboard** and expand the card. The checklist is pre-filled: **"Data nodes annotated" auto-fails**, naming out-of-the-box passes, references show N/A.
+2. Click **Request changes**, note *"IRS1 has no identifier and there's no reference — please annotate it and add a citation"*, **Send request**. The review moves to the **Changes requested** filter and the note is posted on the PR.
 
-### 3. Update the same pathway
+### 3. As the submitter, revise
 
-1. Back on **/**, use the **Update an existing pathway** form.
-2. Enter the WPID (e.g. **5641**), choose `demo/pathway_update.gpml`, add a "what changed" note, and **Submit update**.
-3. You get a second real PR. Its dashboard preview shows a real **before / after**: the merged three-node version vs. your five-node revision.
+1. **Update existing** tab: type the WPID — the status line reads *"pending new submission… Submitting revises it"*.
+2. Choose `demo/pathway_revised.gpml`, **Submit revision**. It commits onto the **same PR** and re-opens the review.
+3. Back on the dashboard: data nodes now **pass**, and **"References resolve" is a pending check** — the References panel shows the paper as a clickable identifiers.org link.
+
+### 4. Approve and merge
+
+1. Mark the remaining human checks (render, description, references) as **Pass**, then **Approve & merge** (allowed once the `pr-preview` CI is green). `WP<id>.gpml` now lives on the fork's `main`.
+
+### 5. Update the merged pathway
+
+1. **Update existing** tab: the same WPID now reads *"…found. Submitting opens an update."*
+2. Choose `demo/pathway_update.gpml`, tick some **"What changed?"** boxes, **Submit update**.
+3. A second PR opens with a real **before/after** render. Its checklist shows scoping in action: data nodes and references are relevant, but **"Title and description meaningful" is auto-N/A** because they didn't change.
 
 ## Clean up the fork afterwards
 

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Insulin signaling (demo)" Organism="Homo sapiens">
-  <Graphics BoardWidth="620.0" BoardHeight="560.0" />
-  <Comment>Demo pathway: insulin (INS) activates INSR, which activates AKT1, which inhibits FOXO1. Now includes a Glucose metabolite.</Comment>
+  <Graphics BoardWidth="620.0" BoardHeight="520.0" />
+  <Comment>Demo pathway: insulin (INS) activates its receptor INSR, which signals through IRS1.</Comment>
 
   <DataNode TextLabel="INS" Type="GeneProduct">
     <Graphics CenterX="240.0" CenterY="80.0" Width="120.0" Height="34.0" Color="1a5276" />
@@ -13,18 +13,18 @@
     <Xref Database="Ensembl" ID="ENSG00000171105" />
   </DataNode>
 
-  <DataNode TextLabel="AKT1" Type="GeneProduct">
+  <DataNode TextLabel="IRS1" Type="GeneProduct">
     <Graphics CenterX="240.0" CenterY="320.0" Width="120.0" Height="34.0" Color="1a5276" />
+    <Xref Database="Ensembl" ID="ENSG00000169047" />
+  </DataNode>
+
+  <DataNode TextLabel="AKT1" Type="GeneProduct">
+    <Graphics CenterX="240.0" CenterY="440.0" Width="120.0" Height="34.0" Color="1a5276" />
     <Xref Database="Ensembl" ID="ENSG00000142208" />
   </DataNode>
 
-  <DataNode TextLabel="FOXO1" Type="GeneProduct">
-    <Graphics CenterX="240.0" CenterY="440.0" Width="120.0" Height="34.0" Color="1a5276" />
-    <Xref Database="Ensembl" ID="ENSG00000150907" />
-  </DataNode>
-
   <DataNode TextLabel="Glucose" Type="Metabolite">
-    <Graphics CenterX="440.0" CenterY="320.0" Width="120.0" Height="34.0" Color="7d6608" FillColor="fef9e7" />
+    <Graphics CenterX="440.0" CenterY="440.0" Width="120.0" Height="34.0" Color="7d6608" FillColor="fef9e7" />
     <Xref Database="ChEBI" ID="CHEBI:17234" />
   </DataNode>
 
@@ -51,16 +51,23 @@
 
   <Interaction>
     <Graphics>
-      <Point X="300.0" Y="320.0" />
-      <Point X="380.0" Y="320.0" ArrowHead="mim-catalysis" />
+      <Point X="300.0" Y="440.0" />
+      <Point X="380.0" Y="440.0" ArrowHead="mim-catalysis" />
     </Graphics>
   </Interaction>
 
   <OntologyTerm Term="insulin signaling pathway" ID="PW:0000143" Ontology="Pathway Ontology" />
   <OntologyTerm Term="glucose homeostasis pathway" ID="PW:0000550" Ontology="Pathway Ontology" />
+
   <Biopax>
     <bp:PublicationXref xmlns:bp="http://www.biopax.org/release/biopax-level3.owl#"
                         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" rdf:id="ref1">
+      <bp:ID>12829793</bp:ID>
+      <bp:DB>PubMed</bp:DB>
+      <bp:TITLE>IRS proteins and the common path to diabetes</bp:TITLE>
+    </bp:PublicationXref>
+    <bp:PublicationXref xmlns:bp="http://www.biopax.org/release/biopax-level3.owl#"
+                        xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" rdf:id="ref2">
       <bp:ID>17635937</bp:ID>
       <bp:DB>PubMed</bp:DB>
       <bp:TITLE>AKT/PKB signaling: navigating downstream</bp:TITLE>
