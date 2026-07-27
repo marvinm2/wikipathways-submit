@@ -1,4 +1,4 @@
-// wikipathways-submit — client behavior
+// wikipathways-submit client behavior
 // No build step: plain ES5-ish JS, event delegation, optimistic UI updates.
 (function () {
   'use strict';
@@ -77,10 +77,10 @@
           validateBtn.disabled = false;
           validateBtn.textContent = originalLabel;
           if (!res.ok) { toast(describeError(res.status, res.body), 'error'); return; }
-          document.getElementById('preview-name').textContent = res.body.name || '—';
-          document.getElementById('preview-organism').textContent = res.body.organism || '—';
-          document.getElementById('preview-wpid').textContent = res.body.embedded_wpid || 'None — a new WPID will be assigned';
-          document.getElementById('preview-path').textContent = res.body.will_layout_to || '—';
+          document.getElementById('preview-name').textContent = res.body.name || 'not set';
+          document.getElementById('preview-organism').textContent = res.body.organism || 'not set';
+          document.getElementById('preview-wpid').textContent = res.body.embedded_wpid || 'None (a new WPID will be assigned)';
+          document.getElementById('preview-path').textContent = res.body.will_layout_to || 'not set';
           previewCard.hidden = false;
           if (submitStep) submitStep.dataset.disabled = 'false';
           if (submitBtn) submitBtn.disabled = false;
@@ -110,7 +110,7 @@
           submitBtn.textContent = 'Submit new pathway';
           if (!res.ok) { toast(describeError(res.status, res.body), 'error'); return; }
           resultCard.innerHTML =
-            'Assigned <strong>' + res.body.wpid + '</strong> — opened pull request ' +
+            'Assigned <strong>' + res.body.wpid + '</strong>. Opened pull request ' +
             '<a href="' + res.body.pr_url + '" target="_blank" rel="noopener">#' + res.body.pr_number + '</a> ' +
             '(<code>' + res.body.path + '</code>). <a href="/dashboard">Go to the dashboard</a>.';
           resultCard.hidden = false;

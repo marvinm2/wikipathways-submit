@@ -71,7 +71,7 @@ def get_current_user(request: Request) -> str:
     """
     login = request.session.get("gh_login")
     if not login:
-        raise HTTPException(status_code=401, detail="not authenticated — GET /auth/login")
+        raise HTTPException(status_code=401, detail="not authenticated. Log in at /auth/login")
     return login
 
 
@@ -79,7 +79,7 @@ def get_github_client(request: Request) -> GitHubClient:
     """Build a GitHub client acting as the logged-in user (their OAuth token). 401 if absent."""
     encrypted = request.session.get("gh_token")
     if not encrypted:
-        raise HTTPException(status_code=401, detail="not authenticated — GET /auth/login")
+        raise HTTPException(status_code=401, detail="not authenticated. Log in at /auth/login")
     try:
         token = request.app.state.token_cipher.decrypt(encrypted)
     except TokenCipherError as exc:

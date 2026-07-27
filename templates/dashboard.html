@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}wikipathways-submit — curation queue{% endblock %}
+{% block title %}Curation queue &middot; WikiPathways portal{% endblock %}
 
 {% macro state_icon(state) %}
   {% if state == 'pass' %}<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -59,7 +59,7 @@
         {% if r.preview and r.preview.status == 'ready' and r.preview.after_svg_url %}
           <img src="{{ r.preview.after_svg_url }}" alt="Rendered pathway diagram" loading="lazy">
         {% elif r.preview and r.preview.status == 'failed' %}
-          <div class="preview__failed">Render failed &mdash; check the PR for details.</div>
+          <div class="preview__failed">Render failed. Check the PR for details.</div>
         {% else %}
           <div class="preview__empty">
             <span class="preview__dots" aria-hidden="true"><span></span><span></span><span></span></span>
