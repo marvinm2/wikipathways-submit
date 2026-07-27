@@ -17,7 +17,7 @@
   <h1 class="reveal">Upload, update, and review WikiPathways pathways.</h1>
   <p class="hero__lede reveal">
     A portal to the pathway database. Upload a GPML file and it assigns the WPID, lays the file
-    out the way the database expects, and opens a pull request on <code>{{ repo }}</code> as you.
+    out the way the database expects, and opens a pull request on <code>{{ repo }}</code>.
     Curators get a dashboard with a before and after render and a checklist, and approving a
     pathway merges it.
   </p>
@@ -33,15 +33,15 @@
 <ul class="steps">
   <li>
     <h3>Upload your GPML</h3>
-    <p>Drop in a <code>.gpml</code> file. No local clone, no branch naming to get right.</p>
+    <p>Drop in a <code>.gpml</code> file. No local clone needed.</p>
   </li>
   <li>
-    <h3>We open the pull request</h3>
-    <p>The app assigns the WPID, writes the file to its expected path, and opens the PR under your name.</p>
+    <h3>It becomes a pull request</h3>
+    <p>The app assigns the WPID and writes the file to the path the database expects.</p>
   </li>
   <li>
     <h3>Curators review and merge</h3>
-    <p>A checklist-driven dashboard replaces manual GitHub review, and approving a pathway merges it automatically.</p>
+    <p>Curators see the drawn pathway and a checklist instead of raw XML. Approving merges it.</p>
   </li>
 </ul>
 
@@ -61,7 +61,7 @@
   <form id="submit-form" class="step-card">
     <h2>Add a new pathway</h2>
     <p class="hint">Choose a <code>.gpml</code> file. The app validates it, assigns the WPID, lays it
-      out, and opens a pull request on <code>{{ repo }}</code> as you.</p>
+      out, and opens a pull request on <code>{{ repo }}</code>.</p>
     <div class="file-field">
       <input type="file" id="new-file" accept=".gpml,.xml" required
              aria-label="Pathway GPML file" aria-describedby="new-file-hint">
