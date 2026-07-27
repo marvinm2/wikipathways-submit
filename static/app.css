@@ -505,6 +505,30 @@ main { flex: 1; }
   border-color: var(--focus);
 }
 
+.note-field { display: flex; flex-direction: column; gap: 0.35rem; margin: 0.9rem 0 0; }
+.note-field__label {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+}
+.note-field textarea {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  resize: vertical;
+}
+.note-field textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-color: var(--focus);
+}
+
 .preview-card {
   margin-top: 1rem;
   border: 1px dashed var(--line-strong);

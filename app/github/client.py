@@ -149,6 +149,9 @@ class FakeGitHubClient(GitHubClient):
         # {(repo, branch, path): (content, message, sha)}
         self.files: dict[tuple[str, str, str], tuple[str, str, str | None]] = {}
         self.pulls: list[PullRequest] = []
+        # {pr_number: {"title", "body", "base", "head"}} — the human-facing PR fields the API
+        # sends. Captured so tests can assert on the title/body a reviewer actually sees.
+        self.pull_meta: dict[int, dict[str, str]] = {}
         self.merged: set[int] = set()
         # {(repo, issue_number): {marker: body}} — one comment per marker (upsert semantics).
         self.comments: dict[tuple[str, int], dict[str, str]] = {}
@@ -225,6 +228,7 @@ class FakeGitHubClient(GitHubClient):
             html_url=f"https://github.com/{repo}/pull/{self._next_pr}",
             head_branch=head,
         )
+        self.pull_meta[pr.number] = {"title": title, "body": body, "base": base, "head": head}
         self._next_pr += 1
         self.pulls.append(pr)
         return pr

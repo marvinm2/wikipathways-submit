@@ -103,6 +103,8 @@
       submitBtn.textContent = 'Submitting…';
       var fd = new FormData();
       fd.append('file', file);
+      var submitDesc = document.getElementById('submit-description');
+      if (submitDesc) { fd.append('description', submitDesc.value || ''); }
       fetch('/api/submit', { method: 'POST', body: fd })
         .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
         .then(function (res) {
@@ -137,6 +139,8 @@
       btn.textContent = 'Submitting…';
       var fd = new FormData();
       fd.append('file', file);
+      var updateDesc = document.getElementById('update-description');
+      if (updateDesc) { fd.append('description', updateDesc.value || ''); }
       fetch('/api/pathways/' + wpid + '/update', { method: 'POST', body: fd })
         .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
         .then(function (res) {

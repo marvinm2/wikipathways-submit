@@ -122,11 +122,16 @@ def test_submit_success(tmp_path):
         resp = c.post(
             "/api/submit",
             files={"file": ("upload.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+            data={"description": "Curated from Reactome; please check the HGNC ids."},
         )
     assert resp.status_code == 201
     body = resp.json()
     assert body["wpid"] == "WP5637"
     assert body["path"] == "pathways/WP5637/WP5637.gpml"
+    # The submitter note travels through the Form field into the PR body.
+    pr_body = app.state._fake.pull_meta[body["pr_number"]]["body"]
+    assert "**Submitter note**" in pr_body
+    assert "Curated from Reactome" in pr_body
 
 
 def test_update_success_lock_and_release(tmp_path):
