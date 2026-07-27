@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,11 @@ from app.main import (
 )
 
 BRANCH = "main"
+
+# Stable state dir (registry + preview cache) so an auto-reload — which re-runs make_demo_app in a
+# fresh worker — keeps the same DB and rendered previews instead of orphaning them in a new
+# mkdtemp. Cleared once on an explicit launch (see __main__) for a fresh start.
+_STATE_DIR = pathlib.Path(tempfile.gettempdir()) / "wpsubmit-demo-state"
 
 # Repo root, so the auto-reloader's worker subprocess can import ``demo.serve_demo`` regardless of
 # how the script was launched (PYTHONPATH propagates to the subprocess).
@@ -106,7 +112,8 @@ class _MergingFake(FakeGitHubClient):
 
 
 def make_demo_app():
-    tmp = pathlib.Path(tempfile.mkdtemp(prefix="wpsubmit-demo-"))
+    tmp = _STATE_DIR
+    tmp.mkdir(parents=True, exist_ok=True)
     fake_mode = os.environ.get("WPSUBMIT_DEMO_FAKE") == "1"
 
     if fake_mode:
@@ -192,6 +199,7 @@ def make_demo_app():
 app = make_demo_app()
 
 if __name__ == "__main__":
+    shutil.rmtree(_STATE_DIR, ignore_errors=True)  # fresh registry + previews on an explicit start
     info = app.state._demo
     mode = "FAKE (offline, in-memory)" if info["fake"] else "REAL GitHub"
     print("\n  wikipathways-submit demo")
