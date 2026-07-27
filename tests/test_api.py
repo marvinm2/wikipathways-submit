@@ -195,8 +195,12 @@ def test_dashboard_end_to_end(tmp_path):
         current["user"] = "randouser"
         assert c.post(f"/api/reviews/{pr}/approve").status_code == 403
 
-        # The curator approves → merges.
+        # Even complete + curator, merge is blocked until the PR-preview CI is green (409).
         current["user"] = "curator"
+        assert c.post(f"/api/reviews/{pr}/approve").status_code == 409
+        app.state._fake.previews[pr] = {"status": "ready"}
+
+        # The curator approves → merges.
         ok = c.post(f"/api/reviews/{pr}/approve")
         assert ok.status_code == 200
         assert ok.json()["status"] == "merged"
@@ -265,6 +269,7 @@ def test_approve_merges_via_bot_and_updates_mirror(tmp_path):
         for item in detail["checklist"]:
             if item["required"]:
                 c.post(f"/api/reviews/{pr}/checklist", data={"key": item["key"], "state": "pass"})
+        app.state._fake.previews[pr] = {"status": "ready"}  # PR-preview CI green → merge allowed
         assert c.post(f"/api/reviews/{pr}/approve").status_code == 200
 
     fake = app.state._fake
