@@ -179,22 +179,26 @@ GlusterFS-backed data at `/mnt/gluster/docker/<service>/data`, **no node pinning
 Docker secrets (never in the repo). The app needs a GitHub App identity installed on
 `wikipathways-database` with contents RW, pull_requests RW, and issues/comments RW.
 
-## Next direction (2026-07-27) — read before changing the submission flow
+## Current state (2026-07-27) — read `docs/session-handoff-2026-07-27.md` first
 
-Marvin has decided three things that the current code does not do yet, written up in
-**`docs/next-wpid-on-approval.md`** (start there):
+**The app is deployed and live at https://upload.wikipathways.org**, pointed at the fork
+`marvinm2/sandbox-wp-db` in `pipeline` mode. The handoff doc is authoritative for what is
+proven, what is pending on other people, and the gotchas. Two things it says that matter most
+here:
 
-1. A new pathway always gets its own branch named from the **submitter + a placeholder WPID**,
-   not from an app-assigned id.
-2. The **real WPID is assigned only on approval**, which removes the reservation race by
-   construction and shrinks `app/wpid/`.
-3. The target repo becomes **`wikipathways/sandbox-wp-db`**, which already has its own PR
-   pipeline (`1_on_pull_request` → `2_after_pr_processed` → `3a_approved`/`3b_rejected`,
-   dispatched by an `accepted` label), not the personal fork.
+- **Approval does not merge.** On a target repo that publishes through its own Actions
+  (`WPSUBMIT_PUBLISH_MODE=pipeline`), approving applies that repo's `accepted` label and stops;
+  the repo assigns the WPID, publishes, and closes the pull request unmerged. A close without a
+  merge is the *success* signal there. `direct` mode still merges, and is the default, so
+  `wikipathways-database`, a personal fork and the demo are unchanged.
+- **A new pathway carries no WPID** until publication. It is submitted on branch
+  `WP0001_<user>_<stamp>` at `pathways/WP0001/WP0001.gpml`; `Review.wpid` is nullable and the
+  branch is recorded on the row, because it can no longer be derived. Revise is therefore keyed
+  by pull request (`POST /api/reviews/{pr}/revise`), not by WPID.
 
-Settled: the placeholder is **`WP0001`**, and the branch carries a **timestamp** for uniqueness
-(proposed `WP0001_<username>_<YYYYMMDD-HHMMSS>`). Still open: who renames the file at approval,
-how we sit alongside the sandbox's own pipeline, and what replaces the `pending_new` lookup.
+`docs/sandbox-pipeline.md` maps the target repo's five workflows and its known breakages.
+`sandbox-workflows/` holds repaired copies staged for a pull request to that repo — **not opened
+yet**, and not part of this app.
 
 ## Open decisions (still unresolved — scaffolding-plan §0, proposal §9)
 
