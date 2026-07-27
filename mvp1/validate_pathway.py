@@ -10,7 +10,7 @@ piece of the review subset that does not already exist in on_gpml_change.yml).
 
 Usage:
     python scripts/validate_pathway.py WP1234 [--pathways-dir pathways] \
-        [--rendered path/to/WP1234.svg] [--out report.md]
+        [--rendered path/to/WP1234.svg [--rendered path/to/WP1234-after.svg ...]] [--out report.md]
 
 Exit code is always 0 (a validation report is informational, not a gate — a
 curator decides). The overall severity is written to $GITHUB_OUTPUT as
@@ -238,17 +238,35 @@ def check_refs(report: Report, refs_path: Path, bibliography_path: Path) -> None
     )
 
 
-def check_render(report: Report, rendered: Path | None) -> None:
-    if rendered is None:
+def _renderer_of(name: str) -> str:
+    # The app + workflow name PinPath's output <WP>-after.svg / <WP>-before.svg; the
+    # gpmlconverter output is the bare <WP>.svg. Report which renderer satisfied the check
+    # so a curator can see at a glance whether the (upstream-flaky) gpmlconverter ran.
+    if name.endswith("-after.svg") or name.endswith("-before.svg"):
+        return "PinPath"
+    return "gpmlconverter"
+
+
+def check_render(report: Report, rendered: list[Path] | None) -> None:
+    # Accept ANY non-empty candidate render, tried in priority order. gpmlconverter's SVG is
+    # blocked by upstream HTTP-400s, so PinPath's <WP>-after.svg is passed as a fallback — a good
+    # PinPath render is a genuine "rendered" pass, not a FAIL. (Curator decision, 2026-07-26.)
+    if not rendered:
         report.add(WARN, "Rendered SVG", "not provided to validator")
         return
-    if rendered.exists() and rendered.stat().st_size > 0:
-        report.add(PASS, "Rendered SVG", f"{rendered.name} ({rendered.stat().st_size:,} bytes)")
-    else:
-        report.add(FAIL, "Rendered SVG", "render step produced no SVG")
+    for cand in rendered:
+        if cand.exists() and cand.stat().st_size > 0:
+            report.add(
+                PASS,
+                "Rendered SVG",
+                f"{cand.name} ({cand.stat().st_size:,} bytes, {_renderer_of(cand.name)})",
+            )
+            return
+    tried = ", ".join(c.name for c in rendered)
+    report.add(FAIL, "Rendered SVG", f"no renderer produced an SVG (tried: {tried})")
 
 
-def build_report(wpid: str, pathways_dir: Path, rendered: Path | None) -> Report:
+def build_report(wpid: str, pathways_dir: Path, rendered: list[Path] | None) -> Report:
     d = pathways_dir / wpid
     report = Report(wpid)
     check_gpml(report, d / f"{wpid}.gpml")
@@ -263,7 +281,13 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Validate one pathway for PR preview.")
     ap.add_argument("wpid", help="e.g. WP1234")
     ap.add_argument("--pathways-dir", default="pathways", type=Path)
-    ap.add_argument("--rendered", type=Path, default=None, help="path to the rendered SVG")
+    ap.add_argument(
+        "--rendered",
+        type=Path,
+        action="append",
+        default=None,
+        help="path to a rendered SVG; repeat in priority order (first non-empty one passes)",
+    )
     ap.add_argument("--out", type=Path, default=None, help="write markdown here (else stdout)")
     ap.add_argument(
         "--status-file",

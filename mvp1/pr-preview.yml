@@ -78,6 +78,9 @@ jobs:
             echo "__EOF__"
             echo "count=${#files[@]}"
             echo "orgs_key=${orgs_key}"
+            echo "orgs<<__ORGS__"
+            printf '%s\n' "${orgs[@]:-}" | sort -u
+            echo "__ORGS__"
           } >> "$GITHUB_OUTPUT"
 
       - name: Initialize preview dir
@@ -127,6 +130,7 @@ jobs:
           key: meta-data-action-1.1.4
 
       - name: Cache BridgeDb derby files
+        id: cacheBridge
         if: steps.changed.outputs.count != '0'
         uses: actions/cache@v5
         with:
@@ -136,6 +140,24 @@ jobs:
             ./*.bridge
           key: bridge-files-${{ steps.changed.outputs.orgs_key }}
           restore-keys: bridge-files-
+
+      - name: Install BridgeDb files (cache miss)
+        # Mirrors on_gpml_change.yml's "Install all bridge files" — DOWNLOADS the .bridge derby
+        # for the touched organism(s). configGenerator alone only writes gdb.config; without this
+        # download meta-data-action fails (NoSuchFileException Hs_Derby_*.bridge) and the render
+        # produces no SVG. Only runs on a cache miss.
+        if: steps.changed.outputs.count != '0' && steps.cacheBridge.outputs.cache-hit != 'true'
+        env:
+          ORGS: ${{ steps.changed.outputs.orgs }}
+        run: |
+          set -uo pipefail
+          while IFS= read -r org; do
+            [ -z "$org" ] && continue
+            echo "::group::BridgeDb $org"
+            scripts/meta-data-action/configGenerator.sh "$org" || echo "::warning::configGenerator failed for $org"
+            scripts/meta-data-action/installDependencies.sh "$org" || echo "::warning::installDependencies failed for $org"
+            echo "::endgroup::"
+          done <<< "$ORGS"
 
       - name: Install meta-data-action
         if: steps.changed.outputs.count != '0'
@@ -155,6 +177,82 @@ jobs:
         if: steps.changed.outputs.count != '0'
         working-directory: scripts/generate-references
         run: npm install
+
+      # --- Before/after render with PinPath (issue #11) --------------------------------------
+      # Renders BOTH the PR-head version (after) and the base-branch version (before) with PinPath
+      # so the app's before/after viewer shows a consistent pair. Runs BEFORE "Generate review
+      # artifacts" so validation can accept PinPath's WP<id>-after.svg as the "Rendered SVG" —
+      # gpmlconverter's WP<id>.svg (rendered in that step) is blocked by upstream HTTP-400s, and a
+      # good PinPath render is a genuine render pass, not a FAIL (curator decision, 2026-07-26).
+      # Validated on a real runner 2026-07-26 (fork PR #4, WP554): install + render green.
+      # Plain render (no data overlay) → no Bioconductor annotation DB needed.
+      # Cost note: the first run installs PinPath + deps (minutes); the R-packages cache amortises
+      # subsequent runs. If this proves too heavy for every PR, split it into its own workflow.
+      # All PinPath steps are continue-on-error: they are a best-effort enhancement. If PinPath
+      # can't install or render, the gpmlconverter WP<id>.svg still ships and the run stays green —
+      # the preview must never be sunk by the render step.
+      - name: Setup R (PinPath)
+        if: steps.changed.outputs.count != '0'
+        continue-on-error: true
+        uses: r-lib/actions/setup-r@v2
+        with:
+          # PinPath (devel, v0.99.x) requires R >= 4.6.0, so we must track current-release R —
+          # an older pin (4.4.2) fails R CMD build with "package 'PinPath' requires R >= 4.6.0".
+          # 'release' is R 4.6.x now, whose BiocManager resolves the released Bioc 3.23 (paired
+          # with R 4.6 since April 2026), so the earlier "avoid devel Bioc 3.23" concern is moot.
+          r-version: "release"
+          use-public-rspm: true
+
+      - name: Cache R packages
+        if: steps.changed.outputs.count != '0'
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.R_LIBS_USER }}
+          key: r-pinpath-${{ runner.os }}-rrelease-v3
+
+      - name: Install PinPath
+        if: steps.changed.outputs.count != '0'
+        continue-on-error: true
+        env:
+          # remotes reads GITHUB_PAT for the GitHub API (fetching DESCRIPTION etc.). Without it
+          # the unauthenticated 60-req/hr limit is easily hit → "cannot open URL .../DESCRIPTION".
+          # github.token is the workflow's default read-only token (safe; cannot push).
+          GITHUB_PAT: ${{ github.token }}
+        run: |
+          # PinPath is not on the Bioconductor *release* yet — install from GitHub. BiocManager
+          # resolves the Bioconductor deps, but its GitHub install path needs `remotes` present.
+          Rscript -e 'install.packages(c("remotes","BiocManager"), repos="https://cloud.r-project.org")' \
+                  -e 'BiocManager::install("SyNUM-lab/PinPath", ask=FALSE, update=FALSE)' \
+                  -e 'library(PinPath); cat("PinPath OK\n")'
+
+      - name: Render before/after with PinPath
+        if: steps.changed.outputs.count != '0'
+        continue-on-error: true
+        env:
+          FILES: ${{ steps.changed.outputs.files }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -uo pipefail
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            wpid="$(basename "$f" .gpml)"
+            mkdir -p "preview/$wpid"
+            # after = the PR head version
+            if [ -e "$f" ]; then
+              Rscript scripts/render_pinpath.R "$f" "preview/$wpid" "$wpid-after.svg" \
+                || echo "::warning::PinPath after-render failed for $wpid"
+            fi
+            # before = the version currently on the base branch (updates only; new pathways
+            # have no base version, so the viewer shows a single "after").
+            if git cat-file -e "$BASE_SHA:$f" 2>/dev/null; then
+              tmp="$(mktemp --suffix=.gpml)"
+              git show "$BASE_SHA:$f" > "$tmp"
+              Rscript scripts/render_pinpath.R "$tmp" "preview/$wpid" "$wpid-before.svg" \
+                || echo "::warning::PinPath before-render failed for $wpid"
+              rm -f "$tmp"
+            fi
+          done <<< "$FILES"
 
       - name: Generate review artifacts
         if: steps.changed.outputs.count != '0'
@@ -205,9 +303,13 @@ jobs:
             [ -z "$f" ] && continue
             wpid="$(basename "$f" .gpml)"
 
+            # Try the gpmlconverter render first, then fall back to PinPath's -after.svg
+            # (rendered in the step above). gpmlconverter is currently blocked by upstream
+            # HTTP-400s, so a good PinPath render is a genuine "Rendered SVG" pass, not a FAIL.
             python scripts/validate_pathway.py "$wpid" \
               --pathways-dir pathways \
               --rendered "preview/$wpid/$wpid.svg" \
+              --rendered "preview/$wpid/$wpid-after.svg" \
               --out "preview/$wpid/validation.md" \
               --status-file "preview/$wpid/status.txt"
 
