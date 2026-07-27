@@ -9,8 +9,10 @@ repository.
 the submission app, and nothing here is imported by `app/`. The directory mirrors the
 target layout (`.github/workflows/...`) so the files can be copied across verbatim.
 
-The two files:
+The three files:
 
+- `.github/workflows/1_on_pull_request.yml` — the PR processor. Two one-line fixes on the
+  new-contributor path; see "Workflow 1: the first-contributor path" below.
 - `.github/workflows/3a_approved_pull_request.yml` — the publish workflow. Renames the
   draft files produced by workflow 1 to their final WPID, pushes them to `sandbox-wp-db`,
   `sandbox-wp.gh.io` and `sandbox-wp-assets`, announces the WPID on the PR, and closes it.
@@ -18,6 +20,41 @@ The two files:
   `resubmitted` labels into runs of 3A / 3B / workflow 1.
 
 `labels.md` lists the two labels that have to be created before 3A can use them.
+
+## Workflow 1: the first-contributor path
+
+Unlike the 3A changes, these two are **not** read out of the YAML — both were hit on a live
+run, fixed, and the fix confirmed by re-running. They sit on the branch that adds an author
+who is not yet in `author_list.csv`, so they fire on a person's **first ever submission**
+and not otherwise. That is why they have survived: the recent test submissions all come from
+contributors already in the CSV.
+
+The consequence is worth stating plainly, because it is the opposite of harmless. When
+`authors` fails, `commit-outputs` and `update-pr-desc` are skipped, so a first-time
+contributor gets no draft page, no data-node table, no bibliography and no report on their
+pull request — while everyone already in the CSV gets all of it.
+
+**1. `authors`, line 483.** The counter used PHP syntax:
+
+```bash
+$k=$k + 1        # $k expands to 0, bash runs "0=0" as a command, exit 127
+k=$((k + 1))     # fixed
+```
+
+Observed on `marvinm2/sandbox-wp-db` PR #2: `Adding marvinm2` followed by
+`line 58: 0=0: command not found` and exit code 127.
+
+**2. `commit-outputs`, line 1071.** With the counter fixed, the next run reached a second
+defect on the same path:
+
+```bash
+cp author_list.csv wikipathways.github.io/scripts/.          # cannot stat
+cp authors/author_list.csv wikipathways.github.io/scripts/.  # fixed
+```
+
+`authors` moves `scripts/author_list.csv` into `authors/` (line 487) and uploads that
+directory as the `authors` artifact, so on download the file is at `authors/author_list.csv`.
+The copy looked for it in the workspace root.
 
 ## What is known, and what is not
 

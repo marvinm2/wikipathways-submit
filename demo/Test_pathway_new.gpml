@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Insulin signaling (demo)" Version="20260727" Organism="Homo sapiens">
+  <Graphics BoardWidth="511.0" BoardHeight="576.5" />
+  <DataNode TextLabel="IRS1" GraphId="b486f" Type="GeneProduct">
+    <Graphics CenterX="156.0" CenterY="229.0" Width="90.0" Height="25.0" ZOrder="32768" FontSize="12" Valign="Middle" />
+    <Xref Database="" ID="" />
+  </DataNode>
+  <DataNode TextLabel="INS" GraphId="f1260" Type="GeneProduct">
+    <Graphics CenterX="156.0" CenterY="82.0" Width="90.0" Height="25.0" ZOrder="32768" FontSize="12" Valign="Middle" />
+    <Xref Database="Ensembl" ID="ENSG00000254647" />
+  </DataNode>
+  <DataNode TextLabel="INSR" GraphId="deb0a" Type="GeneProduct">
+    <Graphics CenterX="156.0" CenterY="152.0" Width="90.0" Height="25.0" ZOrder="32769" FontSize="12" Valign="Middle" />
+    <Xref Database="Ensembl" ID="ENSG00000171105" />
+  </DataNode>
+  <Interaction>
+    <Graphics ZOrder="12288" LineThickness="1.0">
+      <Point X="156.0" Y="94.5" GraphRef="f1260" RelX="0.0" RelY="1.0" />
+      <Point X="156.0" Y="139.5" GraphRef="deb0a" RelX="0.0" RelY="-1.0" ArrowHead="mim-binding" />
+    </Graphics>
+    <Xref Database="" ID="" />
+  </Interaction>
+  <Interaction>
+    <Graphics ZOrder="12288" LineThickness="1.0">
+      <Point X="156.0" Y="164.5" GraphRef="deb0a" RelX="0.0" RelY="1.0" />
+      <Point X="156.0" Y="216.5" GraphRef="b486f" RelX="0.0" RelY="-1.0" ArrowHead="Arrow" />
+    </Graphics>
+    <Xref Database="" ID="" />
+  </Interaction>
+  <InfoBox CenterX="0.0" CenterY="0.0" />
+  <Biopax />
+</Pathway>
+
