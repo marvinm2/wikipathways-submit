@@ -18,6 +18,45 @@ def _localname(tag: str) -> str:
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
 
+# GPML ``Database`` name (lower-cased) → identifiers.org prefix. identifiers.org is a universal
+# resolver that redirects to the provider, so one link shape covers every data source. Databases
+# not listed here simply get no link (the curator can still read the raw id).
+_RESOLVER_PREFIX = {
+    "ensembl": "ensembl",
+    "entrez gene": "ncbigene",
+    "ncbi gene": "ncbigene",
+    "hgnc": "hgnc.symbol",
+    "hgnc accession number": "hgnc",
+    "uniprot": "uniprot",
+    "uniprot-trembl": "uniprot",
+    "uniprot/trembl": "uniprot",
+    "chebi": "CHEBI",
+    "hmdb": "hmdb",
+    "pubchem-compound": "pubchem.compound",
+    "kegg compound": "kegg.compound",
+    "kegg genes": "kegg.genes",
+    "chembl compound": "chembl.compound",
+    "cas": "cas",
+    "wikidata": "wikidata",
+    "wikipathways": "wikipathways",
+    "pubmed": "pubmed",
+    "doi": "doi",
+}
+
+
+def resolver_url(database: str, identifier: str) -> str | None:
+    """A resolvable identifiers.org URL for ``(database, identifier)``, or None if unmapped."""
+    if not database or not identifier:
+        return None
+    prefix = _RESOLVER_PREFIX.get(database.strip().lower())
+    if not prefix:
+        return None
+    ident = identifier.strip()
+    if prefix == "CHEBI" and ident.upper().startswith("CHEBI:"):
+        return f"https://identifiers.org/{ident}"  # id already carries the CHEBI: prefix
+    return f"https://identifiers.org/{prefix}:{ident}"
+
+
 def _find_child(el: ET.Element, name: str) -> ET.Element | None:
     for child in el:
         if _localname(child.tag) == name:
@@ -31,6 +70,7 @@ class DataNode:
     type: str
     database: str
     identifier: str
+    url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +78,7 @@ class Reference:
     identifier: str
     database: str
     title: str
+    url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,12 +128,15 @@ def parse_curation_metadata(gpml: bytes | str) -> CurationMetadata:
         kind = _localname(el.tag)
         if kind == "DataNode":
             xref = _find_child(el, "Xref")
+            database = (xref.get("Database") if xref is not None else "") or ""
+            identifier = (xref.get("ID") if xref is not None else "") or ""
             data_nodes.append(
                 DataNode(
                     label=(el.get("TextLabel") or "").strip(),
                     type=el.get("Type") or "Unknown",
-                    database=(xref.get("Database") if xref is not None else "") or "",
-                    identifier=(xref.get("ID") if xref is not None else "") or "",
+                    database=database,
+                    identifier=identifier,
+                    url=resolver_url(database, identifier),
                 )
             )
         elif kind == "OntologyTerm":
@@ -105,11 +149,14 @@ def parse_curation_metadata(gpml: bytes | str) -> CurationMetadata:
             )
         elif kind == "PublicationXref":
             # Biopax literature reference: bp:ID / bp:DB / bp:TITLE children.
+            ref_id = _text(_find_child(el, "ID"))
+            ref_db = _text(_find_child(el, "DB")) or "PubMed"
             references.append(
                 Reference(
-                    identifier=_text(_find_child(el, "ID")),
-                    database=_text(_find_child(el, "DB")),
+                    identifier=ref_id,
+                    database=ref_db,
                     title=_text(_find_child(el, "TITLE")),
+                    url=resolver_url(ref_db, ref_id),
                 )
             )
 

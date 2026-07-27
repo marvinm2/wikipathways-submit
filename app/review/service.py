@@ -16,7 +16,7 @@ from app.curators import CuratorRegistry
 from app.github import GitHubClient, GitHubError
 from app.locks import PathwayLockRegistry
 from app.models import Review, ReviewStatus, utcnow
-from app.review.checklist import ChecklistState, is_complete, is_valid_key
+from app.review.checklist import ChecklistState, build_checklist, is_complete, is_valid_key
 from app.wpid import WpidAllocator
 
 #: Hidden token embedded in the mirror comment so we update the same one instead of spamming.
@@ -125,13 +125,33 @@ class CurationService:
             # as a 500 on an action that already succeeded.
             pass
 
-    def register(self, *, pr_number: int, wpid: int, submitter: str, kind: str) -> Review:
-        """Create the review row for a freshly opened submission PR (idempotent by PR number)."""
+    def register(
+        self,
+        *,
+        pr_number: int,
+        wpid: int,
+        submitter: str,
+        kind: str,
+        metadata=None,
+        before_metadata=None,
+    ) -> Review:
+        """Create the review row for a freshly opened submission PR (idempotent by PR number).
+
+        ``metadata`` (parsed from the uploaded GPML) pre-fills the checklist with auto-derived,
+        curator-overridable states; ``before_metadata`` (updates only) scopes the checklist to what
+        actually changed. Both optional — without them the plain all-pending checklist is used.
+        """
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
             if review is None:
                 review = Review(
-                    pr_number=pr_number, wpid=wpid, submitter=submitter, kind=kind
+                    pr_number=pr_number,
+                    wpid=wpid,
+                    submitter=submitter,
+                    kind=kind,
+                    checklist=build_checklist(
+                        metadata=metadata, before=before_metadata, kind=kind
+                    ),
                 )
                 s.add(review)
                 s.commit()

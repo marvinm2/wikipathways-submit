@@ -104,8 +104,21 @@
       <input type="file" id="update-file" accept=".gpml,.xml">
     </div>
   </div>
+  <fieldset class="change-set">
+    <legend>What changed? <span class="muted">(optional — helps the reviewer)</span></legend>
+    <div class="change-set__grid">
+      <label><input type="checkbox" class="update-change" data-label="Data nodes added, removed, or edited"> Data nodes</label>
+      <label><input type="checkbox" class="update-change" data-label="Identifiers / annotations updated"> Identifiers</label>
+      <label><input type="checkbox" class="update-change" data-label="Interactions changed"> Interactions</label>
+      <label><input type="checkbox" class="update-change" data-label="Title or description updated"> Title / description</label>
+      <label><input type="checkbox" class="update-change" data-label="References added or updated"> References</label>
+      <label><input type="checkbox" class="update-change" data-label="Ontology tags updated"> Ontology tags</label>
+      <label><input type="checkbox" class="update-change" data-label="Layout / graphics only"> Layout only</label>
+      <label><input type="checkbox" id="update-change-other" data-label="Other"> Other</label>
+    </div>
+  </fieldset>
   <label class="note-field">
-    <span class="note-field__label">What changed <span class="muted">(optional)</span></span>
+    <span class="note-field__label">Details <span class="muted">(optional; required if "Other")</span></span>
     <textarea id="update-description" rows="3"
               placeholder="Summarise the edit so a curator can review it faster."></textarea>
   </label>

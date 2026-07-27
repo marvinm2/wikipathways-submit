@@ -35,6 +35,7 @@ from app.github import GitHubClient, GitHubError, HttpGitHubClient
 from app.locks import LockUnavailable, PathwayLockRegistry
 from app.models import Base, ReviewStatus
 from app.preview import PreviewService
+from app.preview.metadata import parse_curation_metadata
 from app.review.service import (
     ChecklistIncomplete,
     CurationService,
@@ -223,28 +224,29 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             preview_artifact_name=settings.preview_artifact_name,
         )
 
+    def _fetch_base_gpml(github: GitHubClient, path: str) -> bytes | None:
+        """The current base-``main`` version of ``path``, or None (best-effort — used as the
+        update 'before' for both the render and the changed-since-base checklist scoping)."""
+        try:
+            return github.get_file_content(settings.content_repo, settings.default_branch, path)
+        except Exception:  # noqa: BLE001 — a missing/unreadable base only costs the before-view
+            return None
+
     def _render_preview(
         request: Request,
         *,
         pr_number: int,
         wpid: int,
-        path: str,
         after_gpml: bytes,
-        github: GitHubClient,
-        with_before: bool,
+        before_gpml: bytes | None = None,
         submitter_note: str | None = None,
     ) -> None:
         """Instantly render the before/after preview at PR-creation time (issue #11, 1a).
 
-        Best-effort — a render or base-fetch failure only costs the preview, never the submission,
-        so the whole thing is swallowed (the CI artifact / placeholder still covers the frame).
+        Best-effort — a render failure only costs the preview, never the submission, so the whole
+        thing is swallowed (the CI artifact / placeholder still covers the frame).
         """
         try:
-            before_gpml = None
-            if with_before:
-                before_gpml = github.get_file_content(
-                    settings.content_repo, settings.default_branch, path
-                )
             request.app.state.preview.render_local(
                 pr_number,
                 wpid,
@@ -466,17 +468,20 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        after_meta = parse_curation_metadata(content)
         _curation(request, bot).register(
-            pr_number=result.pr_number, wpid=result.wpid, submitter=submitter, kind="new"
+            pr_number=result.pr_number,
+            wpid=result.wpid,
+            submitter=submitter,
+            kind="new",
+            metadata=after_meta,  # pre-fills the checklist with auto-derived states
         )
         _render_preview(
             request,
             pr_number=result.pr_number,
             wpid=result.wpid,
-            path=result.path,
             after_gpml=content,
-            github=github,
-            with_before=False,  # new pathway has no base version
+            before_gpml=None,  # new pathway has no base version
             submitter_note=description,
         )
         return SubmitResponse(
@@ -517,17 +522,25 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        # Fetch the base version once — it is both the render 'before' and the baseline the
+        # checklist uses to skip checks for things this update didn't change.
+        before_gpml = _fetch_base_gpml(github, result.path)
+        after_meta = parse_curation_metadata(content)
+        before_meta = parse_curation_metadata(before_gpml) if before_gpml else None
         _curation(request, bot).register(
-            pr_number=result.pr_number, wpid=result.wpid, submitter=submitter, kind="update"
+            pr_number=result.pr_number,
+            wpid=result.wpid,
+            submitter=submitter,
+            kind="update",
+            metadata=after_meta,
+            before_metadata=before_meta,
         )
         _render_preview(
             request,
             pr_number=result.pr_number,
             wpid=result.wpid,
-            path=result.path,
             after_gpml=content,
-            github=github,
-            with_before=True,  # render the current main version as the "before"
+            before_gpml=before_gpml,
             submitter_note=description,
         )
         return SubmitResponse(
