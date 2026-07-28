@@ -792,6 +792,26 @@
     var src = img.getAttribute('src');
     if (!/\.svg$/.test(src)) return;
 
+    // Pin the layer to the image's own box rather than trusting it to fill the stage. The
+    // image is letterboxed inside the stage by max-width/max-height, and that spare margin is
+    // not shared equally on both axes, so a layer stretched to the stage puts every hotspot a
+    // node's height out of place -- observed doing exactly that. Measuring is immune to however
+    // the sizing chain resolves.
+    function syncLayer() {
+      layer.style.left = img.offsetLeft + 'px';
+      layer.style.top = img.offsetTop + 'px';
+      layer.style.width = img.offsetWidth + 'px';
+      layer.style.height = img.offsetHeight + 'px';
+    }
+    if (window.ResizeObserver) {
+      // Fires on load, on every zoom step (zoom resizes the image), and on window resize.
+      new ResizeObserver(syncLayer).observe(img);
+    } else {
+      img.addEventListener('load', syncLayer);
+      window.addEventListener('resize', syncLayer);
+    }
+    syncLayer();
+
     fetch(src.replace(/\.svg$/, '-nodes.json'), { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (nodes) {

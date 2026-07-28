@@ -786,7 +786,9 @@ main { flex: 1; }
 .zoom--zoomed .zoom__stage > .zoom__img { width: 100%; height: 100%; }
 
 /* ---------- clickable data nodes (issue #14) ---------- */
-.zoom__hotspots { position: absolute; inset: 0; }
+/* Box set by JS from the image's measured position, not inset:0 — the image is letterboxed
+   inside the stage, so filling the stage would offset every hotspot. */
+.zoom__hotspots { position: absolute; }
 .hotspot {
   position: absolute;
   padding: 0;
