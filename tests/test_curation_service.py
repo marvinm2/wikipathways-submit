@@ -341,6 +341,22 @@ def test_mirror_comment_written_when_bot_present(session_factory):
     assert "—" not in body
 
 
+def test_mirror_comment_uses_the_right_article_for_each_kind(session_factory):
+    # The kind was interpolated after a hard-coded "A", so every update PR on GitHub opened
+    # with "A edit from @...". The article has to follow the noun.
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
+    svc.register(pr_number=2, wpid=5638, submitter="carol", kind="update")
+
+    new_body = gh.comments[(REPO, 1)]["<!-- wikipathways-submit:mirror -->"]
+    update_body = gh.comments[(REPO, 2)]["<!-- wikipathways-submit:mirror -->"]
+
+    assert "A new pathway from @bob" in new_body
+    assert "An edit from @carol" in update_body
+    assert "A edit" not in update_body
+
+
 def test_mirror_comment_links_to_the_render_when_a_public_url_is_set(session_factory):
     # CI publishes no image, so the mirror comment is the only thing that can point a
     # GitHub-native reviewer at where the before/after render actually lives.

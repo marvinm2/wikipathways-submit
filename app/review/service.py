@@ -74,7 +74,8 @@ def render_mirror_comment(review: Review, repo: str, *, base_url: str = "") -> s
     ``base_url`` is the app's public URL. When set, the comment links to the review page — the
     only place the before/after render exists, since CI publishes tables and pvjson but no image.
     """
-    kind = "new pathway" if review.kind == "new" else "edit"
+    # Carries its own article: "An edit", not "A edit".
+    subject = "A new pathway" if review.kind == "new" else "An edit"
     where = _PLAIN_STATUS.get(review.status.value, review.status.value)
     assigned = (
         f" @{review.assigned_curator} is reviewing it." if review.assigned_curator else ""
@@ -83,7 +84,7 @@ def render_mirror_comment(review: Review, repo: str, *, base_url: str = "") -> s
         MIRROR_MARKER,
         f"### Curation status for {review.wpid_str}",
         "",
-        f"Written by the curation bot. A {kind} from @{review.submitter}, **{where}**.{assigned}",
+        f"Written by the curation bot. {subject} from @{review.submitter}, **{where}**.{assigned}",
         "",
         "| Check | State | Notes |",
         "|---|---|---|",
