@@ -623,9 +623,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # <BiopaxRef> actually points at, so comparing its output against every PublicationXref
         # in the file reports a shortfall that is not one — and that item is required, so the
         # false FAIL would block approval and read as the submitter's fault.
+        # `meta` is the parsed metadata.json, a plain dict — attribute access on it silently
+        # yields None, which made the pipeline's reference check return early and do nothing.
         curation.refresh_pipeline_checks(
             pr_number,
-            gpml_reference_count=getattr(meta, "cited_reference_count", None) if meta else None,
+            gpml_reference_count=meta.get("cited_reference_count") if meta else None,
         )
         # Read the row last. Both calls above write to it, and rendering the copy fetched before
         # them would show the page as it was one refresh ago.
