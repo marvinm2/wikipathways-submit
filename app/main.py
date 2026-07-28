@@ -446,6 +446,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             # Changes what approval *means* on screen: a label handed to the repository, not a
             # merge this app performs.
             "pipeline_mode": settings.is_pipeline_mode,
+            # Shown on every page when set, so a deployment pointed somewhere that cannot
+            # publish says so before anyone spends an afternoon on a submission.
+            "site_notice": settings.site_notice.strip(),
         }
 
     def _review_view(request: Request, r) -> dict:

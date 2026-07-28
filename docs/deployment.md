@@ -147,6 +147,30 @@ docker service create \
 `pr-preview.yml`, which does not exist on `sandbox-wp-db` and never will — left on, every
 approval returns 409.
 
+### `WPSUBMIT_SITE_NOTICE` — say so when the target cannot publish
+
+A standing banner on every page. Empty (the default) renders nothing.
+
+Set it on any deployment whose target repository cannot actually complete a publication — a
+sandbox, or a fork that lacks the sister-repo credentials the publish workflow pushes with. The
+submit page tells people the database will publish their pathway and assign its WPID; where that
+is not true, this is the only thing that says so.
+
+This is not hypothetical. On 2026-07-28 a contributor submitted a real pathway through
+`upload.wikipathways.org` while it pointed at a fork where neither the publish workflow nor the
+rejection workflow can close a pull request. Their work went nowhere, silently, and nothing on
+screen gave them a way to know. Deploying without this banner on such a target is how that
+happens again.
+
+```bash
+docker service update \
+  --env-add 'WPSUBMIT_SITE_NOTICE=Sandbox deployment. Submissions open a real pull request but are not published to WikiPathways yet, and no WPID is assigned. Please do not rely on this for work you need published.' \
+  wikipathways-submit
+```
+
+It is free text rather than something derived from `WPSUBMIT_PUBLISH_MODE`, because whether a
+target *can* publish depends on credentials held by other repositories that this app cannot see.
+
 Verify from inside the overlay network, since nothing is routed yet:
 
 ```bash

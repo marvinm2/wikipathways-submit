@@ -65,7 +65,8 @@ Submission, change request and revision, all through the browser at
 - revision uploaded in the browser → committed onto the **same** branch, no second PR, review
   back to `open`, and `datanodes_mapped` re-derived from the new content: FAIL → PASS
 
-Not yet exercised live: **approve**, **reject**, **publish detection**, and the **update** flow.
+Not yet exercised live *at the time of writing*: **approve**, **reject**, **publish detection**,
+and the **update** flow. All four were exercised on 2026-07-28 — see the section at the end.
 
 ## Upstream bugs found (all in `wikipathways/sandbox-wp-db`)
 
@@ -216,3 +217,63 @@ ssh tgx1 "docker service ps wikipathways-submit"
 ssh tgx2 "docker logs \$(docker ps -q -f 'name=wikipathways-submit.1') --since 5m"
 gh run list -R marvinm2/sandbox-wp-db --limit 5
 ```
+
+## Addendum — 2026-07-28: the rest of the lifecycle, live
+
+The seven pending commits were deployed and the whole app driven through the browser against
+`marvinm2/sandbox-wp-db`. This closes the "not yet exercised live" line above.
+
+### Now proven against live GitHub
+
+- **Approve** (PR #3) — applies `accepted`, upserts the mirror comment, posts the handover note.
+  The button is genuinely `disabled` until every required checklist item passes and enables the
+  moment they do. Worth knowing when testing: a disabled approve button and a broken one look
+  identical from the outside.
+- **Publish detection** — 3A failed without closing the PR, so no close event was ever coming.
+  After the 30-minute `publish_timeout` the review moved `approved` → `publish_failed` on its own,
+  shown as **Not published** with `decision_note` rendered on screen, actions restored (it is
+  `DECIDABLE`), and the manual WPID control offered.
+- **Record-the-published-WPID**, **reject** (PR #1, reason posted, controls correctly gone), and
+  the **update flow** (PR #4): branch `update/WP1001`, head commit's parent byte-identical to the
+  current `main` HEAD, so branch-off-latest is real rather than asserted. Re-upload reused the
+  open PR.
+- **The two-identity split**, visible on GitHub: commits authored by the submitter, PRs opened by
+  the bot.
+
+### The fork's ceiling is worse than recorded above
+
+**3B (rejection) fails exactly as 3A (publish) does** — both push to
+`wikipathways/sandbox-wp.gh.io`, for which the fork holds no deploy key
+(`403 denied to github-actions[bot]`). So on this target **no pull request can ever close**,
+whatever the app decided. When working here, read the app's state, not the pull request's. All
+six PRs on the fork are OPEN regardless of being approved, rejected or published.
+
+### Two defects found, fixed, deployed
+
+- **The connection pool had no liveness check.** A pooled connection outlives its request and the
+  overlay network drops idle TCP sessions silently, so the *first* request after any quiet period
+  returned a 500 (`server closed the connection unexpectedly`) — exactly when a curator comes
+  back. Self-heals on retry, so the symptom is one 500 per idle period, which is easy to misread.
+  Fixed with `pool_pre_ping` + `pool_recycle` in `app/db.py`, non-SQLite only. **Unit-tested but
+  not yet confirmed against a real idle window**; to confirm, grep the service log for
+  `OperationalError` after a genuine quiet spell.
+- **The mirror comment announced every update as "A edit".** Fixed; the noun carries its article.
+
+### The portal has users who are not us
+
+PRs #5 and #6 arrived through `upload.wikipathways.org` mid-session with nobody in the session
+making them — #6 a real **PPAR signaling pathway from @MadhushriMSV**, 88 data nodes, 14
+references, which the app parsed, rendered and checklisted correctly.
+
+Two consequences, both load-bearing. The queue is **shared with real work**, so test submissions
+must be labelled as such and only ever approved or rejected against your own. And a real
+contributor submitted real work to a target that cannot publish it — which is why
+`WPSUBMIT_SITE_NOTICE` now exists (`docs/deployment.md`). **Set it on any deployment whose target
+cannot complete a publication.**
+
+### Still open
+
+The org install on `wikipathways/sandbox-wp-db` (blocks draft artifacts and any real
+publication), fork-per-submitter, TTL tuning, and the private disclosure of the workflow-1 script
+injection — which is more pressing than it looks, because `docs/sandbox-pipeline.md` §6.1
+describes the hole in full and **this repository is public**.

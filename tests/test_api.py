@@ -655,3 +655,41 @@ def test_callback_rejects_bad_state(tmp_path):
         # No prior /auth/login → no stored state → mismatch.
         resp = c.get("/auth/callback?code=abc&state=forged", follow_redirects=False)
         assert resp.status_code == 400
+
+
+def _notice_client(tmp_path, notice):
+    settings = _settings(
+        database_url=f"sqlite:///{tmp_path / 'reg.db'}", site_notice=notice
+    )
+    return TestClient(build_app(settings))
+
+
+def test_site_notice_shows_on_every_page_when_configured(tmp_path):
+    # A deployment can be pointed at a target that cannot publish, and nothing on screen said so.
+    # It has to appear on the submit page above all, since that is where the promise is made.
+    notice = "Sandbox deployment: submissions here are not published."
+    with _notice_client(tmp_path, notice) as c:
+        for path in ("/", "/dashboard"):
+            body = c.get(path).text
+            assert notice in body
+            assert 'class="site-notice"' in body
+
+
+def test_no_site_notice_element_when_unset(tmp_path):
+    # Empty must mean no banner at all, not an empty amber bar on every page.
+    with _notice_client(tmp_path, "") as c:
+        assert "site-notice" not in c.get("/").text
+
+
+def test_blank_site_notice_is_treated_as_unset(tmp_path):
+    with _notice_client(tmp_path, "   ") as c:
+        assert "site-notice" not in c.get("/").text
+
+
+def test_site_notice_is_escaped(tmp_path):
+    # It comes from deploy config rather than a user, but config is not markup and this renders
+    # on every page including logged-out ones.
+    with _notice_client(tmp_path, "<script>alert(1)</script>") as c:
+        body = c.get("/").text
+        assert "<script>alert(1)</script>" not in body
+        assert "&lt;script&gt;" in body

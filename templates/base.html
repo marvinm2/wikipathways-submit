@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}wikipathways-submit{% endblock %}</title>
   <meta name="description" content="Submit and curate WikiPathways pathways through pull requests, without touching git.">
-  <link rel="stylesheet" href="/static/app.css?v=9">
+  <link rel="stylesheet" href="/static/app.css?v=10">
 </head>
 {# The client has to know whether approving merges or hands the pull request to the repository:
    otherwise the button says "Merging…" on a target that never merges anything. #}
@@ -36,6 +36,17 @@
      </div>
     </header>
 
+    {# A deployment can point at a target that cannot publish, and until this existed nothing on
+       screen said so — a real contributor submitted real work to one and it went nowhere. Plain
+       text, so Jinja escapes it: the value comes from deploy config, but config is not markup. #}
+    {% if site_notice %}
+    <aside class="site-notice" aria-label="Service notice">
+      <div class="container">
+        <p>{{ site_notice }}</p>
+      </div>
+    </aside>
+    {% endif %}
+
     <main id="main">
       <div class="container">
         {% block content %}{% endblock %}
@@ -51,7 +62,7 @@
 
   <div id="toast-region" class="toast-region" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=9"></script>
+  <script src="/static/app.js?v=10"></script>
   {% block script %}{% endblock %}
 </body>
 </html>

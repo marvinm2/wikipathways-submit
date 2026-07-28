@@ -115,6 +115,19 @@ class Settings(BaseSettings):
     # → the comment carries no link rather than a link to somebody's localhost.
     app_base_url: str = ""
 
+    # A standing notice shown at the top of every page. Empty → no banner at all.
+    #
+    # This exists because a deployment can be pointed at a target that cannot actually publish —
+    # a sandbox, a fork without the sister-repo credentials — and nothing on screen said so. A
+    # real contributor submitted a real pathway to exactly such a deployment and it went nowhere,
+    # silently, which is worse than the portal being down: they had no way to know. The submit
+    # page promises the database will publish the pathway, so wherever that promise does not
+    # hold, say it here.
+    #
+    # Deliberately free text rather than derived from publish_mode: "can this target publish"
+    # depends on credentials held by other repositories, which this app cannot see.
+    site_notice: str = ""
+
     # Per-user OAuth (submitter identity, scaffolding-plan §3). Absent → auth routes 503.
     github_oauth_client_id: str | None = None
     github_oauth_client_secret: str | None = None
