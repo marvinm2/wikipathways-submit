@@ -652,6 +652,9 @@
       }
       stage.style.transform = 'translate(' + tx + 'px,' + ty + 'px)';
       root.classList.toggle('zoom--zoomed', scale > 1.001);
+      // Keep the clickable overlay on the image after a zoom or pan. Set by initHotspots, which
+      // runs after this, so it is absent on the first apply() and present from then on.
+      if (root.__syncOverlay) root.__syncOverlay();
     }
     function clamp(s) { return Math.max(min, Math.min(max, s)); }
     // Keep the diagram overlapping its frame. Without this, holding an arrow key walks it
@@ -803,14 +806,16 @@
       layer.style.width = img.offsetWidth + 'px';
       layer.style.height = img.offsetHeight + 'px';
     }
-    if (window.ResizeObserver) {
-      // Fires on load, on every zoom step (zoom resizes the image), and on window resize.
-      new ResizeObserver(syncLayer).observe(img);
-    } else {
-      img.addEventListener('load', syncLayer);
-      window.addEventListener('resize', syncLayer);
-    }
-    syncLayer();
+    // Explicit sync points, deliberately not a ResizeObserver on the image. Observing the image
+    // and then writing layout from the callback is a feedback loop: the write triggers a
+    // recalculation, the recalculation re-fires the observer, and the renderer locks up. It did
+    // exactly that here -- the tab stopped painting. These three cover every way the image can
+    // change size, and none of them is re-entrant.
+    img.addEventListener('load', syncLayer);
+    window.addEventListener('resize', syncLayer);
+    // initZoom owns the only other thing that resizes it. It calls this after each apply().
+    root.__syncOverlay = syncLayer;
+    if (img.complete && img.naturalWidth) syncLayer();
 
     fetch(src.replace(/\.svg$/, '-nodes.json'), { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
