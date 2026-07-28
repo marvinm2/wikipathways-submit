@@ -249,3 +249,230 @@ def test_the_review_page_offers_a_revision_upload(tmp_path):
 
     assert 'class="revise-file"' in page
     assert "Commit onto this pull request" in page
+
+
+# ---------------------------------------------------------------------------------------------
+# The whole loop, over HTTP. Every piece of this was covered somewhere — the service tests drive
+# CurationService directly, the API tests stop at submit — but the sequence a curator actually
+# performs had never run end to end through the app.
+
+
+def _pass_every_required_item(client, pr: int) -> None:
+    detail = client.get(f"/api/reviews/{pr}").json()
+    for item in detail["checklist"]:
+        if item["required"]:
+            resp = client.post(
+                f"/api/reviews/{pr}/checklist", data={"key": item["key"], "state": "pass"}
+            )
+            assert resp.status_code == 200, resp.text
+
+
+def test_the_whole_lifecycle_from_submission_to_published(tmp_path):
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        fake = app.state._fake
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+        _pass_every_required_item(client, pr)
+
+        approved = client.post(f"/api/reviews/{pr}/approve")
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["status"] == "approved"
+        # The label *is* the approval: it is what the repository's dispatcher reacts to.
+        assert "accepted" in fake.list_labels(REPO, pr)
+
+        # The repository publishes, announces the id it assigned, and closes without merging.
+        fake.simulate_3a(REPO, pr, wpid=5678)
+        page = client.get("/dashboard?status=published")
+        assert page.status_code == 200
+
+        detail = client.get(f"/api/reviews/{pr}").json()
+        assert detail["status"] == "published"
+        assert detail["wpid"] == 5678
+
+
+def test_a_publication_that_never_happened_is_reachable_and_recoverable(tmp_path):
+    """The failure this repository has actually shown: the pull request closes and nothing was
+    said. It has to be findable in the queue and a curator has to be able to close it out."""
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        fake = app.state._fake
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+        _pass_every_required_item(client, pr)
+        client.post(f"/api/reviews/{pr}/approve")
+
+        fake.simulate_3a(REPO, pr, wpid=None)  # closed, nothing announced
+        queue = client.get("/dashboard?status=publish_failed")
+        assert f"/dashboard/{pr}" in queue.text  # it has a tab and the card is on it
+
+        assert client.get(f"/api/reviews/{pr}").json()["status"] == "publish_failed"
+
+        recorded = client.post(f"/api/reviews/{pr}/published-wpid", data={"wpid": 5678})
+        assert recorded.status_code == 200, recorded.text
+        assert recorded.json()["status"] == "published"
+        assert recorded.json()["wpid"] == 5678
+
+
+def test_rejecting_hands_the_pr_to_the_repositorys_rejection_workflow(tmp_path):
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        fake = app.state._fake
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+
+        resp = client.post(f"/api/reviews/{pr}/reject", data={"note": "duplicate of WP554"})
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "rejected"
+        assert "rejected" in fake.list_labels(REPO, pr)
+        # The reason goes on the record before the label that triggers the workflow, because
+        # that workflow closes the pull request.
+        assert any("duplicate of WP554" in b for b in fake.issue_comments[(REPO, pr)])
+
+
+def test_a_decided_review_cannot_be_decided_again(tmp_path):
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+        _pass_every_required_item(client, pr)
+        client.post(f"/api/reviews/{pr}/approve")
+
+        assert client.post(f"/api/reviews/{pr}/approve").status_code == 409
+        assert client.post(f"/api/reviews/{pr}/revise",
+                           files={"file": ("m.gpml", io.BytesIO(GOOD_GPML), "application/xml")}
+                           ).status_code == 409
+
+
+def test_the_queue_offers_a_tab_for_every_state_a_review_can_reach(tmp_path):
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        _submit(client)
+        _login(client, "marvinm2")
+        page = client.get("/dashboard").text
+
+    for status in ("open", "changes_requested", "approved", "published", "publish_failed",
+                   "rejected", "closed"):
+        assert f"/dashboard?status={status}" in page, status
+    # Nothing merges here, so a Merged tab would only ever be empty.
+    assert "/dashboard?status=merged" not in page
+
+
+def test_a_submitter_can_find_their_own_submission_without_a_wpid(tmp_path):
+    app = _pipeline_app(tmp_path)  # not a curator
+    with TestClient(app) as client:
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+
+        mine = client.get("/dashboard?mine=1")
+
+        assert mine.status_code == 200
+        assert f"/dashboard/{pr}" in mine.text
+        assert "Your submissions" in mine.text
+
+
+def test_a_submitter_who_is_not_a_curator_can_answer_a_change_request(tmp_path):
+    app = _pipeline_app(tmp_path, curators=["someone-else"])
+    with TestClient(app) as client:
+        pr = _submit(client)["pr_number"]
+        with app.state.session_factory() as s:
+            s.get(Review, pr).status = "changes_requested"
+            s.commit()
+        _login(client, "marvinm2")
+
+        page = client.get(f"/dashboard/{pr}").text
+
+    assert 'class="revise-file"' in page  # the upload control, not just an instruction
+    assert "WPNone" not in page  # a new pathway has no id to name
+
+
+def test_the_placeholder_id_cannot_address_a_real_pathway(pipeline_client):
+    """WP0001 is what a submission carries before it has an id. Stripping the leading zeros
+    would send the upload to WP1, a real and unrelated pathway."""
+    assert pipeline_client.get("/api/pathways/0001").status_code == 422
+    assert pipeline_client.post(
+        "/api/pathways/0001/update",
+        files={"file": ("m.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+    ).status_code == 422
+
+
+def test_the_repositorys_own_artifacts_are_shown_when_it_produced_any(tmp_path, monkeypatch):
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        pr = _submit(client)["pr_number"]
+
+        # Stand in for the sister site repo the pipeline pushes its drafts into.
+        from app.pipeline.drafts import DraftArtifacts
+
+        slug = f"WP0__PR{pr}"
+        app.state.drafts.fetch = lambda s: DraftArtifacts(  # type: ignore[assignment]
+            slug=slug,
+            available=True,
+            datanodes=[{"Label": "IRS1", "Identifier": "3667"}],
+            bibliography=[{"Citation": "x"}],
+            info={"wpid": slug, "title": "Mitophagy", "description": "A pathway."},
+            draft_url=f"https://sandbox.wikipathways.org/drafts/{slug}",
+            svg_url=f"https://raw.example/{slug}.svg",
+            thumb_url=None,
+        )
+        _login(client, "marvinm2")
+        page = client.get(f"/dashboard/{pr}").text
+
+    assert "1 data nodes annotated" in page
+    assert f"https://sandbox.wikipathways.org/drafts/{slug}" in page
+
+
+def test_an_update_in_changes_requested_names_a_route_that_works(tmp_path):
+    """The revise endpoint refuses updates, so pointing an update's submitter at the review page
+    points them at nothing. They have to be sent back to the update form with their WPID."""
+    app = _pipeline_app(tmp_path, curators=["someone-else"])
+    with TestClient(app) as client:
+        pr = _submit(client)["pr_number"]
+        with app.state.session_factory() as s:
+            r = s.get(Review, pr)
+            r.kind, r.wpid, r.status = "update", 5636, "changes_requested"
+            s.commit()
+        _login(client, "marvinm2")
+
+        page = client.get(f"/dashboard/{pr}").text
+
+    assert "/?wpid=WP5636" in page
+    assert f'href="/dashboard/{pr}">Open the full review' not in page  # not a link to itself
+
+
+def test_the_queue_card_does_not_promise_an_upload_field_it_does_not_have(tmp_path):
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        pr = _submit(client)["pr_number"]
+        client_login = _login(client, "marvinm2")  # noqa: F841
+        client.post(f"/api/reviews/{pr}/request-changes", data={"note": "annotate IRS1"})
+
+        queue = client.get("/dashboard?status=changes_requested").text
+        detail = client.get(f"/dashboard/{pr}").text
+
+    assert "Upload the fixed GPML below" not in queue  # the field is only on the detail page
+    assert "Upload a revision &rarr;" in queue or "Upload a revision →" in queue
+    assert "Upload the fixed GPML below" in detail
+    assert 'class="revise-file"' in detail
+
+
+def test_a_publish_failure_still_offers_the_curator_something_to_do(tmp_path):
+    """Every approval against the live target lands here, so a card with nothing on it but a
+    form asking for an identifier that does not exist is the whole dashboard, most of the time."""
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        fake = app.state._fake
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+        _pass_every_required_item(client, pr)
+        client.post(f"/api/reviews/{pr}/approve")
+        fake.simulate_3a(REPO, pr, wpid=None)
+        client.get("/dashboard?status=publish_failed")
+
+        page = client.get(f"/dashboard/{pr}").text
+
+    assert "Record the published WPID" in page
+    assert "btn--reject" in page
+    assert "btn--changes" in page
+    assert "Approve for publication" in page  # re-approving re-fires the repository's dispatcher

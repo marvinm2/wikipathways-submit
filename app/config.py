@@ -1,6 +1,9 @@
 """Application settings (12-factor: env-driven, with dev-friendly defaults)."""
 from __future__ import annotations
 
+import logging
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -125,6 +128,41 @@ class Settings(BaseSettings):
     # Encrypts the OAuth token at rest inside the session (issue #4). A Fernet key; if unset a
     # key is derived from session_secret. Set/rotate independently in production.
     token_encryption_key: str | None = None
+
+    @model_validator(mode="after")
+    def _pipeline_defaults(self) -> Settings:
+        """Make the pipeline-mode defaults coherent, and say so when they are changed.
+
+        Two settings default to values that are simply wrong against a repository that publishes
+        through its own Actions, and both were discovered the hard way on the live deployment:
+
+        - ``require_preview_check`` gates approval on ``pr-preview.yml``, a workflow that repo
+          does not have, so **every** approval returns 409 until it is turned off by hand.
+        - ``submit_identity="user"`` pushes the branch with the submitter's own token, which an
+          ordinary submitter cannot do on a repository they do not have write access to.
+
+        The first is silently corrected, because there is no configuration under which gating on
+        a workflow the target repo has never run is what anyone meant. The second is only warned
+        about: pointing the app at your own fork, where you *can* push, is a legitimate setup and
+        is exactly how the sandbox integration was tested.
+        """
+        if self.publish_mode == "pipeline":
+            if self.require_preview_check:
+                logging.getLogger("wpsubmit.config").info(
+                    "publish_mode=pipeline: disabling require_preview_check, which gates on %s "
+                    "— a workflow the target repository is not expected to have",
+                    self.preview_workflow_file,
+                )
+                self.require_preview_check = False
+            if self.submit_identity != "bot":
+                logging.getLogger("wpsubmit.config").warning(
+                    "publish_mode=pipeline with submit_identity=%s: submissions are pushed with "
+                    "the submitter's own token, which only works where they have write access "
+                    "to %s. Set WPSUBMIT_SUBMIT_IDENTITY=bot on a shared repository.",
+                    self.submit_identity,
+                    self.content_repo,
+                )
+        return self
 
     @property
     def content_repo_owner(self) -> str:
