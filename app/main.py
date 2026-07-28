@@ -43,7 +43,15 @@ from app.review.service import (
     CurationService,
     NotACurator,
     PreviewNotReady,
+    ReviewNotActionable,
     ReviewNotFound,
+)
+from app.review.status import (
+    ACTIONABLE,
+    AWAITING_WPID,
+    DECIDABLE,
+    presentation,
+    queue_tabs,
 )
 from app.submit import (
     InvalidGpml,
@@ -403,10 +411,22 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         elif status == "failed":
             preview = {"status": "failed"}
         # 'pending' → leave None so the template shows the "generating" empty state
+        shown = presentation(r.status.value)
         return {
             **_detail(r).model_dump(),
             "wpid_str": r.wpid_str,
             "pr_url": pr_url,
+            # Everything the templates need to talk about this state in words rather than in
+            # stored enum values.
+            "status_label": shown.label,
+            "status_blurb": shown.blurb,
+            "status_tone": shown.tone,
+            # Two different questions. "actionable" = the pull request is live and a revision
+            # means something; "decidable" = a curator's approve/reject still applies, which is
+            # also true of a publication that failed.
+            "actionable": r.status.value in ACTIONABLE,
+            "decidable": r.status.value in DECIDABLE,
+            "awaiting_wpid": r.status.value in AWAITING_WPID,
             "preview": preview,
             # Parsed curation metadata (data nodes, references, description, ontology tags,
             # submitter note) cached at render time — a cheap disk read, None if not rendered.
@@ -458,13 +478,35 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/dashboard", response_class=HTMLResponse)
     def dashboard(
         request: Request,
-        status: ReviewStatus = ReviewStatus.OPEN,
+        status: ReviewStatus | None = None,
+        mine: bool = False,
         bot: GitHubClient | None = Depends(get_bot_optional),
     ):
         # Terminalise any review whose PR was closed/merged outside the app before rendering the
         # queue, so the dashboard never shows a PR that no longer exists (issue #1).
         _curation(request, bot).reconcile_open_reviews()
-        reviews = [_review_view(request, r) for r in _curation(request).list_queue(status=status)]
+        login = request.session.get("gh_login")
+        # "Mine" is every state at once. A submitter is looking for one particular pathway and
+        # does not know which state it reached — making them guess the tab is the same dead end
+        # as making them remember a WPID they were never given.
+        submitter = login if (mine and login) else None
+        # Keyed on `submitter`, not on `mine`: ?mine=1 while logged out has nobody to filter by,
+        # and leaving the status unset there would render the queue's empty state against a
+        # status that is None.
+        if submitter is not None:
+            status = None
+        elif status is None:
+            status = ReviewStatus.OPEN
+        curation = _curation(request)
+        reviews = [
+            _review_view(request, r)
+            for r in curation.list_queue(status=status, submitter=submitter)
+        ]
+        counts = curation.status_counts(submitter=submitter)
+        # The tab strip links to the unfiltered queue, so its numbers have to describe the
+        # unfiltered queue. Scoping them to the viewer made every tab read zero from the Mine
+        # page for anyone who has never submitted anything — which is most curators.
+        tab_counts = curation.status_counts() if submitter is not None else counts
         return templates.TemplateResponse(
             request,
             "dashboard.html",
@@ -473,7 +515,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "reviews": reviews,
                 "curators": sorted(request.app.state.curators.members()),
                 "repo": settings.content_repo,
-                "status": status.value,
+                "status": status.value if status is not None else None,
+                "mine": bool(submitter),
+                "counts": counts,
+                "total_count": sum(counts.values()),
+                "tabs": queue_tabs(counts=tab_counts, pipeline_mode=settings.is_pipeline_mode),
+                "empty": presentation(status.value) if status is not None else None,
             },
         )
 
@@ -888,6 +935,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             r = _curation(request, bot).request_changes(pr_number, actor, note)
         except ReviewNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ReviewNotActionable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _detail(r)
 
     @app.post("/api/reviews/{pr_number}/approve", response_model=ReviewDetail)
@@ -906,7 +955,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except NotACurator as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except ChecklistIncomplete as exc:
+        except (ChecklistIncomplete, ReviewNotActionable) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PreviewNotReady as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -930,6 +979,8 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except NotACurator as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ReviewNotActionable as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return _detail(r)

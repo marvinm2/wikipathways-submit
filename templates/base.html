@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}wikipathways-submit{% endblock %}</title>
   <meta name="description" content="Submit and curate WikiPathways pathways through pull requests, without touching git.">
-  <link rel="stylesheet" href="/static/app.css?v=8">
+  <link rel="stylesheet" href="/static/app.css?v=9">
 </head>
-<body>
+{# The client has to know whether approving merges or hands the pull request to the repository:
+   otherwise the button says "Merging…" on a target that never merges anything. #}
+<body data-publish-mode="{{ 'pipeline' if pipeline_mode else 'direct' }}">
   <div class="shell">
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header">
@@ -19,7 +21,8 @@
       </a>
       <nav class="site-header__nav" aria-label="Primary">
         <a href="/"{% if request and request.url.path == '/' %} aria-current="page"{% endif %}>Submit</a>
-        <a href="/dashboard"{% if request and request.url.path.startswith('/dashboard') %} aria-current="page"{% endif %}>Dashboard</a>
+        {% if login %}<a href="/dashboard?mine=1">My submissions</a>{% endif %}
+        <a href="/dashboard"{% if request and request.url.path.startswith('/dashboard') %} aria-current="page"{% endif %}>{% if is_curator %}Curation queue{% else %}All submissions{% endif %}</a>
         {% if login %}
           <span class="site-header__who">
             @{{ login }}
@@ -48,7 +51,7 @@
 
   <div id="toast-region" class="toast-region" aria-live="polite"></div>
 
-  <script src="/static/app.js?v=8"></script>
+  <script src="/static/app.js?v=9"></script>
   {% block script %}{% endblock %}
 </body>
 </html>

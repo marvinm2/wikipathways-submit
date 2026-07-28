@@ -30,11 +30,13 @@
   </li>
   <li>
     <h3>It becomes a pull request</h3>
-    <p>The app assigns the WPID and files it where the database expects.</p>
+    <p>Filed where the database expects it, attributed to you.</p>
   </li>
   <li>
-    <h3>Curators review and merge</h3>
-    <p>They see the drawn pathway and a checklist, not raw XML.</p>
+    {# Not "review and merge": where the database publishes through its own automation, nothing
+       is ever merged and the pull request ends up closed. #}
+    <h3>Curators review and accept</h3>
+    <p>They see the drawn pathway and a checklist, not raw XML.{% if pipeline_mode %} The database then assigns the WPID and publishes it.{% endif %}</p>
   </li>
 </ul>
 
@@ -53,8 +55,10 @@
 <section class="tab-panel" data-panel="new" role="tabpanel" aria-labelledby="tab-new">
   <form id="submit-form" class="step-card">
     <h2>Add a new pathway</h2>
-    <p class="hint">Choose a <code>.gpml</code> file. The app validates it, assigns the WPID, lays it
-      out, and opens a pull request on <code>{{ repo }}</code>.</p>
+    <p class="hint">Choose a <code>.gpml</code> file. The app validates it, lays it out, and opens a
+      pull request on <code>{{ repo }}</code>.
+      {% if pipeline_mode %}Your pathway gets its WPID when a curator accepts it and the database
+      publishes it — not now.{% else %}The WPID is assigned when you submit.{% endif %}</p>
     <div class="file-field">
       <input type="file" id="new-file" accept=".gpml,.xml" required
              aria-label="Pathway GPML file" aria-describedby="new-file-hint">

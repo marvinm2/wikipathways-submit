@@ -19,7 +19,11 @@
   --surface-2: #f7f8fa;
   --ink: #1c2634;
   --ink-muted: #5a6472;
-  --ink-faint: #828282;
+  /* Darkened and retinted onto the same blue-grey ink ramp as --ink/--ink-muted. The old
+     #828282 measured 3.7-4.0:1 at the 13-14px sizes it drives — the preview's Before/After
+     captions, "not annotated" in the data-node table, the checklist notes — which is under AA,
+     and it was the one pure neutral in an otherwise blue-tinted set. */
+  --ink-faint: #66717f;
   --line: #e2e5ea;
   --line-strong: #cdd2db;
 
@@ -38,9 +42,13 @@
 
   --brick: #93362b;
   --brick-tint: #f5e0dc;
+  /* Label colours for text sitting *on* --brick / --slate. Hardcoded #fff worked in light mode
+     and vanished in dark, where those tokens lighten to #e2897d and #a7bcc4. */
+  --brick-contrast: #ffffff;
 
   --slate: #46565f;
   --slate-tint: #e6ebec;
+  --slate-contrast: #ffffff;
 
   --focus: #3955e7;
 
@@ -82,9 +90,11 @@
 
     --brick: #e2897d;
     --brick-tint: rgba(226, 137, 125, 0.14);
+    --brick-contrast: #2b1512;
 
     --slate: #a7bcc4;
     --slate-tint: rgba(167, 188, 196, 0.12);
+    --slate-contrast: #101a1f;
 
     --focus: #8ea2ff;
 
@@ -97,7 +107,12 @@
 *, *::before, *::after { box-sizing: border-box; }
 /* Author-origin `display` on a component beats the UA's [hidden] rule; restore it. */
 [hidden] { display: none !important; }
-html { color-scheme: light dark; }
+html {
+  color-scheme: light dark;
+  /* The header is sticky at ~57px (taller once it wraps), so a skip-link jump or a restored
+     scroll position lands the target underneath it. */
+  scroll-padding-top: 4.5rem;
+}
 body {
   margin: 0;
   background: var(--bg);
@@ -273,6 +288,9 @@ main { flex: 1; }
 }
 .btn--approve:hover { background: var(--moss-strong); }
 .btn--approve[aria-disabled="true"] {
+  /* The generic .btn:disabled opacity stacks with the muted palette below and takes the
+     dashboard's primary action to roughly 1.8:1 — a blank grey slab. One or the other. */
+  opacity: 1;
   background: var(--surface-2);
   border-color: var(--line);
   color: var(--ink-faint);
@@ -315,6 +333,13 @@ main { flex: 1; }
 .badge--merged { background: var(--moss-tint); color: var(--moss-strong); }
 .badge--closed { background: var(--brick-tint); color: var(--brick); }
 .badge--curator { background: var(--wp-green-tint); color: var(--wp-green-strong); }
+/* The rest of ReviewStatus. Without these the states a pipeline-mode review actually spends its
+   life in fell through to the bare .badge rule: transparent, borderless, unreadable. */
+.badge--changes_requested { background: var(--amber-tint); color: var(--amber); }
+.badge--approved { background: var(--moss-tint); color: var(--moss-strong); }
+.badge--published { background: var(--wp-green-tint); color: var(--wp-green-strong); }
+.badge--publish_failed { background: var(--brick-tint); color: var(--brick); }
+.badge--rejected { background: var(--brick-tint); color: var(--brick); }
 
 /* ---------- accession tag (signature element) ---------- */
 .tag-wpid {
@@ -460,12 +485,14 @@ main { flex: 1; }
 }
 .tab-panel--hidden { display: none; }
 .wpid-status { margin: 0.2rem 0 0; font-size: 0.85rem; }
-.wpid-status--checking { color: var(--ink-faint); }
-.wpid-status--ok { color: #15803d; }
-.wpid-status--pending { color: #b45309; }
-.wpid-status--err { color: #b91c1c; }
+.wpid-status--checking { color: var(--ink-muted); }
+.wpid-status--error { color: var(--brick); }
+.wpid-status--ok { color: var(--wp-green-strong); }
+.wpid-status--pending { color: var(--amber); }
+.wpid-status--err { color: var(--brick); }
 
 .step-card {
+  max-width: 640px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-l);
@@ -606,8 +633,15 @@ main { flex: 1; }
   margin-bottom: 1.5rem;
   border-bottom: 1px solid var(--line);
   padding-bottom: 0;
+  /* Eight tabs do not fit a phone. They scroll sideways as their own strip rather than giving
+     the whole document a horizontal scrollbar, and the underline stays continuous because the
+     rule is on the scrolling element. */
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .queue-filter a {
+  white-space: nowrap;
+  flex: none;
   text-decoration: none;
   color: var(--ink-muted);
   font-weight: 600;
@@ -686,7 +720,7 @@ main { flex: 1; }
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--line);
 }
-.preview__frame img { width: 100%; height: 19rem; object-fit: contain; background: var(--surface); padding: 0.5rem; }
+.preview__frame > img { width: 100%; height: 19rem; object-fit: contain; background: var(--surface); padding: 0.5rem; }
 
 /* pan / zoom preview */
 .zoom { position: relative; background: var(--surface); }
@@ -720,7 +754,9 @@ main { flex: 1; }
   opacity: 0.55;
   transition: opacity 0.15s;
 }
-.zoom:hover .zoom__controls, .zoom--zoomed .zoom__controls { opacity: 1; }
+.zoom:hover .zoom__controls,
+.zoom:focus-within .zoom__controls,
+.zoom--zoomed .zoom__controls { opacity: 1; }
 .zoom__btn {
   font: inherit;
   font-size: 0.75rem;
@@ -750,7 +786,7 @@ main { flex: 1; }
 .datanodes th { color: var(--ink-faint); font-weight: 600; }
 .datanodes code { font-size: 0.9em; }
 .datanodes__missing { color: var(--ink-faint); font-style: italic; }
-.datanodes__row--unmapped td { background: color-mix(in srgb, var(--surface-2) 82%, #d97706 18%); }
+.datanodes__row--unmapped td { background: var(--amber-tint); }
 .meta-list { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; }
 .meta-list__src { color: var(--ink-faint); font-size: 0.8em; }
 .checklist__auto {
@@ -864,8 +900,8 @@ main { flex: 1; }
 }
 .chip-btn:hover { border-color: var(--moss); color: var(--moss-strong); }
 .chip-btn[aria-pressed="true"] { background: var(--moss); border-color: var(--moss); color: var(--moss-contrast); }
-.chip-btn--fail[aria-pressed="true"] { background: var(--brick); border-color: var(--brick); color: #fff; }
-.chip-btn--na[aria-pressed="true"] { background: var(--slate); border-color: var(--slate); color: #fff; }
+.chip-btn--fail[aria-pressed="true"] { background: var(--brick); border-color: var(--brick); color: var(--brick-contrast); }
+.chip-btn--na[aria-pressed="true"] { background: var(--slate); border-color: var(--slate); color: var(--slate-contrast); }
 
 /* actions / assignment */
 .review-card__actions {
@@ -913,7 +949,7 @@ main { flex: 1; }
 }
 .review-card__resolved--merged { background: var(--moss-tint); color: var(--moss-strong); }
 .review-card__resolved--closed { background: var(--brick-tint); color: var(--brick); }
-.review-card__resolved--changes { background: color-mix(in srgb, var(--surface-2) 78%, #d97706 22%); color: #b45309; }
+.review-card__resolved--changes { background: var(--amber-tint); color: var(--amber); }
 
 /* empty states */
 .empty-state {
@@ -962,8 +998,8 @@ main { flex: 1; }
   align-items: flex-start;
   gap: 0.6rem;
 }
-.toast--error { background: var(--brick); color: #fff; }
-.toast--success { background: var(--moss-strong); color: #fff; }
+.toast--error { background: var(--brick); color: var(--brick-contrast); }
+.toast--success { background: var(--moss-strong); color: var(--moss-contrast); }
 .toast__close {
   margin-left: auto;
   background: transparent;
@@ -1015,3 +1051,124 @@ main { flex: 1; }
 .revise-panel__label { display: block; font-size: 0.82rem; font-weight: 600; margin-bottom: 0.5rem; }
 .revise-panel__hint { margin: 0.5rem 0 0; font-size: 0.82rem; color: var(--ink-muted); }
 .revise-file { display: block; margin-bottom: 0.6rem; font-size: 0.85rem; }
+
+/* ---------- review state, labels, and the repository's own output ---------- */
+/* One banner per card carrying the state and, where there is one, the reason: the note is the
+   only place "the accepted label has been on for 40 minutes and nothing published" appears. */
+.review-state {
+  margin: 0 0 1rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: var(--radius-m);
+  border-left: 3px solid var(--line-strong);
+  background: var(--surface-2);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+.review-state__note { display: block; margin-top: 0.35rem; color: var(--ink-muted); }
+.review-state--warn { background: var(--amber-tint); border-left-color: var(--amber); }
+.review-state--info { background: var(--moss-tint); border-left-color: var(--moss); }
+.review-state--ok { background: var(--wp-green-tint); border-left-color: var(--wp-green); }
+.review-state--bad { background: var(--brick-tint); border-left-color: var(--brick); }
+.review-state--muted { background: var(--surface-2); border-left-color: var(--line-strong); }
+
+/* The repository's own labels, so the dashboard and the pull request are visibly one review. */
+.gh-labels { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: -0.4rem 0 0.9rem; }
+.gh-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 0.15em 0.5em;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-muted);
+  background: var(--surface-2);
+}
+
+.pipeline-panel {
+  margin: 0 0 1.1rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
+.pipeline-panel h3 { font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); margin-bottom: 0.5rem; }
+.pipeline-panel h3 code { text-transform: none; letter-spacing: 0; font-size: 0.85em; }
+.pipeline-panel__facts { list-style: none; display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; margin: 0 0 0.5rem; padding: 0; font-size: 0.88rem; }
+.pipeline-panel__slug { font-family: var(--font-mono); font-size: 0.85em; color: var(--ink-muted); }
+.pipeline-panel__links { display: flex; flex-wrap: wrap; gap: 0.9rem; margin: 0 0 0.4rem; font-size: 0.88rem; }
+.pipeline-panel__hint { margin: 0; font-size: 0.83rem; color: var(--ink-muted); }
+
+/* ---------- terminal actions ---------- */
+.btn--danger { color: var(--brick); border-color: color-mix(in srgb, var(--brick) 45%, transparent); }
+.btn--danger:hover:not(:disabled) { background: var(--brick-tint); }
+
+.reject-panel,
+.publish-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
+.reject-panel { border-color: color-mix(in srgb, var(--brick) 35%, var(--line)); }
+.reject-note, .changes-note { width: 100%; font: inherit; padding: 0.5em 0.6em; border: 1px solid var(--line-strong); border-radius: var(--radius-s); background: var(--surface); color: var(--ink); }
+.reject-panel__warn { margin: 0; font-size: 0.83rem; color: var(--brick); }
+.publish-panel h3 { font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); margin: 0; }
+.publish-panel__hint { margin: 0; font-size: 0.85rem; color: var(--ink-muted); }
+.published-wpid { font-family: var(--font-mono); padding: 0.5em 0.6em; border: 1px solid var(--line-strong); border-radius: var(--radius-s); background: var(--surface); color: var(--ink); max-width: 12rem; }
+.reject-panel .btn, .publish-panel .btn { align-self: flex-start; }
+
+/* ---------- assorted corrections ---------- */
+/* .muted was used three times and defined nowhere, so "(optional)" inherited the uppercase
+   mono field label and shouted the one word telling an author they may skip the field. */
+.muted { color: var(--ink-muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+/* The card's accessible name. Present for assistive technology, invisible in the layout, which
+   already carries the same information as a WPID chip and a row of badges. */
+.review-card__title {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.queue-filter__count {
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  padding: 0.05em 0.4em;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--ink-muted);
+}
+.queue-filter__mine { margin-left: auto; }
+
+.state-pill__text { display: inline-block; }
+
+.result-card--error { border-color: color-mix(in srgb, var(--brick) 45%, var(--line)); background: var(--brick-tint); }
+
+/* Long unbroken strings — a pasted PMC URL, a 39-character login — used to push past the card
+   and give the whole page a horizontal scrollbar. */
+.meta-panel__block p,
+.review-card__submitter,
+.result-card { overflow-wrap: anywhere; }
+
+/* The empty/failed placeholders were pinned at the queue's 19rem, so on the detail page they
+   sat two-thirds the height of a ready frame beside them. */
+.review-card--expanded .preview__empty,
+.review-card--expanded .preview__failed { min-height: 30rem; }
+
+/* ---------- narrow viewports ---------- */
+/* The header was a nowrap row of ~185px of brand plus up to 350px of identity in ~327px of
+   space, so a phone got a horizontal scrollbar and Log out went off-screen. */
+@media (max-width: 720px) {
+  .site-header__inner { flex-wrap: wrap; row-gap: 0.4rem; }
+  .site-header__portal { display: none; }
+  .site-header__nav { margin-left: 0; width: 100%; gap: 0.8rem; }
+  .site-header__who { min-width: 0; overflow-wrap: anywhere; }
+  .queue-filter__mine { margin-left: 0; }
+}

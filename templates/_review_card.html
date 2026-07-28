@@ -1,0 +1,342 @@
+{# The stored checklist states are identifiers; these are the words for them. Same reason the
+   review status carries a label from app/review/status.py rather than printing the enum. #}
+{% set STATE_LABEL = {'pass': 'Pass', 'fail': 'Fail', 'na': 'N/A', 'pending': 'Not checked'} %}
+
+{% macro state_icon(state) %}
+  {% if state == 'pass' %}<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8.5l3 3 7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  {% elif state == 'fail' %}<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  {% elif state == 'na' %}<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 8h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  {% else %}<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.6"/></svg>
+  {% endif %}
+{% endmacro %}
+
+{% macro zoomable(url, alt) %}
+<div class="zoom" data-zoom>
+  {# Focusable and arrow-key pannable: at 8x the pointer is otherwise the only way to reach the
+     rest of the diagram, and reading node labels is the review. #}
+  <div class="zoom__viewport" tabindex="0" role="img" aria-label="{{ alt }}. Zoomable; use the arrow keys to pan and Home to reset.">
+    <img class="zoom__img" src="{{ url }}" alt="{{ alt }}" draggable="false" loading="lazy">
+  </div>
+  <div class="zoom__controls" role="group" aria-label="Zoom and pan">
+    <button type="button" class="zoom__btn" data-zoom-out aria-label="Zoom out">&minus;</button>
+    <button type="button" class="zoom__btn" data-zoom-reset aria-label="Reset view">Reset</button>
+    <button type="button" class="zoom__btn" data-zoom-in aria-label="Zoom in">+</button>
+  </div>
+</div>
+{% endmacro %}
+
+{% macro preview_frame(label, url, alt, status) %}
+<figure class="preview__frame">
+  <figcaption>{{ label }}</figcaption>
+  {% if url %}
+    {{ zoomable(url, alt) }}
+  {% elif status == 'failed' %}
+    {# A GPML the renderer refuses is the strongest available signal that a submission is
+       malformed. Saying "no render on file" here would swallow it. #}
+    <div class="preview__failed">Could not draw this version from its GPML.</div>
+  {% else %}
+    <div class="preview__empty">No render on file for this version.</div>
+  {% endif %}
+</figure>
+{% endmacro %}
+
+{% macro review_card(r, is_curator, curators, expanded=False) %}
+{# Who may do what. The endpoints already enforce all three (app/main.py); this keeps the card
+   from offering an action that would come back 403, or an approval on a review that is already
+   decided. #}
+{% set is_submitter = login and login == r.submitter %}
+{% set can_act = is_curator and r.decidable %}
+{% set can_revise = r.kind == 'new' and r.actionable and (is_curator or is_submitter) %}
+{% set title_id = 'review-title-' ~ r.pr_number %}
+<article class="review-card{% if expanded %} review-card--expanded{% endif %}" data-pr="{{ r.pr_number }}" data-status="{{ r.status }}" aria-labelledby="{{ title_id }}">
+  <div class="review-card__head">
+    <div class="tag-wpid{% if expanded %} tag-wpid--lg{% endif %}">
+      <span class="tag-wpid__dot" aria-hidden="true"></span>
+      <span class="tag-wpid__id">{{ r.wpid_str }}</span>
+    </div>
+    <h2 class="review-card__title" id="{{ title_id }}">
+      {{ r.wpid_str }} &mdash; {{ 'new pathway' if r.kind == 'new' else 'update' }} from @{{ r.submitter }}, pull request #{{ r.pr_number }}
+    </h2>
+    <div class="review-card__meta">
+      <span class="badge badge--{{ r.kind }}">{{ 'New pathway' if r.kind == 'new' else 'Update' }}</span>
+      <span class="badge badge--{{ r.status }}">{{ r.status_label }}</span>
+      <a class="review-card__pr" href="{{ r.pr_url }}" target="_blank" rel="noopener">PR #{{ r.pr_number }}</a>
+    </div>
+    {% if not expanded %}
+    <a class="review-card__expand" href="/dashboard/{{ r.pr_number }}" aria-label="Open full review for {{ r.wpid_str }}">
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3h7v7M13 3L3 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </a>
+    {% endif %}
+  </div>
+
+  <p class="review-card__submitter">
+    Submitted by <strong>@{{ r.submitter }}</strong>{% if r.assigned_curator %} &middot; assigned to <strong>@{{ r.assigned_curator }}</strong>{% endif %}
+  </p>
+
+  {# The repository's own labels. A curator will reach for them on GitHub as readily as for the
+     dashboard, and these are the only place the two venues are visibly the same review. #}
+  {% if r.labels %}
+  <p class="gh-labels">
+    {% for label in r.labels %}<span class="gh-label">{{ label }}</span>{% endfor %}
+  </p>
+  {% endif %}
+
+  {# One banner carrying the state and why it is in that state. decision_note is the only
+     carrier of "the accepted label has been on for 40 minutes and nothing published" or of the
+     reason a curator typed when rejecting. #}
+  {% if r.status != 'open' or r.decision_note %}
+  <p class="review-state review-state--{{ r.status_tone or 'muted' }}">
+    <strong>{{ r.status_label }}.</strong>
+    {{ r.status_blurb }}
+    {% if r.decision_note %}<span class="review-state__note">{{ r.decision_note }}</span>{% endif %}
+    {# Where the fix actually goes, which differs by kind. A new pathway is revised here, on its
+       own pull request; an update goes back through the update form, which reuses the same
+       branch and pull request. Getting this wrong strands the submitter: the revise endpoint
+       refuses updates, so pointing them at this page would be pointing at nothing. #}
+    {% if r.status == 'changes_requested' and can_revise and expanded %}
+      <span class="review-state__note">Upload the fixed GPML below. It lands on this same pull request and puts the review back in the queue.</span>
+    {% elif r.status == 'changes_requested' and can_revise %}
+      <a href="/dashboard/{{ r.pr_number }}">Open the full review to upload a fix &rarr;</a>
+    {% elif r.status == 'changes_requested' and is_submitter and r.kind == 'update' %}
+      <span class="review-state__note">
+        Fix the GPML and upload it again from the
+        <a href="/?wpid={{ r.wpid_str }}">Update existing form</a> with {{ r.wpid_str }}. It lands
+        on this same pull request and puts the review back in the queue.
+      </span>
+    {% endif %}
+  </p>
+  {% endif %}
+
+  {# The repository ran its own processing and could not finish. In practice that means it could
+     not read the GPML, and the cost lands on the submitter: no identifier table, no reference
+     list, no draft page. Without this the only trace is a job several clicks into Actions. #}
+  {% if r.pipeline and r.pipeline.run_failed %}
+  <p class="notice notice--warn">
+    <strong>{{ repo }} could not process this pathway.</strong>
+    Its pipeline failed{% if r.pipeline.run_conclusion != 'failure' %} ({{ r.pipeline.run_conclusion }}){% endif %}, so the identifier and reference tables and the draft page were never generated. The most common cause is a GPML the repository's reader cannot parse. The diagram below is drawn by this portal and is unaffected.
+    {% if r.pipeline.run_url %}<a href="{{ r.pipeline.run_url }}" target="_blank" rel="noopener">See the failing run</a>.{% endif %}
+  </p>
+  {% endif %}
+
+  <div class="preview">
+    {% set preview_status = r.preview.status if r.preview else 'pending' %}
+    {% if r.kind == 'update' %}
+      {{ preview_frame('Before', r.preview.before_svg_url if r.preview and r.preview.status == 'ready' else None, 'Pathway diagram before this change', preview_status) }}
+      <div class="preview__edge" aria-hidden="true">
+        <svg viewBox="0 0 32 16" fill="none"><path class="edge-flow" d="M1 8h22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20 3l7 5-7 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      {{ preview_frame('After', r.preview.after_svg_url if r.preview and r.preview.status == 'ready' else None, 'Pathway diagram after this change', preview_status) }}
+    {% else %}
+      <figure class="preview__frame preview__frame--solo">
+        <figcaption>Preview</figcaption>
+        {% if r.preview and r.preview.status == 'ready' and r.preview.after_svg_url %}
+          {{ zoomable(r.preview.after_svg_url, 'Rendered pathway diagram') }}
+        {% elif r.preview and r.preview.status == 'failed' %}
+          <div class="preview__failed">Could not draw this pathway from its GPML.</div>
+        {% else %}
+          <div class="preview__empty">
+            No render on file for this pull request. Re-uploading the GPML draws it again.
+          </div>
+        {% endif %}
+      </figure>
+    {% endif %}
+  </div>
+
+  <p class="review-card__links">
+    <a href="{{ r.pr_url }}" target="_blank" rel="noopener">Open the pull request</a>
+    {# Not "Data nodes" and "Validation report": the Files-changed tab holds one thing, the GPML
+       this app committed, and /checks is the Actions tab. The tables are in the panel below. #}
+    <a href="{{ r.pr_url }}/files" target="_blank" rel="noopener">Files changed on GitHub</a>
+  </p>
+
+  {# What the target repository's own pipeline made of this submission. Richer than anything the
+     app derives for itself — and absent more often than present, so every field is optional. #}
+  {% if r.pipeline and (r.pipeline.available or r.pipeline.run_status) %}
+  <section class="pipeline-panel">
+    <h3>What <code>{{ repo }}</code> generated</h3>
+    {% if r.pipeline.available %}
+      <ul class="pipeline-panel__facts">
+        <li><span class="pipeline-panel__slug">{{ r.pipeline.slug }}</span></li>
+        {% if r.pipeline.datanode_count %}<li>{{ r.pipeline.datanode_count }} data nodes annotated</li>{% endif %}
+        {% if r.pipeline.reference_count %}<li>{{ r.pipeline.reference_count }} references resolved</li>{% endif %}
+      </ul>
+      <p class="pipeline-panel__links">
+        {% if r.pipeline.draft_url %}<a href="{{ r.pipeline.draft_url }}" target="_blank" rel="noopener">Draft page</a>{% endif %}
+        {% if r.pipeline.svg_url %}<a href="{{ r.pipeline.svg_url }}" target="_blank" rel="noopener">Its own render</a>{% endif %}
+        {% if r.pipeline.run_url %}<a href="{{ r.pipeline.run_url }}" target="_blank" rel="noopener">Workflow run</a>{% endif %}
+      </p>
+      <p class="pipeline-panel__hint">The draft page can take a few minutes to appear after the run finishes.</p>
+    {% elif r.pipeline.run_status in ('queued', 'in_progress', 'waiting') %}
+      <p class="pipeline-panel__hint">
+        Still running{% if r.pipeline.run_url %} — <a href="{{ r.pipeline.run_url }}" target="_blank" rel="noopener">follow it</a>{% endif %}.
+        Its tables and draft page appear here when it finishes.
+      </p>
+    {% elif not r.pipeline.run_failed %}
+      <p class="pipeline-panel__hint">Nothing generated yet. The diagram above is drawn by this portal and does not depend on it.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if r.metadata %}
+  <div class="meta-panel">
+    {% if r.metadata.submitter_note %}
+    <div class="meta-panel__block meta-panel__block--note">
+      <h3>Submitter note</h3>
+      <p>{{ r.metadata.submitter_note }}</p>
+    </div>
+    {% endif %}
+    {% if r.metadata.description %}
+    <div class="meta-panel__block">
+      <h3>Description</h3>
+      <p>{{ r.metadata.description }}</p>
+    </div>
+    {% endif %}
+    <details class="meta-panel__block" {% if expanded %}open{% endif %}>
+      <summary>Data nodes ({{ r.metadata.data_nodes | length }})</summary>
+      {% if r.metadata.data_nodes %}
+      <div class="datanodes__scroll">
+        <table class="datanodes">
+          <thead><tr><th>Label</th><th>Type</th><th>Database</th><th>Identifier</th></tr></thead>
+          <tbody>
+            {% for n in r.metadata.data_nodes %}
+            <tr class="{{ 'datanodes__row--unmapped' if not n.identifier else '' }}">
+              <td>{{ n.label or '—' }}</td>
+              <td>{{ n.type }}</td>
+              <td>{{ n.database or '—' }}</td>
+              <td>
+                {%- if n.identifier %}
+                  {%- if n.url %}<a href="{{ n.url }}" target="_blank" rel="noopener"><code>{{ n.identifier }}</code></a>
+                  {%- else %}<code>{{ n.identifier }}</code>{% endif %}
+                {%- else %}<span class="datanodes__missing">not annotated</span>{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}<p class="meta-panel__empty">No data nodes found.</p>{% endif %}
+    </details>
+    <details class="meta-panel__block" {% if expanded %}open{% endif %}>
+      <summary>References ({{ r.metadata.references | length }})</summary>
+      {% if r.metadata.references %}
+      <ul class="meta-list">
+        {% for ref in r.metadata.references %}
+        <li>{{ ref.title or 'Reference' }}{% if ref.identifier %}
+          {%- if ref.url %} <a href="{{ ref.url }}" target="_blank" rel="noopener"><code>{{ ref.database }}:{{ ref.identifier }}</code></a>
+          {%- else %} <code>{{ ref.database }}:{{ ref.identifier }}</code>{% endif %}{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="meta-panel__empty">No references.</p>{% endif %}
+    </details>
+    <details class="meta-panel__block" {% if expanded %}open{% endif %}>
+      <summary>Ontology tags ({{ r.metadata.ontology_tags | length }})</summary>
+      {% if r.metadata.ontology_tags %}
+      <ul class="meta-list">
+        {% for t in r.metadata.ontology_tags %}
+        <li>{{ t.term }}{% if t.identifier %} <code>{{ t.identifier }}</code>{% endif %}{% if t.ontology %} <span class="meta-list__src">{{ t.ontology }}</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="meta-panel__empty">No ontology tags.</p>{% endif %}
+    </details>
+  </div>
+  {% endif %}
+
+  <div class="checklist">
+    <h3 class="checklist__title">Curation checklist</h3>
+    <ul>
+      {% for it in r.checklist %}
+      <li class="checklist__item" data-key="{{ it.key }}" data-required="{{ 'true' if it.required else 'false' }}">
+        <span class="state-pill state-pill--{{ it.state }}" data-state="{{ it.state }}">{{ state_icon(it.state) }} <span class="state-pill__text">{{ STATE_LABEL.get(it.state, it.state) }}</span></span>
+        <span class="checklist__label">{{ it.label }}{% if it.required %}<span class="req" aria-hidden="true">&bull;</span><span class="visually-hidden">required</span>{% endif %}{% if it.auto %}<span class="checklist__auto" title="Suggested from the pathway metadata. Override it if you disagree.">auto</span>{% endif %}</span>
+        {% if it.note %}<span class="checklist__note">{{ it.note }}</span>{% endif %}
+        {% if can_act %}
+        <span class="checklist__controls" role="group" aria-label="Set state for {{ it.label }}">
+          <button type="button" class="chip-btn chip-btn--pass" data-state="pass" aria-pressed="{{ 'true' if it.state == 'pass' else 'false' }}">Pass</button>
+          <button type="button" class="chip-btn chip-btn--fail" data-state="fail" aria-pressed="{{ 'true' if it.state == 'fail' else 'false' }}">Fail</button>
+          <button type="button" class="chip-btn chip-btn--na" data-state="na" aria-pressed="{{ 'true' if it.state == 'na' else 'false' }}">N/A</button>
+        </span>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  {% if can_act %}
+    {% set blocking = r.checklist | selectattr('required') | rejectattr('state', 'equalto', 'pass') | list %}
+    <div class="review-card__actions">
+      <label class="assign">
+        <span>Assign reviewer</span>
+        <select class="assign__select"
+                title="Choose the curator responsible for reviewing this pathway. Anyone on the whitelist can still review; this just marks who is leading it.">
+          <option value="">Unassigned</option>
+          {% for c in curators %}
+          <option value="{{ c }}"{% if r.assigned_curator == c %} selected{% endif %}>@{{ c }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div class="action-buttons">
+        <button type="button" class="btn btn--ghost btn--changes">Request changes</button>
+        <button type="button" class="btn btn--ghost btn--danger btn--reject">Reject</button>
+        {# "merge" is wrong wherever the target repository publishes through its own Actions:
+           approving applies a label there and nothing is ever merged, so promising a merge sets
+           the curator up to go looking for one. #}
+        <button type="button" class="btn btn--approve"{% if blocking %} aria-disabled="true" disabled{% endif %}>
+          {% if pipeline_mode %}Approve for publication{% else %}Approve &amp; merge{% endif %}
+        </button>
+      </div>
+    </div>
+
+    <div class="changes-panel" hidden>
+      <label class="visually-hidden" for="changes-note-{{ r.pr_number }}">What needs fixing</label>
+      <textarea id="changes-note-{{ r.pr_number }}" class="changes-note" rows="2" placeholder="What needs fixing? (optional, also posted as a comment on the pull request)"></textarea>
+      <button type="button" class="btn btn--sm btn--changes-send">Send request</button>
+    </div>
+
+    {# Rejection is terminal and, in pipeline mode, hands the pull request to the repository's own
+       rejection workflow, which deletes the drafts and closes it. So it asks for a reason and
+       takes a second click rather than sitting live next to Approve. #}
+    <div class="reject-panel" hidden>
+      <label class="visually-hidden" for="reject-note-{{ r.pr_number }}">Why this is being rejected</label>
+      <textarea id="reject-note-{{ r.pr_number }}" class="reject-note" rows="2" placeholder="Why is this being rejected? Posted as a comment on the pull request."></textarea>
+      <p class="reject-panel__warn">
+        {% if pipeline_mode %}This applies the repository's <code>rejected</code> label. Its workflow then deletes the generated drafts and closes the pull request. There is no undo.{% else %}This closes the pull request and returns the WPID to the pool. There is no undo.{% endif %}
+      </p>
+      <button type="button" class="btn btn--sm btn--danger btn--reject-send">Reject this submission</button>
+    </div>
+  {% endif %}
+
+  {# Without this the loop has no closing move: a curator asks for changes and the submitter has
+     nowhere in the portal to answer, which is the whole reason they are not using git. It is the
+     submitter's control first and the curator's second, so it sits outside the curator gate. #}
+  {% if can_revise and expanded %}
+  <div class="revise-panel">
+    <label class="revise-panel__label" for="revise-{{ r.pr_number }}">Upload a revision</label>
+    <input type="file" id="revise-{{ r.pr_number }}" class="revise-file" accept=".gpml,application/xml,text/xml">
+    <button type="button" class="btn btn--sm btn--revise">Commit onto this pull request</button>
+    <p class="revise-panel__hint">Replaces the file on the existing branch. No new pull request is opened, and the review returns to the queue.</p>
+  </div>
+  {% elif can_revise %}
+  <p class="review-card__links"><a href="/dashboard/{{ r.pr_number }}">Upload a revision &rarr;</a></p>
+  {% endif %}
+
+  {# The publish workflow is the one part of the loop this app does not control. When it does not
+     announce a WPID — or fails outright and someone publishes by hand — this is how the review
+     still reaches a truthful terminal state. #}
+  {% if is_curator and r.awaiting_wpid %}
+  <div class="publish-panel">
+    <h3>Record the published WPID</h3>
+    <p class="publish-panel__hint">
+      Once <code>{{ repo }}</code> has published this pathway, put the identifier it assigned here.
+      That closes the review out and is what the dashboard shows from then on.
+    </p>
+    <label class="visually-hidden" for="published-wpid-{{ r.pr_number }}">Assigned WPID</label>
+    <input type="text" id="published-wpid-{{ r.pr_number }}" class="published-wpid" placeholder="WP5678" autocomplete="off" inputmode="numeric">
+    <button type="button" class="btn btn--sm btn--record-wpid">Record it</button>
+  </div>
+  {% endif %}
+
+  {% if not is_curator and r.actionable %}
+    <p class="review-card__readonly">Only curators can update the checklist, assign a reviewer, or decide on this submission.</p>
+  {% endif %}
+</article>
+{% endmacro %}
