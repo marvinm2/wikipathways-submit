@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.preview.metadata import parse_curation_metadata
-from app.preview.render import RenderError, render_gpml
+from app.preview.render import RenderError, render_gpml_with_nodes
 
 _SIDES = ("before", "after")
 _FAILED_MARKER = "render-failed"
@@ -60,10 +60,18 @@ class PreviewService:
             if gpml is None:
                 continue
             try:
-                svg = render_gpml(gpml)
+                svg, hotspots = render_gpml_with_nodes(gpml)
             except RenderError:
                 continue
             (out / f"{side}.svg").write_bytes(svg)
+            # The clickable-node overlay (issue #14). Written beside the drawing it belongs to,
+            # so a side that failed to render has no stale hotspots left pointing at nothing.
+            try:
+                (out / f"{side}-nodes.json").write_text(
+                    json.dumps([h.as_dict() for h in hotspots]), encoding="utf-8"
+                )
+            except OSError:
+                pass  # the overlay is an enhancement; never fail a render on it
             rendered[side] = True
         self._write_metadata(out, after_gpml, submitter_note)
         drawn = rendered["before"] or rendered["after"]
@@ -115,6 +123,20 @@ class PreviewService:
         if (self._cache_dir / str(pr_number) / _FAILED_MARKER).is_file():
             return "failed"
         return "pending"
+
+    def nodes(self, pr_number: int, side: str) -> list[dict] | None:
+        """Clickable data-node hotspots for one side (issue #14), or None when there are none on
+        file — a side that was never rendered, or a cache written before this existed."""
+        if side not in _SIDES:
+            return None
+        path = self._cache_dir / str(pr_number) / f"{side}-nodes.json"
+        if not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, list) else None
 
     def svg_path(self, pr_number: int, side: str) -> Path | None:
         """Cached path to the before/after SVG, or None when that side wasn't rendered (a new

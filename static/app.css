@@ -756,19 +756,97 @@ main { flex: 1; }
   display: flex;
   align-items: center;
   justify-content: center;
+  /* The breathing room used to sit on the image itself. It moved here so the stage wraps the
+     drawing exactly: hotspots are percentages of the drawing, and padding inside the measured
+     box would offset every one of them by half a rem. */
+  padding: 0.5rem;
+  box-sizing: border-box;
 }
 .review-card--expanded .zoom__viewport { height: 30rem; }
 .zoom--zoomed .zoom__viewport { cursor: grab; touch-action: none; }
 .zoom--zoomed .zoom__viewport:active { cursor: grabbing; }
-.zoom .zoom__img {
+/* Zoom and pan are applied to the stage, not the image, so the hotspot overlay moves with the
+   drawing instead of being left behind. */
+.zoom__stage {
+  position: relative;
+  display: block;
+  line-height: 0;
   max-width: 100%;
   max-height: 100%;
-  padding: 0.5rem;
-  box-sizing: border-box;
   will-change: transform;
+}
+.zoom .zoom__img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
   user-select: none;
   -webkit-user-drag: none;
 }
+/* Zoomed, JS gives the stage an explicit pixel size; the image fills it. */
+.zoom--zoomed .zoom__stage > .zoom__img { width: 100%; height: 100%; }
+
+/* ---------- clickable data nodes (issue #14) ---------- */
+.zoom__hotspots { position: absolute; inset: 0; }
+.hotspot {
+  position: absolute;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  /* Invisible until wanted: the drawing is the review, and forty outlined boxes over it is
+     noise. Hover, focus and the active selection are the only times it shows itself. */
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.hotspot:hover,
+.hotspot:focus-visible,
+.hotspot--active {
+  background: color-mix(in srgb, var(--iris) 16%, transparent);
+  border-color: var(--iris);
+  outline: none;
+}
+.zoom--interactive .zoom__viewport { cursor: default; }
+
+.node-panel {
+  position: absolute;
+  left: 0.4rem;
+  right: 0.4rem;
+  bottom: 0.4rem;
+  max-height: 62%;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+  z-index: 2;
+}
+.node-panel__close {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.45rem;
+  border: 0;
+  background: transparent;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--ink-muted);
+}
+.node-panel__close:hover { color: var(--ink); }
+.node-panel__title {
+  margin: 0 1.2rem 0.4rem 0;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.node-panel__props {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.7rem;
+  margin: 0;
+  font-size: 0.85rem;
+}
+.node-panel__props dt { color: var(--ink-muted); }
+.node-panel__props dd { margin: 0; overflow-wrap: anywhere; }
 .zoom__controls {
   position: absolute;
   right: 0.4rem;

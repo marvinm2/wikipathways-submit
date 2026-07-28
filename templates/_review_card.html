@@ -15,7 +15,19 @@
   {# Focusable and arrow-key pannable: at 8x the pointer is otherwise the only way to reach the
      rest of the diagram, and reading node labels is the review. #}
   <div class="zoom__viewport" tabindex="0" role="img" aria-label="{{ alt }}. Zoomable; use the arrow keys to pan and Home to reset.">
-    <img class="zoom__img" src="{{ url }}" alt="{{ alt }}" draggable="false" loading="lazy">
+    {# The stage is what zoom resizes and pans, so the hotspot layer inherits both for free.
+       Sizing the <img> alone would leave the overlay behind the moment anyone zoomed. #}
+    <div class="zoom__stage">
+      <img class="zoom__img" src="{{ url }}" alt="{{ alt }}" draggable="false" loading="lazy">
+      {# Filled by JS from <side>-nodes.json (issue #14). The drawing is an <img>, so its own
+         markup is inert; clickability has to be laid over it. Empty and invisible without JS,
+         which leaves exactly the static image that shipped before. #}
+      <div class="zoom__hotspots" hidden></div>
+    </div>
+  </div>
+  <div class="node-panel" hidden role="dialog" aria-label="Data node properties">
+    <button type="button" class="node-panel__close" aria-label="Close">&times;</button>
+    <div class="node-panel__body"></div>
   </div>
   <div class="zoom__controls" role="group" aria-label="Zoom and pan">
     <button type="button" class="zoom__btn" data-zoom-out aria-label="Zoom out">&minus;</button>

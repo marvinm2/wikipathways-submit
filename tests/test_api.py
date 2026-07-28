@@ -540,6 +540,41 @@ def test_preview_route_serves_the_app_render(tmp_path):
         assert c.get("/previews/999999/after.svg").status_code == 404
 
 
+def test_preview_nodes_route_serves_the_clickable_hotspots(tmp_path):
+    # Issue #14. The drawing goes into an <img>, so its markup is inert and the clickable layer
+    # has to be served separately and laid over it.
+    app, current = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()["pr_number"]
+
+        r = c.get(f"/previews/{pr}/after-nodes.json")
+        assert r.status_code == 200
+        nodes = r.json()
+        assert isinstance(nodes, list)
+        for n in nodes:
+            # Percentages of the viewBox, so the overlay survives the viewport's resize-based
+            # zoom without the client knowing the coordinate system.
+            assert 0 <= n["left"] <= 100 and 0 <= n["top"] <= 100
+            assert {"label", "type", "database", "identifier", "url", "comment"} <= set(n)
+
+        # A side that was never rendered has no hotspots on file: 404, so the client leaves the
+        # static image alone rather than drawing an overlay it cannot trust.
+        assert c.get(f"/previews/{pr}/before-nodes.json").status_code == 404
+        assert c.get(f"/previews/{pr}/sideways-nodes.json").status_code == 404
+        assert c.get("/previews/999999/after-nodes.json").status_code == 404
+
+
+def test_preview_nodes_route_requires_a_known_review(tmp_path):
+    # Same rule as the SVG route: an unknown PR must not be a way to probe the cache directory.
+    app, _ = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        assert c.get("/previews/4242/after-nodes.json").status_code == 404
+
+
 def _login(client, login: str) -> None:
     """Set the signed session cookie the HTML pages read.
 

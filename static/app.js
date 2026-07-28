@@ -626,28 +626,31 @@
     var img = root.querySelector('.zoom__img');
     var viewport = root.querySelector('.zoom__viewport');
     if (!img || !viewport) return;
+    // The stage wraps the image and the hotspot overlay. Sizing and panning it rather than the
+    // image is what keeps the two registered with each other at every zoom level.
+    var stage = root.querySelector('.zoom__stage') || img;
     var scale = 1, tx = 0, ty = 0, min = 1, max = 8;
     var dragging = false, sx = 0, sy = 0, baseW = 0, baseH = 0;
 
     function measure() {
       // Fitted size at scale 1 (max-width/height:100%, natural aspect). Basis for crisp resizing.
-      var prev = img.style.cssText;
-      img.style.width = ''; img.style.height = '';
-      img.style.maxWidth = '100%'; img.style.maxHeight = '100%'; img.style.transform = 'none';
+      var prev = stage.style.cssText;
+      stage.style.width = ''; stage.style.height = '';
+      stage.style.maxWidth = '100%'; stage.style.maxHeight = '100%'; stage.style.transform = 'none';
       var r = img.getBoundingClientRect();
       baseW = r.width; baseH = r.height;
-      img.style.cssText = prev;
+      stage.style.cssText = prev;
     }
     function apply() {
       if (scale > 1.001 && baseW) {
-        img.style.maxWidth = 'none'; img.style.maxHeight = 'none';
-        img.style.width = (baseW * scale) + 'px';
-        img.style.height = (baseH * scale) + 'px';
+        stage.style.maxWidth = 'none'; stage.style.maxHeight = 'none';
+        stage.style.width = (baseW * scale) + 'px';
+        stage.style.height = (baseH * scale) + 'px';
       } else {
-        img.style.width = ''; img.style.height = '';
-        img.style.maxWidth = '100%'; img.style.maxHeight = '100%';
+        stage.style.width = ''; stage.style.height = '';
+        stage.style.maxWidth = '100%'; stage.style.maxHeight = '100%';
       }
-      img.style.transform = 'translate(' + tx + 'px,' + ty + 'px)';
+      stage.style.transform = 'translate(' + tx + 'px,' + ty + 'px)';
       root.classList.toggle('zoom--zoomed', scale > 1.001);
     }
     function clamp(s) { return Math.max(min, Math.min(max, s)); }
@@ -729,6 +732,106 @@
     apply();
   }
   document.querySelectorAll('[data-zoom]').forEach(initZoom);
+
+  // ---- clickable data nodes (issue #14) -------------------------------------------------
+  // The drawing is served into an <img>, so nothing inside it can be clicked and nothing inside
+  // it can run. The hotspots are therefore laid over the picture, positioned in percentages of
+  // the viewBox so they stay registered at any zoom, and the properties come from a sidecar the
+  // renderer wrote in the same pass that drew the node.
+  function labelRow(dl, term, value) {
+    var dt = document.createElement('dt');
+    dt.textContent = term;
+    var dd = document.createElement('dd');
+    if (value && typeof value === 'object' && value.href) {
+      var a = document.createElement('a');
+      a.href = value.href;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = value.text;
+      dd.appendChild(a);
+    } else {
+      dd.textContent = value;
+    }
+    dl.appendChild(dt);
+    dl.appendChild(dd);
+  }
+
+  function showNode(panel, node) {
+    var body = panel.querySelector('.node-panel__body');
+    body.textContent = '';
+    var h = document.createElement('p');
+    h.className = 'node-panel__title';
+    // A node with no TextLabel is legal GPML and reads as an empty panel otherwise.
+    h.textContent = node.label || '(unlabelled node)';
+    body.appendChild(h);
+
+    var dl = document.createElement('dl');
+    dl.className = 'node-panel__props';
+    labelRow(dl, 'Type', node.type || 'Unknown');
+    if (node.identifier) {
+      labelRow(dl, node.database || 'Identifier',
+        node.url && /^https:\/\//.test(node.url)
+          ? { href: node.url, text: node.identifier }
+          : node.identifier);
+    } else {
+      // The single most common curation defect, and the reason a curator clicks a node at all.
+      labelRow(dl, 'Identifier', 'Not annotated');
+    }
+    if (node.comment) labelRow(dl, 'Comment', node.comment);
+    body.appendChild(dl);
+    panel.hidden = false;
+  }
+
+  function initHotspots(root) {
+    var img = root.querySelector('.zoom__img');
+    var layer = root.querySelector('.zoom__hotspots');
+    var panel = root.querySelector('.node-panel');
+    if (!img || !layer || !panel || !img.getAttribute('src')) return;
+    // /previews/<pr>/<side>.svg -> /previews/<pr>/<side>-nodes.json. Derived rather than passed
+    // through the template so the preview contract and every call site stay untouched.
+    var src = img.getAttribute('src');
+    if (!/\.svg$/.test(src)) return;
+
+    fetch(src.replace(/\.svg$/, '-nodes.json'), { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (nodes) {
+        // null = nothing on file (a placeholder side, or a cache predating this). Leave the
+        // static image exactly as it was rather than showing an overlay we cannot trust.
+        if (!nodes || !nodes.length) return;
+        nodes.forEach(function (node) {
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'hotspot';
+          b.style.left = node.left + '%';
+          b.style.top = node.top + '%';
+          b.style.width = node.width + '%';
+          b.style.height = node.height + '%';
+          b.setAttribute('aria-label', (node.label || 'Unlabelled node') + ' — show properties');
+          b.addEventListener('click', function (e) {
+            e.stopPropagation();
+            layer.querySelectorAll('.hotspot--active').forEach(function (o) {
+              o.classList.remove('hotspot--active');
+            });
+            b.classList.add('hotspot--active');
+            showNode(panel, node);
+          });
+          layer.appendChild(b);
+        });
+        layer.hidden = false;
+        root.classList.add('zoom--interactive');
+      })
+      .catch(function () { /* overlay is an enhancement; the picture still works */ });
+
+    function close() {
+      panel.hidden = true;
+      layer.querySelectorAll('.hotspot--active').forEach(function (o) {
+        o.classList.remove('hotspot--active');
+      });
+    }
+    panel.querySelector('.node-panel__close').addEventListener('click', close);
+    root.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+  }
+  document.querySelectorAll('[data-zoom]').forEach(initHotspots);
 
   document.addEventListener('change', function (e) {
     var select = e.target.closest('.assign__select');

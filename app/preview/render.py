@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from dataclasses import asdict, dataclass
 from xml.sax.saxutils import escape
+
+from app.preview.metadata import resolver_url
 
 _PAD = 15.0  # board padding when we must infer the viewBox from element extents
 
@@ -33,6 +36,36 @@ _DEFAULT_STROKE = "#333333"
 
 class RenderError(ValueError):
     """The input could not be parsed as GPML."""
+
+
+@dataclass(frozen=True)
+class NodeHotspot:
+    """One clickable data node: where it sits on the drawing, and what to say about it.
+
+    Geometry is a **percentage of the viewBox**, not user units, so the overlay lines up at any
+    size without the client knowing the coordinate system. The drawing is served as an ``<img>``
+    (which keeps a hostile GPML's render inert), so the hotspots cannot live inside the SVG —
+    they are laid over it, and percentages are what survives the viewport's resize-based zoom.
+
+    Built in the same pass that draws the node, from the same element. An earlier sketch joined
+    ``render`` geometry to ``metadata`` properties by list index; that only holds while both
+    passes skip exactly the same elements, and they do not — the renderer drops a DataNode with
+    no ``Graphics``, the metadata parser keeps it.
+    """
+
+    left: float
+    top: float
+    width: float
+    height: float
+    label: str
+    type: str
+    database: str
+    identifier: str
+    url: str | None
+    comment: str
+
+    def as_dict(self) -> dict:
+        return asdict(self)
 
 
 def _localname(tag: str) -> str:
@@ -75,6 +108,14 @@ def _rect_of(g: ET.Element) -> tuple[float, float, float, float] | None:
 
 def render_gpml(gpml: bytes | str) -> bytes:
     """Render a GPML pathway to a standalone SVG (bytes). Raises RenderError on non-GPML input."""
+    return render_gpml_with_nodes(gpml)[0]
+
+
+def render_gpml_with_nodes(gpml: bytes | str) -> tuple[bytes, list[NodeHotspot]]:
+    """Render to SVG *and* return the clickable data-node hotspots (issue #14).
+
+    One pass, so a hotspot cannot drift from the rectangle it covers.
+    """
     text = gpml.decode("utf-8", "replace") if isinstance(gpml, bytes) else gpml
     try:
         root = ET.fromstring(text)
@@ -87,6 +128,9 @@ def render_gpml(gpml: bytes | str) -> bytes:
     edges: list[str] = []
     xs: list[float] = []
     ys: list[float] = []
+    # (x, y, w, h) in user units plus the node's properties. Converted to viewBox percentages
+    # once the viewBox is known, which is only after the loop has seen every element.
+    raw_hotspots: list[tuple[tuple[float, float, float, float], dict]] = []
 
     def track(x: float, y: float) -> None:
         xs.append(x)
@@ -115,6 +159,31 @@ def render_gpml(gpml: bytes | str) -> bytes:
                     f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" '
                     f'rx="{rx}" fill="{fill}" stroke="{stroke}" stroke-width="1"/>'
                 )
+            if kind == "DataNode":
+                xref = next((c for c in el if _localname(c.tag) == "Xref"), None)
+                database = (xref.get("Database") if xref is not None else "") or ""
+                identifier = (xref.get("ID") if xref is not None else "") or ""
+                # A DataNode can carry several <Comment>s; the curator wants all of them, and
+                # joining beats picking one arbitrarily.
+                comment = "\n\n".join(
+                    (c.text or "").strip()
+                    for c in el
+                    if _localname(c.tag) == "Comment" and (c.text or "").strip()
+                )
+                raw_hotspots.append(
+                    (
+                        (x, y, w, h),
+                        {
+                            "label": (el.get("TextLabel") or "").strip(),
+                            "type": el.get("Type") or "Unknown",
+                            "database": database.strip(),
+                            "identifier": identifier.strip(),
+                            "url": resolver_url(database, identifier),
+                            "comment": comment,
+                        },
+                    )
+                )
+
             label = el.get("TextLabel")
             if label:
                 nodes.append(
@@ -170,4 +239,25 @@ def render_gpml(gpml: bytes | str) -> bytes:
         f'fill="#ffffff"/>\n'
         f"{body}\n</svg>\n"
     )
-    return svg.encode("utf-8")
+
+    # User units -> percentage of the viewBox. A zero-sized viewBox would divide by zero, and a
+    # node sitting outside a declared BoardWidth/Height would land off the image, so clamp both.
+    hotspots: list[NodeHotspot] = []
+    if vb_w > 0 and vb_h > 0:
+        for (x, y, w, h), props in raw_hotspots:
+            left = (x - vb_x) / vb_w * 100.0
+            top = (y - vb_y) / vb_h * 100.0
+            width = w / vb_w * 100.0
+            height = h / vb_h * 100.0
+            if left + width <= 0 or top + height <= 0 or left >= 100 or top >= 100:
+                continue  # entirely off the drawing; a hotspot there is unclickable anyway
+            hotspots.append(
+                NodeHotspot(
+                    left=round(max(0.0, left), 3),
+                    top=round(max(0.0, top), 3),
+                    width=round(min(width, 100.0 - max(0.0, left)), 3),
+                    height=round(min(height, 100.0 - max(0.0, top)), 3),
+                    **props,
+                )
+            )
+    return svg.encode("utf-8"), hotspots

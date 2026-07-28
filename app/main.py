@@ -23,7 +23,13 @@ from pathlib import Path
 
 import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -605,6 +611,29 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 content=_PREVIEW_PLACEHOLDER, media_type="image/svg+xml", headers=_SVG_HEADERS
             )
         return FileResponse(path, media_type="image/svg+xml", headers=_SVG_HEADERS)
+
+    @app.get("/previews/{pr_number}/{side}-nodes.json")
+    def preview_nodes(request: Request, pr_number: int, side: str):
+        """Hotspots for the clickable data-node overlay (issue #14).
+
+        Separate from the SVG because the drawing is served into an ``<img>``, where its own
+        markup is inert — the overlay is laid over the picture rather than built into it, which
+        is also what keeps a hostile GPML's render unable to do anything.
+
+        An empty list is a real answer ("drawn, no data nodes") and is served as such; a side with
+        nothing on file 404s, so the client leaves the static image alone rather than rendering an
+        overlay it cannot trust.
+        """
+        if side not in ("before", "after"):
+            raise HTTPException(status_code=404, detail="unknown preview side")
+        try:
+            _curation(request).get(pr_number)
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        data = request.app.state.preview.nodes(pr_number, side)
+        if data is None:
+            raise HTTPException(status_code=404, detail="no hotspots on file for this side")
+        return JSONResponse(data)
 
     @app.get("/dashboard/{pr_number}", response_class=HTMLResponse)
     def review_page(
