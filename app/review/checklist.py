@@ -96,6 +96,18 @@ def _auto_naming(m) -> AutoResult:
     return AutoResult(ChecklistState.PASS.value, "WPID and file layout are assigned by the app.")
 
 
+#: What the same item can honestly say where the *repository* names the file. The app commits a
+#: placeholder there and the publish workflow assigns the id, so claiming the app got the naming
+#: right is untrue — and, because ``refresh_pipeline_checks`` only fills items still pending, an
+#: auto-pass here also locks out the check that can answer it: the repository's own record of
+#: the slug, compared against the one the app predicted (``app.pipeline.drafts._naming_check``).
+_PIPELINE_NAMING = AutoResult(
+    ChecklistState.PENDING.value,
+    "The repository files this pathway and assigns its WPID at publication. Its own record of "
+    "the filename fills this in once its pipeline has run.",
+)
+
+
 def _auto_ontology(m) -> AutoResult:
     if m.ontology_tags:
         n = len(m.ontology_tags)
@@ -175,11 +187,16 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
 _VALID_KEYS = {item.key for item in CURATION_CHECKLIST}
 
 
-def build_checklist(*, metadata=None, before=None, kind: str = "new") -> list[dict]:
+def build_checklist(
+    *, metadata=None, before=None, kind: str = "new", pipeline_mode: bool = False
+) -> list[dict]:
     """Build a review's checklist, applying auto-checks and (for updates) relevance scoping.
 
     ``metadata`` is the parsed *after* metadata; ``before`` the base-version metadata (updates
     only). With neither, every item is a blank ``pending`` — the plain template.
+
+    ``pipeline_mode`` says the target repository owns naming and publication, which changes what
+    one item can truthfully claim (see ``_PIPELINE_NAMING``).
     """
     items: list[dict] = []
     for d in CURATION_CHECKLIST:
@@ -205,7 +222,9 @@ def build_checklist(*, metadata=None, before=None, kind: str = "new") -> list[di
 
         required = d.required
         state, note, auto = ChecklistState.PENDING.value, "", False
-        if metadata is not None and d.auto_check is not None:
+        if d.key == "naming_ok" and pipeline_mode:
+            state, note, auto = _PIPELINE_NAMING.state, _PIPELINE_NAMING.note, True
+        elif metadata is not None and d.auto_check is not None:
             res = d.auto_check(metadata)
             state, note, auto = res.state, res.note, True
             # An auto "N/A" means there is nothing to check (e.g. no references), so it must not

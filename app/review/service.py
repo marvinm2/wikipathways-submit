@@ -12,7 +12,7 @@ import re
 from datetime import UTC, timedelta
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -51,6 +51,19 @@ _PLAIN_STATE = {"pass": "PASS", "fail": "FAIL", "pending": "PENDING", "na": "N/A
 #: (issue #15). Ample: contention is between a handful of curators on one review, not a hot loop.
 _CHECKLIST_WRITE_RETRIES = 10
 
+#: The states in which a WPID assigned by the repository is the missing piece — mirrored by
+#: ``app.review.status.AWAITING_WPID``, which the dashboard reads.
+_AWAITING_WPID = (ReviewStatus.APPROVED, ReviewStatus.PUBLISH_FAILED)
+
+#: Statuses in which an approval on the record is still an approval. Anything else means it was
+#: withdrawn or overtaken, whatever ``approved_by`` still says.
+_APPROVAL_STANDS = (
+    ReviewStatus.APPROVED,
+    ReviewStatus.PUBLISHED,
+    ReviewStatus.PUBLISH_FAILED,
+    ReviewStatus.MERGED,
+)
+
 
 def render_mirror_comment(review: Review, repo: str, *, base_url: str = "") -> str:
     """Render the read-only PR mirror comment (design §4.5): checklist + approval state.
@@ -80,8 +93,16 @@ def render_mirror_comment(review: Review, repo: str, *, base_url: str = "") -> s
         state = _PLAIN_STATE.get(item.get("state", "pending"), item.get("state", "pending"))
         note = item.get("note") or ""
         lines.append(f"| {item['label']}{req} | {state} | {f'_{note}_' if note else ''} |")
-    if review.approved_by:
-        lines += ["", f"**Approved and merged by @{review.approved_by}.**"]
+    # ``approved_by`` records who approved it, and is deliberately not cleared when an approval
+    # is taken back — so it cannot be the test for whether the approval still stands. Reading it
+    # that way put "Approved and merged by @X" on rejected and changes-requested pull requests.
+    if review.approved_by and review.status in _APPROVAL_STANDS:
+        verb = (
+            "Approved and merged"
+            if review.status == ReviewStatus.MERGED
+            else "Approved"  # nothing is merged where the repository publishes for itself
+        )
+        lines += ["", f"**{verb} by @{review.approved_by}.**"]
     if base_url:
         lines += [
             "",
@@ -96,6 +117,27 @@ def render_mirror_comment(review: Review, repo: str, *, base_url: str = "") -> s
     return "\n".join(lines)
 
 
+def _plain(status: ReviewStatus) -> str:
+    """The status in words, for an error message a curator reads."""
+    return _PLAIN_STATUS.get(status.value, status.value)
+
+
+def _merge_checklist(old: list[dict], fresh: list[dict]) -> list[dict]:
+    """Re-derive the checklist from new content without discarding a curator's own answers.
+
+    ``auto`` is maintained by every writer — ``build_checklist`` sets it when an auto-check
+    produced the value, ``set_checklist_item`` sets it per call — so it means "nobody has
+    answered this by hand", which is exactly the question here. An item a curator answered is
+    kept; everything else is replaced by what the new file says.
+    """
+    kept = {
+        item["key"]: item
+        for item in old
+        if not item.get("auto") and item.get("state") not in (None, "pending")
+    }
+    return [kept.get(item["key"], item) for item in fresh]
+
+
 class ReviewNotFound(RuntimeError):
     pass
 
@@ -106,6 +148,15 @@ class NotACurator(RuntimeError):
 
 class ChecklistIncomplete(RuntimeError):
     """Approval attempted before every required checklist item is marked pass."""
+
+
+class ReviewNotActionable(RuntimeError):
+    """A decision was attempted on a review that has already been decided.
+
+    Approving a published pathway a second time, or rejecting one the repository is already
+    publishing, is never what anyone meant — and in pipeline mode it would put the review's
+    state and the pull request's labels permanently out of step.
+    """
 
 
 class PreviewNotReady(RuntimeError):
@@ -249,25 +300,75 @@ class CurationService:
                     kind=kind,
                     head_branch=head_branch,
                     checklist=build_checklist(
-                        metadata=metadata, before=before_metadata, kind=kind
+                        metadata=metadata,
+                        before=before_metadata,
+                        kind=kind,
+                        pipeline_mode=self.is_pipeline_mode,
                     ),
                 )
                 s.add(review)
                 s.commit()
-            elif review.status == ReviewStatus.CHANGES_REQUESTED:
-                # A re-upload after changes were requested puts it back in the review queue.
-                review.status = ReviewStatus.OPEN
+            else:
+                # A re-upload onto an existing pull request. The update flow reuses the branch
+                # and the PR, so this is the only place a revised *update* is seen — and without
+                # rebuilding, the curator reads a checklist derived from the file the submitter
+                # already replaced ("3 of 12 data nodes have no identifier" about a version that
+                # no longer exists) beside a preview drawn from the new one.
+                if metadata is not None:
+                    review.checklist = _merge_checklist(
+                        review.checklist,
+                        build_checklist(
+                            metadata=metadata,
+                            before=before_metadata,
+                            kind=review.kind,
+                            pipeline_mode=self.is_pipeline_mode,
+                        ),
+                    )
+                if review.status == ReviewStatus.CHANGES_REQUESTED:
+                    # A re-upload after changes were requested puts it back in the queue.
+                    review.status = ReviewStatus.OPEN
                 s.commit()
             self._maybe_mirror(review)
             return review
 
-    def list_queue(self, *, status: ReviewStatus = ReviewStatus.OPEN) -> list[Review]:
+    def list_queue(
+        self,
+        *,
+        status: ReviewStatus | None = ReviewStatus.OPEN,
+        submitter: str | None = None,
+    ) -> list[Review]:
+        """The queue, filtered. ``status=None`` means every status.
+
+        ``submitter`` backs the "my submissions" view: in pipeline mode a new pathway has no WPID
+        until it is published, so a submitter has nothing to look their own work up by, and the
+        status filter is no help either — they do not know which state it reached.
+        """
         with self._session_factory() as s:
-            return list(
-                s.execute(
-                    select(Review).where(Review.status == status).order_by(Review.created_at)
-                ).scalars()
-            )
+            query = select(Review)
+            if status is not None:
+                query = query.where(Review.status == status)
+            if submitter is not None:
+                query = query.where(Review.submitter == submitter)
+            # Newest first for a personal list (you want the one you just filed), oldest first
+            # for the curation queue (you want the one that has waited longest).
+            order = Review.updated_at.desc() if submitter is not None else Review.created_at
+            return list(s.execute(query.order_by(order)).scalars())
+
+    def status_counts(self, *, submitter: str | None = None) -> dict[str, int]:
+        """How many reviews sit in each status — the numbers on the queue tabs.
+
+        One grouped query, not one per tab: with eight statuses the naive version would be eight
+        round trips on every dashboard load.
+        """
+        with self._session_factory() as s:
+            query = select(Review.status, func.count()).group_by(Review.status)
+            if submitter is not None:
+                query = query.where(Review.submitter == submitter)
+            rows = s.execute(query).all()
+        return {
+            (status.value if isinstance(status, ReviewStatus) else str(status)): count
+            for status, count in rows
+        }
 
     def get(self, pr_number: int) -> Review:
         with self._session_factory() as s:
@@ -313,6 +414,20 @@ class CurationService:
                 )
             ).scalars().first()
 
+    def find_open_review_for_pathway(self, wpid: int) -> Review | None:
+        """The live review for this pathway, in any non-terminal state, if there is one.
+
+        Broader than ``find_open_new_review``: the update flow needs to know about an *approved*
+        review too, because pushing a new commit onto a pull request the repository is already
+        publishing is the one thing it must not do.
+        """
+        with self._session_factory() as s:
+            return s.execute(
+                select(Review)
+                .where(Review.wpid == wpid, Review.status.notin_(self._TERMINAL))
+                .order_by(Review.updated_at.desc())
+            ).scalars().first()
+
     def revise(self, pr_number: int, metadata=None) -> Review:
         """A revision landed on a review's PR: re-open it and rebuild the checklist from the new
         metadata, so the curator re-reviews the changed content from a fresh auto-derived baseline.
@@ -322,7 +437,9 @@ class CurationService:
             if review is None:
                 raise ReviewNotFound(f"no review for PR #{pr_number}")
             review.status = ReviewStatus.OPEN
-            review.checklist = build_checklist(metadata=metadata, kind=review.kind)
+            review.checklist = build_checklist(
+                metadata=metadata, kind=review.kind, pipeline_mode=self.is_pipeline_mode
+            )
             s.commit()
             self._maybe_mirror(review)
             return review
@@ -335,8 +452,19 @@ class CurationService:
             review = s.get(Review, pr_number)
             if review is None:
                 raise ReviewNotFound(f"no review for PR #{pr_number}")
+            if review.status in self._TERMINAL:
+                raise ReviewNotActionable(f"PR #{pr_number} is {_plain(review.status)}")
+            was_approved = review.status == ReviewStatus.APPROVED
             review.status = ReviewStatus.CHANGES_REQUESTED
             s.commit()
+            if was_approved and self.is_pipeline_mode and self._github is not None:
+                # Taking the approval back means taking the label back: while `accepted` is on
+                # the pull request the repository may publish it at any moment, whatever the
+                # dashboard now says.
+                try:
+                    self._github.remove_label(self._repo, pr_number, self._label_accepted)
+                except (GitHubError, httpx.HTTPError):
+                    pass
             if self._github is not None:
                 body = f"@{curator} asked for changes before this can be accepted."
                 if note.strip():
@@ -353,8 +481,22 @@ class CurationService:
             return review
 
     def set_checklist_item(
-        self, pr_number: int, key: str, state: str, note: str | None = None
+        self,
+        pr_number: int,
+        key: str,
+        state: str,
+        note: str | None = None,
+        *,
+        auto: bool = False,
     ) -> Review:
+        """Set one checklist item's state (and optionally its note).
+
+        ``auto`` says who is answering. It is stored on the item, because the flag is what tells
+        a later re-upload whether the answer can be re-derived from the new file or belongs to a
+        curator — and it used to record only how the item was *built*, so a machine-written
+        answer on an item with no auto-check looked human and survived forever, while a curator's
+        override of an auto-derived item was thrown away on the next upload.
+        """
         if not is_valid_key(key):
             raise ValueError(f"unknown checklist item: {key}")
         if state not in {s.value for s in ChecklistState}:
@@ -375,13 +517,23 @@ class CurationService:
                         raise ReviewNotFound(f"no review for PR #{pr_number}")
                     # Rebuild the list (new object) so the JSON column is marked dirty.
                     checklist = [dict(item) for item in review.checklist]
+                    changed = False
                     for item in checklist:
                         if item["key"] == key:
+                            changed = changed or item.get("state") != state
                             item["state"] = state
+                            changed = changed or bool(item.get("auto")) != auto
+                            item["auto"] = auto
                             # None = "not editing the note" — a Pass/Fail/N/A click must not
                             # erase the auto-derived explanation the curator is reading.
                             if note is not None:
+                                changed = changed or item.get("note") != note
                                 item["note"] = note
+                    if not changed:
+                        # refresh_pipeline_checks re-derives the same answers on every page load.
+                        # Writing them back would bump the row's version and re-post the mirror
+                        # comment on the pull request each time a curator opened the page.
+                        return review
                     review.checklist = checklist
                     s.commit()  # version-guarded UPDATE; StaleDataError if we lost the race
                     self._maybe_mirror(review)
@@ -452,10 +604,22 @@ class CurationService:
             if state == ChecklistState.NA.value and current.get("required"):
                 state = ChecklistState.PENDING.value
             try:
-                review = self.set_checklist_item(pr_number, key, state, note=note)
+                review = self.set_checklist_item(
+                    pr_number, key, state, note=note, auto=True
+                )
             except (ReviewNotFound, ValueError, StaleDataError):
                 continue
         return review
+
+    #: The only states a curator's decision applies to (``app.review.status.DECIDABLE``).
+    #: PUBLISH_FAILED is in here: the approval was made and did not take, and re-approving is how
+    #: a fresh publish run is started — ``_approve_by_label`` removes the label before adding it
+    #: precisely so the repository's dispatcher fires again.
+    _DECIDABLE = (
+        ReviewStatus.OPEN,
+        ReviewStatus.CHANGES_REQUESTED,
+        ReviewStatus.PUBLISH_FAILED,
+    )
 
     def approve(self, pr_number: int, curator: str) -> Review:
         """Approve a submission. What that *does* depends on who owns publication.
@@ -474,6 +638,10 @@ class CurationService:
             review = s.get(Review, pr_number)
             if review is None:
                 raise ReviewNotFound(f"no review for PR #{pr_number}")
+            if review.status not in self._DECIDABLE:
+                raise ReviewNotActionable(
+                    f"PR #{pr_number} is {_plain(review.status)}; it cannot be approved again"
+                )
             if not is_complete(review.checklist):
                 raise ChecklistIncomplete(
                     f"PR #{pr_number}: required checklist items are not all passed"
@@ -531,6 +699,14 @@ class CurationService:
         GitHub refuses it, nothing has been handed over, and the review has to stay reviewable
         rather than sit in APPROVED waiting for a workflow that was never triggered.
         """
+        # Remove it first. GitHub emits no `labeled` event for a label that is already on the
+        # pull request, and the repo's dispatcher fires on `labeled` alone — so re-approving
+        # after a failed publication would otherwise be a silent no-op. The remove is
+        # best-effort: on the ordinary path the label is not there and this is a 404.
+        try:
+            self._github.remove_label(self._repo, pr_number, self._label_accepted)
+        except (GitHubError, httpx.HTTPError):
+            pass
         self._github.add_labels(self._repo, pr_number, [self._label_accepted])
         # The label is silent and the PR description gets rewritten by that repo's pipeline, so
         # without a comment the submitter has no way to know a curator acted.
@@ -572,7 +748,23 @@ class CurationService:
             review = s.get(Review, pr_number)
             if review is None:
                 raise ReviewNotFound(f"no review for PR #{pr_number}")
+            if review.status in self._TERMINAL:
+                raise ReviewNotActionable(
+                    f"PR #{pr_number} is {_plain(review.status)}; it cannot be rejected"
+                )
             wpid = review.wpid
+            was_approved = review.status == ReviewStatus.APPROVED
+
+        # Record the decision *before* touching GitHub. Removing the `accepted` label below
+        # makes GitHub deliver an `unlabeled` event straight back to our own webhook, and
+        # handle_label_event reads a still-APPROVED row as "somebody withdrew the approval" and
+        # flips the review back to open, mid-rejection.
+        with self._session_factory() as s:
+            review = s.get(Review, pr_number)
+            review.status = ReviewStatus.REJECTED
+            review.decided_by = curator
+            review.decision_note = note.strip() or None
+            s.commit()
 
         body = f"@{curator} rejected this submission."
         if note.strip():
@@ -583,25 +775,45 @@ class CurationService:
             pass
 
         if self.is_pipeline_mode:
+            # A pull request carrying both `accepted` and `rejected` is a pull request whose
+            # next dispatcher run is a coin toss. Take the approval back before handing it to
+            # the rejection workflow.
+            if was_approved:
+                try:
+                    self._github.remove_label(self._repo, pr_number, self._label_accepted)
+                except (GitHubError, httpx.HTTPError):
+                    pass
             self._github.add_labels(self._repo, pr_number, [self._label_rejected])
         else:
             # No pipeline to defer to; closing the PR is the rejection.
             self._github.close_pull_request(self._repo, pr_number)
 
-        if wpid is not None:
-            if self._locks is not None:
-                self._locks.release(wpid, curator, force=True)
-            if self._allocator is not None:
-                self._allocator.release(wpid)
+        self._free_pathway(wpid, curator, return_wpid=True)
 
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
-            review.status = ReviewStatus.REJECTED
-            review.decided_by = curator
-            review.decision_note = note.strip() or None
-            s.commit()
             self._maybe_mirror(review)
             return review
+
+    def _free_pathway(
+        self, wpid: int | None, actor: str, *, return_wpid: bool = False
+    ) -> None:
+        """Release what a terminal review was holding.
+
+        Every path that ends a review has to run this, not just ``reject``: a rejection applied
+        as a label on GitHub, or a WPID a curator records by hand, ends the review just as
+        finally, and leaving the pathway checked out means nobody can edit it until the TTL runs
+        out days later. A review with no WPID holds neither a lock nor a reservation — that is
+        the point of assigning the id at publication — so this is a no-op there.
+        """
+        if wpid is None:
+            return
+        if self._locks is not None:
+            self._locks.release(wpid, actor, force=True)
+        # Only a rejection returns the id to the pool. A publication keeps it: it is now a real,
+        # permanent WikiPathways identifier.
+        if return_wpid and self._allocator is not None:
+            self._allocator.release(wpid)
 
     def record_published_wpid(self, pr_number: int, wpid: int, curator: str) -> Review:
         """Escape hatch: a curator records the WPID the target repo assigned.
@@ -616,30 +828,56 @@ class CurationService:
             review = s.get(Review, pr_number)
             if review is None:
                 raise ReviewNotFound(f"no review for PR #{pr_number}")
+            # PUBLISHED is terminal, so this cannot be undone by any later reconcile. Recording
+            # an id on a rejected or still-open review would overwrite its decision note and
+            # freeze the mistake.
+            if review.status not in _AWAITING_WPID:
+                raise ReviewNotActionable(
+                    f"PR #{pr_number} is {_plain(review.status)}; there is no publication "
+                    "waiting to be recorded on it"
+                )
+            held = review.wpid
             review.wpid = wpid
             review.status = ReviewStatus.PUBLISHED
             review.published_at = utcnow()
             review.decision_note = f"WPID recorded by @{curator}"
             s.commit()
             self._maybe_mirror(review)
-            return review
+        # Terminal, so whatever the submission was holding has to come free — an update holds
+        # the lock on the pathway it edits, and nothing else will release it now.
+        self._free_pathway(held, curator)
+        return self.get(pr_number)
 
-    def _published_wpid(self, pr_number: int) -> int | None:
-        """Read the WPID out of the target repo's publish marker comment, if it posted one."""
+    def _publish_marker(self, pr_number: int) -> dict | None:
+        """The target repo's publish announcement for this PR, newest first, or None.
+
+        Returns the whole payload rather than just the id, because a marker saying
+        ``{"status": "failed", "step": ...}`` is as much of an answer as one saying published —
+        and reading only the published ones would leave an announced failure looking like
+        silence.
+
+        A published marker wins over a newer failed one. The repaired publish workflow announces
+        the WPID as soon as the pushes land and only then labels, edits the description and
+        closes; its ``if: failure()`` reporter fires for any of those later steps and says so
+        itself ("Both repositories were pushed before this failure"). Taking the newest marker
+        would throw away the identifier of a pathway that really was published.
+        """
         if self._github is None:
             return None
         try:
             bodies = self._github.list_issue_comments(self._repo, pr_number)
         except (GitHubError, httpx.HTTPError):
             return None
+        newest: dict | None = None
         for body in reversed(bodies):
             payload = parse_publish_marker(body)
-            if payload and payload.get("status") == "published":
-                try:
-                    return int(payload["wpid"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-        return None
+            if not payload:
+                continue
+            if payload.get("status") == "published":
+                return payload
+            if newest is None:
+                newest = payload
+        return newest
 
     def _wpid_is_on_main(self, wpid: int) -> bool:
         """Confirm the pathway really landed before we call a review published."""
@@ -654,12 +892,29 @@ class CurationService:
         return content is not None
 
     #: Statuses no further automatic transition applies to.
+    #:
+    #: PUBLISH_FAILED is deliberately absent. It means "we waited and the repository never said
+    #: anything", which a later run can still contradict — so it keeps being re-checked, and
+    #: ``handle_pr_closed`` routes it back through ``_settle_publication`` rather than closing it
+    #: out. It is terminal only in the sense that it needs a person.
     _TERMINAL = (
         ReviewStatus.MERGED,
         ReviewStatus.CLOSED,
         ReviewStatus.PUBLISHED,
         ReviewStatus.REJECTED,
     )
+
+    #: How much less often a publish-failed review is re-checked than an open one. It is waiting
+    #: on a human to re-run a workflow, not on anything that changes minute to minute, and these
+    #: accumulate: without the back-off every one of them costs a GitHub read on every single
+    #: dashboard load, forever.
+    _STUCK_RECHECK_FACTOR = 20
+
+    def _due_cutoff(self, status: ReviewStatus):
+        interval = self._reconcile_min_interval
+        if status == ReviewStatus.PUBLISH_FAILED:
+            interval = interval * self._STUCK_RECHECK_FACTOR
+        return utcnow() - interval
 
     def handle_pr_closed(self, pr_number: int, *, merged: bool) -> Review | None:
         """React to a PR closed/merged **outside** the app (webhook, issue #8).
@@ -679,10 +934,16 @@ class CurationService:
                 return None
             if review.status in self._TERMINAL:
                 return review
-            approved = review.status == ReviewStatus.APPROVED
+            # PUBLISH_FAILED as well as APPROVED: a publication that arrives after the timeout
+            # is still a publication, and reading the marker again is how it is noticed. Without
+            # this the review is rewritten to CLOSED — terminal — and the announced WPID is lost.
+            awaiting_publication = review.status in (
+                ReviewStatus.APPROVED,
+                ReviewStatus.PUBLISH_FAILED,
+            )
             wpid = review.wpid
 
-        if approved and not merged:
+        if awaiting_publication and not merged:
             return self._settle_publication(pr_number)
 
         # Lock always frees; the reservation is promoted (merged) or returned to the pool (closed).
@@ -710,26 +971,47 @@ class CurationService:
     def _settle_publication(self, pr_number: int) -> Review | None:
         """Decide what an approved-then-closed PR actually means, and record it.
 
-        The target repo's publish workflow announces the assigned WPID in a marker comment. If
-        that announcement is there and the pathway is really on ``main``, the submission is
-        published. If the PR closed with nothing to show, it is not — and saying so is the point,
-        because that workflow has failed far more often than it has succeeded.
+        The target repo's publish workflow announces what it did in a marker comment. That
+        announcement is the *only* positive evidence available, so nothing here infers success
+        from a closed pull request. It is tempting to fall back on the review's own WPID for an
+        update, since one already exists — but then every approved update that closes for any
+        reason at all is recorded as published, and the corroborating "is it on main?" read is
+        trivially true because the file was already there before the submission.
         """
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
             if review is None:
                 return None
             wpid = review.wpid
+            was = (review.status, review.decision_note)
 
-        published_wpid = self._published_wpid(pr_number) or wpid
+        marker = self._publish_marker(pr_number)
+        announced = (marker or {}).get("status")
+        published_wpid: int | None = None
+        if announced == "published":
+            try:
+                published_wpid = int(marker["wpid"])
+            except (KeyError, TypeError, ValueError):
+                # It says published but names no id. For an update that is fine — the id never
+                # changes — but a new pathway's whole identity was in that field.
+                published_wpid = wpid
+
         note: str | None = None
         if published_wpid is None:
             status = ReviewStatus.PUBLISH_FAILED
-            note = (
-                "The pull request was closed without the repository announcing a WPID, so the "
-                "pathway was almost certainly not published. Check the repository's publish "
-                "workflow, then record the WPID here once you know it."
-            )
+            if announced == "failed":
+                step = (marker or {}).get("step")
+                note = (
+                    "The repository's publish workflow reported a failure"
+                    + (f" in {step}" if step else "")
+                    + ". Re-run it, then record the assigned WPID here once it succeeds."
+                )
+            else:
+                note = (
+                    "The pull request was closed without the repository announcing a WPID, so "
+                    "the pathway was almost certainly not published. Check the repository's "
+                    "publish workflow, then record the WPID here once you know it."
+                )
         else:
             status = ReviewStatus.PUBLISHED
             if not self._wpid_is_on_main(published_wpid):
@@ -740,19 +1022,30 @@ class CurationService:
                     f"{self._default_branch} yet."
                 )
 
-        if wpid is not None and self._locks is not None:
-            self._locks.release(wpid, "pipeline", force=True)
+        # A reservation only means something while the submission might still land. Direct mode
+        # is where this bites: the id was really allocated, and holding it forever after a failed
+        # publication inflates the allocator's floor with a pathway that does not exist.
+        self._free_pathway(
+            wpid, "pipeline", return_wpid=status == ReviewStatus.PUBLISH_FAILED
+        )
+
+        # A review that is still failing in exactly the way it was failing last time is not news.
+        # This path re-runs on every reconcile of a stuck publication, and rewriting the row
+        # would re-post the mirror comment on the pull request every half minute, forever.
+        unchanged = was == (status, note)
 
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
-            review.status = status
-            review.decision_note = note
             review.last_checked_at = utcnow()
-            if status == ReviewStatus.PUBLISHED:
-                review.wpid = published_wpid
-                review.published_at = utcnow()
+            if not unchanged:
+                review.status = status
+                review.decision_note = note
+                if status == ReviewStatus.PUBLISHED:
+                    review.wpid = published_wpid
+                    review.published_at = utcnow()
             s.commit()
-            self._maybe_mirror(review)
+            if not unchanged:
+                self._maybe_mirror(review)
             return review
 
     def _pipeline_run_state(self, pr_number: int) -> dict | None:
@@ -860,12 +1153,12 @@ class CurationService:
         """
         if self._github is None:
             return False
-        cutoff = utcnow() - self._reconcile_min_interval
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
             if review is None or review.status in self._TERMINAL:
                 return False
             last = _aware(review.last_checked_at)
+            cutoff = self._due_cutoff(review.status)
         if last is not None and last > cutoff:
             return False
         return self._reconcile_one(pr_number)
@@ -884,14 +1177,14 @@ class CurationService:
         """
         if self._github is None:
             return 0
-        cutoff = utcnow() - self._reconcile_min_interval
         with self._session_factory() as s:
             due = [
                 r.pr_number
                 for r in s.execute(
                     select(Review).where(Review.status.notin_(self._TERMINAL))
                 ).scalars()
-                if _aware(r.last_checked_at) is None or _aware(r.last_checked_at) <= cutoff
+                if _aware(r.last_checked_at) is None
+                or _aware(r.last_checked_at) <= self._due_cutoff(r.status)
             ]
         return sum(1 for pr_number in due if self._reconcile_one(pr_number))
 
@@ -913,10 +1206,14 @@ class CurationService:
             if review is None:
                 return None
             status = review.status
+            wpid = review.wpid
             complete = is_complete(review.checklist)
 
         if added and label == self._label_accepted:
-            if status not in (ReviewStatus.OPEN, ReviewStatus.CHANGES_REQUESTED):
+            # PUBLISH_FAILED counts: re-applying the label on GitHub is how a curator restarts a
+            # publish run that did not take, and the review has to follow it back to APPROVED or
+            # it sits there saying "not published" while the repository is publishing it.
+            if status not in self._DECIDABLE:
                 return None  # already approved, or past it — the app's own label echoes here
             note = None if complete else "Approved on GitHub with an incomplete checklist."
             return self._set_status(
@@ -929,9 +1226,14 @@ class CurationService:
         if added and label == self._label_rejected:
             if status in self._TERMINAL:
                 return None
-            return self._set_status(
+            review = self._set_status(
                 pr_number, ReviewStatus.REJECTED, actor=actor, note="Rejected on GitHub."
             )
+            # REJECTED is terminal, so nothing downstream will ever free the pathway. Rejecting
+            # by label on GitHub has to release it exactly as rejecting in the dashboard does,
+            # or the pathway stays checked out until the lock TTL expires days later.
+            self._free_pathway(wpid, actor, return_wpid=True)
+            return review
         if not added and label == self._label_accepted and status == ReviewStatus.APPROVED:
             return self._set_status(
                 pr_number,

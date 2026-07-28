@@ -15,8 +15,10 @@ from app.github import FakeGitHubClient, GitHubError
 from app.models import Review, ReviewStatus
 from app.review.checklist import ChecklistState
 from app.review.service import (
+    MIRROR_MARKER,
     CurationService,
     NotACurator,
+    ReviewNotActionable,
     ReviewNotFound,
     parse_publish_marker,
 )
@@ -175,11 +177,28 @@ def test_an_update_keeps_its_own_id_through_publication(session_factory):
     _complete_checklist(svc, pr)
     svc.approve(pr, CURATOR)
 
-    gh.simulate_3a(REPO, pr, wpid=None)  # an edit needs no new id
+    gh.simulate_3a(REPO, pr, wpid=5636)  # an edit is announced under the id it already had
     review = svc.handle_pr_closed(pr, merged=False)
 
     assert review.status == ReviewStatus.PUBLISHED
     assert review.wpid == 5636
+
+
+def test_an_update_that_closes_without_an_announcement_is_not_called_published(session_factory):
+    """An update already has a WPID and its file is already on main, so both of the signals a
+    new pathway is judged on are satisfied before the submission even happened. Reading a silent
+    close as success there would record every abandoned edit as a publication."""
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh, kind="update", wpid=5636)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+
+    gh.simulate_3a(REPO, pr, wpid=None)  # closed, nothing announced
+    review = svc.handle_pr_closed(pr, merged=False)
+
+    assert review.status == ReviewStatus.PUBLISH_FAILED
+    assert review.wpid == 5636  # the id it came in with; nothing new was assigned
 
 
 def test_a_closed_pr_on_an_unapproved_review_is_still_just_closed(session_factory):
@@ -406,3 +425,283 @@ def test_an_unrelated_label_changes_nothing(session_factory):
 
     assert svc.handle_label_event(pr, "tests passed", added=True, actor="egonw") is None
     assert svc.get(pr).status == ReviewStatus.OPEN
+
+
+# ---------------------------------------------------------------------------------------------
+# Getting stuck, and getting unstuck. The publish workflow is the one part of the loop the app
+# does not control, so what happens when it says nothing is the case that matters most.
+
+
+def test_a_publication_that_never_happened_is_not_quietly_reclassified(session_factory):
+    """PUBLISH_FAILED is not terminal — the review keeps being re-checked, in case a late run
+    publishes it after all. That must not let the ordinary closed-pull-request path overwrite it
+    with CLOSED, which *is* terminal and would strand the pathway with nobody looking."""
+    gh = _fake()
+    svc = _service(session_factory, gh, reconcile_min_interval=timedelta(seconds=0))
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    gh.simulate_3a(REPO, pr, wpid=None)
+    assert svc.handle_pr_closed(pr, merged=False).status == ReviewStatus.PUBLISH_FAILED
+    note = svc.get(pr).decision_note
+
+    svc.reconcile()
+    svc.reconcile()
+
+    assert svc.get(pr).status == ReviewStatus.PUBLISH_FAILED
+    assert svc.get(pr).decision_note == note
+
+
+def test_a_late_publication_is_still_recorded(session_factory):
+    """The timeout says "the repository has not published this in 30 minutes", not "it never
+    will". When the announcement finally arrives, the assigned WPID has to survive."""
+    gh = _fake()
+    svc = _service(session_factory, gh, reconcile_min_interval=timedelta(seconds=0))
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    gh.simulate_3a(REPO, pr, wpid=None)
+    svc.handle_pr_closed(pr, merged=False)
+    assert svc.get(pr).status == ReviewStatus.PUBLISH_FAILED
+
+    # A re-run of the repository's workflow finally succeeds.
+    gh.create_issue_comment(
+        REPO,
+        pr,
+        f'<!-- wikipathways-publish {{"pr":{pr},"wpid":5678,"status":"published"}} -->\n'
+        "Published as WP5678.",
+    )
+    svc.reconcile()
+
+    assert svc.get(pr).status == ReviewStatus.PUBLISHED
+    assert svc.get(pr).wpid == 5678
+
+
+def test_an_announced_failure_is_read_as_a_failure(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    gh.create_issue_comment(
+        REPO,
+        pr,
+        f'<!-- wikipathways-publish {{"pr":{pr},"status":"failed","step":"push_assets"}} -->\n'
+        "Publication failed.",
+    )
+    gh.closed.add(pr)
+
+    review = svc.handle_pr_closed(pr, merged=False)
+
+    assert review.status == ReviewStatus.PUBLISH_FAILED
+    assert "push_assets" in review.decision_note
+
+
+def test_re_approving_re_applies_the_label_so_the_dispatcher_fires(session_factory):
+    """GitHub emits no `labeled` event for a label that is already there, and the repository's
+    dispatcher listens for nothing else. Adding it a second time would be a silent no-op."""
+    gh = _fake()
+    svc = _service(session_factory, gh, reconcile_min_interval=timedelta(seconds=0))
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    gh.simulate_3a(REPO, pr, wpid=None)
+    svc.handle_pr_closed(pr, merged=False)
+    # A curator re-runs the workflow by hand, records the outcome, and someone re-opens the PR.
+    gh.closed.discard(pr)
+    svc._set_status(pr, ReviewStatus.OPEN, actor=None, note=None)
+    gh.label_log.clear()
+
+    svc.approve(pr, CURATOR)
+
+    assert gh.label_log == [
+        (REPO, pr, "remove", "accepted"),
+        (REPO, pr, "add", "accepted"),
+    ]
+
+
+def test_rejecting_an_approved_review_takes_the_approval_back_off(session_factory):
+    """A pull request carrying both labels is one whose next dispatcher run is a coin toss."""
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+
+    svc.reject(pr, CURATOR, "on reflection, no")
+
+    assert gh.list_labels(REPO, pr) == ["rejected"]
+
+
+def test_requesting_changes_on_an_approved_review_takes_the_label_back_off(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+
+    svc.request_changes(pr, CURATOR, "one more thing")
+
+    assert gh.list_labels(REPO, pr) == []
+    assert svc.get(pr).status == ReviewStatus.CHANGES_REQUESTED
+
+
+def test_rejecting_by_label_on_github_still_frees_the_pathway(session_factory, locks):
+    """REJECTED is terminal, so nothing downstream will ever release the lock. A curator who
+    reaches for the label on GitHub rather than the dashboard must not leave the pathway checked
+    out until the TTL runs out days later."""
+    gh = _fake()
+    svc = _service(session_factory, gh, locks=locks)
+    pr = _register(svc, gh, kind="update", wpid=554)
+    locks.acquire(554, "alice", pr_number=pr)
+    assert locks.get(554) is not None
+
+    svc.handle_label_event(pr, "rejected", added=True, actor="egonw")
+
+    assert svc.get(pr).status == ReviewStatus.REJECTED
+    assert locks.get(554) is None
+
+
+def test_recording_a_wpid_by_hand_also_frees_the_pathway(session_factory, locks):
+    gh = _fake()
+    svc = _service(session_factory, gh, locks=locks)
+    pr = _register(svc, gh, kind="update", wpid=554)
+    locks.acquire(554, "alice", pr_number=pr)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)  # the form is only offered once a publication is outstanding
+
+    svc.record_published_wpid(pr, 554, CURATOR)
+
+    assert svc.get(pr).status == ReviewStatus.PUBLISHED
+    assert locks.get(554) is None
+
+
+def test_a_re_upload_re_derives_the_checklist_from_the_new_file(session_factory):
+    """The update flow reuses the pull request, so `register` is the only place a revised update
+    is seen. Reading a checklist derived from the file the submitter already replaced is how a
+    curator fails a submission that was fixed."""
+    from app.preview.metadata import parse_curation_metadata
+
+    unannotated = (
+        '<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="P" Organism="Homo sapiens">'
+        '<DataNode TextLabel="IRS1" Type="GeneProduct"><Xref Database="" ID=""/></DataNode>'
+        "</Pathway>"
+    )
+    annotated = unannotated.replace('Database="" ID=""', 'Database="Entrez Gene" ID="3667"')
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh, kind="update", wpid=554)
+    svc.register(
+        pr_number=pr, wpid=554, submitter="alice", kind="update",
+        metadata=parse_curation_metadata(unannotated),
+    )
+    before = next(i for i in svc.get(pr).checklist if i["key"] == "datanodes_mapped")
+    assert before["state"] == ChecklistState.FAIL.value
+
+    svc.register(
+        pr_number=pr, wpid=554, submitter="alice", kind="update",
+        metadata=parse_curation_metadata(annotated),
+    )
+
+    after = next(i for i in svc.get(pr).checklist if i["key"] == "datanodes_mapped")
+    assert after["state"] == ChecklistState.PASS.value
+
+
+def test_a_re_upload_keeps_what_a_curator_answered_by_hand(session_factory):
+    from app.preview.metadata import parse_curation_metadata
+
+    gpml = (
+        '<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="P" Organism="Homo sapiens">'
+        "</Pathway>"
+    )
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh, kind="update", wpid=554)
+    svc.set_checklist_item(pr, "description_ok", "pass", note="checked it myself")
+
+    svc.register(
+        pr_number=pr, wpid=554, submitter="alice", kind="update",
+        metadata=parse_curation_metadata(gpml),
+    )
+
+    item = next(i for i in svc.get(pr).checklist if i["key"] == "description_ok")
+    assert item["state"] == "pass"
+    assert item["note"] == "checked it myself"
+
+
+
+def test_a_wpid_cannot_be_recorded_on_a_review_with_no_publication_outstanding(session_factory):
+    """PUBLISHED is terminal, so this would freeze a mistake: a typo'd pull request number would
+    overwrite somebody else's rejection reason and never be reconciled back."""
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    svc.reject(pr, CURATOR, "duplicate")
+
+    with pytest.raises(ReviewNotActionable):
+        svc.record_published_wpid(pr, 5678, CURATOR)
+    assert svc.get(pr).decision_note == "duplicate"
+
+
+def test_a_publish_failure_can_be_approved_again(session_factory):
+    """Re-applying the label is how a stuck publication is retried, and it is the state every
+    approval on the live target lands in. Refusing it leaves the curator with nothing to do."""
+    gh = _fake()
+    svc = _service(session_factory, gh, reconcile_min_interval=timedelta(seconds=0))
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    gh.simulate_3a(REPO, pr, wpid=None)
+    svc.handle_pr_closed(pr, merged=False)
+    assert svc.get(pr).status == ReviewStatus.PUBLISH_FAILED
+    gh.closed.discard(pr)  # the curator re-opened it to re-run the workflow
+    gh.label_log.clear()
+
+    review = svc.approve(pr, CURATOR)
+
+    assert review.status == ReviewStatus.APPROVED
+    assert gh.label_log == [
+        (REPO, pr, "remove", "accepted"),
+        (REPO, pr, "add", "accepted"),
+    ]
+
+
+def test_the_mirror_comment_does_not_claim_a_merge_after_a_rejection(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+
+    svc.reject(pr, CURATOR, "on reflection, no")
+
+    body = gh.comments[(REPO, pr)][MIRROR_MARKER]
+    assert "Approved and merged" not in body
+    assert "Approved by" not in body
+
+
+def test_a_published_marker_wins_over_a_later_failure_report(session_factory):
+    """The repaired publish workflow announces the WPID as soon as the pushes land, then labels,
+    edits the description and closes. Its failure reporter fires for any of those later steps and
+    says so itself — reading only the newest marker would throw away a real publication."""
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    gh.create_issue_comment(
+        REPO, pr,
+        f'<!-- wikipathways-publish {{"pr":{pr},"wpid":5678,"status":"published"}} -->\n'
+        "Published as WP5678.",
+    )
+    gh.create_issue_comment(
+        REPO, pr,
+        f'<!-- wikipathways-publish {{"pr":{pr},"status":"failed","step":"close-pr"}} -->\n'
+        "Both repositories were pushed before this failure.",
+    )
+    gh.closed.add(pr)
+
+    review = svc.handle_pr_closed(pr, merged=False)
+
+    assert review.status == ReviewStatus.PUBLISHED
+    assert review.wpid == 5678
