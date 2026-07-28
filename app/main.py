@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth import GitHubApp, GithubOAuth, OAuthError, TokenCipher, TokenCipherError
@@ -273,11 +274,17 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         def bot_provider() -> GitHubClient | None:
             return HttpGitHubClient(bot_app.installation_token()) if bot_app else None
 
+        # Server-side reads that happen outside a request — the curator team lookup and the
+        # open-PR scan behind the pathway lock — go through this rather than through a FastAPI
+        # dependency, because there is no request to hang one off. Kept on app.state so a test
+        # can substitute a fake for it the way it substitutes the request-scoped clients.
+        app.state.bot_client_provider = bot_provider
+
         # Curator whitelist: a GitHub Team if WPSUBMIT_CURATOR_TEAM is set, else the config list.
         app.state.curators = make_curator_registry(
             team=settings.curator_team,
             config_logins=settings.curators,
-            bot_client_provider=bot_provider,
+            bot_client_provider=lambda: app.state.bot_client_provider(),
         )
         # Pathway preview: the app draws before/after itself and caches it (issue #11).
         app.state.preview = PreviewService(cache_dir=settings.preview_cache_dir)
@@ -299,9 +306,40 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             _make_floor_provider(settings, bot_app),
             ttl=timedelta(days=settings.wpid_reservation_ttl_days),
         )
+        def open_pr_touching_pathway(wpid: int) -> bool:
+            """Is there already an open pull request against this pathway, ours or anyone's?
+
+            The lock's own table only knows about edits that went through this app. Someone with
+            push access can open a raw pull request against the content repo at any time — on
+            the deployed target most pull requests do arrive that way — and starting a second
+            edit of the same GPML on top of one is exactly the unmergeable divergence the lock
+            exists to prevent.
+
+            Fails open. If GitHub is unreachable, refusing every update would be a worse outcome
+            than the collision this guards against, which needs two editors at once to happen at
+            all.
+            """
+            client = app.state.bot_client_provider()
+            if client is None:
+                return False
+            try:
+                return client.find_open_pr_touching(
+                    settings.content_repo, f"pathways/WP{wpid}/"
+                ) is not None
+            except Exception:  # noqa: BLE001 — a blocked update costs more than a missed scan
+                logging.getLogger("wpsubmit.locks").warning(
+                    "could not scan %s for open pull requests touching WP%s; allowing the "
+                    "check-out",
+                    settings.content_repo,
+                    wpid,
+                    exc_info=True,
+                )
+                return False
+
         app.state.locks = PathwayLockRegistry(
             session_factory,
             ttl=timedelta(days=settings.pathway_lock_ttl_days),
+            open_pr_scanner=open_pr_touching_pathway,
         )
         # Per-user OAuth (writes act as the submitter). None if unconfigured → auth routes 503.
         app.state.oauth = (
@@ -756,7 +794,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             base_branch=settings.default_branch,
         )
         try:
-            result = service.update_pathway(
+            # Off the event loop. Checking out a pathway scans the target repo's open pull
+            # requests for a foreign writer, which on a busy repo is dozens of sequential
+            # requests — long enough to stall every other request in the process if it ran here.
+            result = await run_in_threadpool(
+                service.update_pathway,
                 wpid=wpid,
                 gpml=content,
                 submitter=submitter,

@@ -94,3 +94,94 @@ def test_concurrent_acquire_single_winner(session_factory):
 
     assert len(winners) == 1, f"expected exactly one winner, got {winners}"
     assert refused == n_threads - 1
+
+
+def test_the_app_refuses_an_update_when_a_raw_pr_already_touches_the_pathway(tmp_path):
+    """The lock's table only knows about edits that came through this app. On the deployed
+    target most pull requests do not: someone opening one by hand is exactly the second writer
+    the lock exists to notice."""
+    import io
+
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.github import FakeGitHubClient
+    from app.main import build_app, get_bot_optional, get_current_user, get_github_client
+    from tests.test_api import GOOD_GPML
+
+    repo = "wikipathways/wikipathways-database"
+    fake = FakeGitHubClient(
+        default_branches={f"{repo}#main": "basesha"},
+        existing_files={f"{repo}#pathways/WP554/WP554.gpml": "oldsha"},
+    )
+    # Somebody's raw pull request, opened outside the portal, editing the same pathway.
+    raw = fake.open_pull_request(repo, head="egonw-patch", base="main", title="fix", body="")
+    fake.put_file(repo, "egonw-patch", "pathways/WP554/WP554.gpml", "<Pathway/>", "by hand")
+    assert fake.find_open_pr_touching(repo, "pathways/WP554/") == raw.number
+
+    settings = Settings(
+        _env_file=None,
+        database_url=f"sqlite:///{tmp_path / 'reg.db'}",
+        content_repo=repo,
+        preview_cache_dir=str(tmp_path / "preview-cache"),
+    )
+    app = build_app(settings)
+    app.dependency_overrides[get_github_client] = lambda: fake
+    app.dependency_overrides[get_bot_optional] = lambda: fake
+    app.dependency_overrides[get_current_user] = lambda: "alice"
+    with TestClient(app) as client:
+        # The scan runs outside any request, so it reads the bot through app.state.
+        app.state.bot_client_provider = lambda: fake
+        resp = client.post(
+            "/api/pathways/554/update",
+            files={"file": ("wp554.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        )
+
+    assert resp.status_code == 409
+    assert "open GitHub PR" in resp.json()["detail"]["reason"]
+
+
+def test_the_apps_own_update_pr_does_not_trip_its_own_scanner(tmp_path):
+    """The update flow acquires the lock a second time to record the pull request it just
+    opened. A scan on that refresh finds that very pull request and refuses the check-out its
+    own holder is completing — which would 409 every update on a deployment where the bot is
+    configured, leaving the lock held and no review row behind."""
+    import io
+
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.github import FakeGitHubClient
+    from app.main import build_app, get_bot_optional, get_current_user, get_github_client
+    from app.models import Review
+    from tests.test_api import GOOD_GPML
+
+    repo = "wikipathways/wikipathways-database"
+    fake = FakeGitHubClient(
+        default_branches={f"{repo}#main": "basesha"},
+        existing_files={f"{repo}#pathways/WP554/WP554.gpml": "oldsha"},
+    )
+    settings = Settings(
+        _env_file=None,
+        database_url=f"sqlite:///{tmp_path / 'reg.db'}",
+        content_repo=repo,
+        preview_cache_dir=str(tmp_path / "preview-cache"),
+    )
+    app = build_app(settings)
+    app.dependency_overrides[get_github_client] = lambda: fake
+    app.dependency_overrides[get_bot_optional] = lambda: fake
+    app.dependency_overrides[get_current_user] = lambda: "alice"
+    with TestClient(app) as client:
+        app.state.bot_client_provider = lambda: fake  # as a configured deployment has
+
+        resp = client.post(
+            "/api/pathways/554/update",
+            files={"file": ("wp554.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        )
+
+        assert resp.status_code == 201, resp.text
+        pr = resp.json()["pr_number"]
+        # The review row is what makes it visible in the dashboard at all.
+        with app.state.session_factory() as s:
+            assert s.get(Review, pr) is not None
+        assert app.state.locks.get(554).pr_number == pr

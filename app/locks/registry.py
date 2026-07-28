@@ -81,17 +81,15 @@ class PathwayLockRegistry:
         """
         self.expire_stale()
 
-        # A raw PR opened outside the app is an external writer the lock can't see in its table.
-        if self._open_pr_scanner is not None and self._open_pr_scanner(wpid):
-            raise LockUnavailable(
-                "an open GitHub PR already touches this pathway (opened outside the app)"
-            )
-
         now = utcnow()
         with self._session_factory() as s:
             existing = s.get(PathwayLock, wpid)
             if existing is not None:
                 if existing.held_by == held_by:
+                    # No scan on a refresh. The caller already holds this pathway and is usually
+                    # coming back to record the pull request it just opened — a pull request the
+                    # scan would find and read as a foreign writer, refusing the check-out its
+                    # own holder is completing.
                     existing.expires_at = now + self._ttl
                     if pr_number is not None:
                         existing.pr_number = pr_number
@@ -102,6 +100,15 @@ class PathwayLockRegistry:
                     held_by=existing.held_by,
                 )
 
+        # Nobody holds it here — but a raw pull request opened outside the app is an external
+        # writer this table cannot see, and starting a second edit on top of one is the
+        # divergence the lock exists to prevent. Only worth the GitHub read on a fresh check-out.
+        if self._open_pr_scanner is not None and self._open_pr_scanner(wpid):
+            raise LockUnavailable(
+                "an open GitHub PR already touches this pathway (opened outside the app)"
+            )
+
+        with self._session_factory() as s:
             lock = PathwayLock(
                 wpid=wpid,
                 held_by=held_by,

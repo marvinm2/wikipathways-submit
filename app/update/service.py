@@ -22,6 +22,9 @@ from app.locks import PathwayLockRegistry
 from app.submit.gpml import assign_wpid, layout_paths, validate_gpml
 from app.wpid import format_wpid
 
+#: How many leftover ``update/WP<id>-<n>`` branches to step past before giving up.
+_STALE_BRANCH_RETRIES = 20
+
 
 class PathwayNotFound(RuntimeError):
     """Update targeted a WPID that does not exist in the repo (use submit for new pathways)."""
@@ -50,6 +53,32 @@ class UpdateService:
         self._github = github
         self._repo = repo
         self._base_branch = base_branch
+
+    def _fresh_branch(self, wpid_str: str, base_sha: str) -> str:
+        """A new ``update/WP<id>-<n>`` cut from the current base, stepping past leftovers.
+
+        The suffix is a counter rather than a timestamp so the branch list stays readable: the
+        second edit of WP554 is ``update/WP554-2``, and a curator can see at a glance which
+        pathway it belongs to.
+        """
+        for suffix in range(2, 2 + _STALE_BRANCH_RETRIES):
+            candidate = f"update/{wpid_str}-{suffix}"
+            try:
+                self._github.create_branch(self._repo, candidate, base_sha)
+                return candidate
+            except BranchAlreadyExists:
+                # Same rule as for the unsuffixed branch: if this one still has an open pull
+                # request, that is the pull request this edit belongs on. Stepping past it would
+                # open a second concurrent PR for one pathway — the divergence the check-out
+                # lock exists to prevent, and which the lock cannot catch because the same
+                # person holds it.
+                if self._github.find_open_pr(self._repo, candidate) is not None:
+                    return candidate
+                continue
+        raise BranchAlreadyExists(
+            f"could not cut a fresh update branch for {wpid_str}: "
+            f"update/{wpid_str}-2..{1 + _STALE_BRANCH_RETRIES} all exist"
+        )
 
     def update_pathway(
         self,
@@ -86,7 +115,15 @@ class UpdateService:
             except BranchAlreadyExists:
                 # Re-uploading while still checked out: reuse the existing update branch/PR
                 # instead of opening a second PR for the same pathway.
-                pass
+                #
+                # Only while its pull request is still open, though. Nothing here or upstream
+                # ever deletes a branch, and where the repository publishes through its own
+                # Actions the pull request is closed rather than merged, so `update/WP<id>`
+                # outlives every edit. Reusing it for the *next* edit would cut the diff against
+                # a base that could be months old — the opposite of the branch-off-latest
+                # guarantee this flow exists to provide, and of what the PR body claims.
+                if self._github.find_open_pr(self._repo, branch) is None:
+                    branch = self._fresh_branch(wpid_str, base_sha)
 
             # SHA of the file as it currently is on the update branch (falls back to base).
             branch_file_sha = self._github.get_file_sha(self._repo, branch, path)

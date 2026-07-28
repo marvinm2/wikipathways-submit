@@ -111,6 +111,23 @@ class GitHubClient(ABC):
         """Return the open PR whose head is ``head_branch``, or None."""
 
     @abstractmethod
+    def find_open_pr_touching(
+        self, repo: str, path_prefix: str, *, limit: int = 40
+    ) -> int | None:
+        """The number of an open PR that changes a file under ``path_prefix``, or None.
+
+        This is what makes the pathway check-out lock more than an app-internal flag: a power
+        user can open a raw pull request against the content repo without going near this app,
+        and starting a second edit of the same GPML on top of that is the unmergeable-divergence
+        failure the lock exists to prevent (design §4.3).
+
+        There is no GitHub query for "open PRs touching this path", so this walks the open pull
+        requests and reads each one's file list, newest first, stopping at ``limit``. That makes
+        it too expensive for a page render; it belongs on the update write path, which happens a
+        few times a day.
+        """
+
+    @abstractmethod
     def open_pull_request(
         self, repo: str, head: str, base: str, title: str, body: str
     ) -> PullRequest:
@@ -338,6 +355,18 @@ class FakeGitHubClient(GitHubClient):
             # publish workflow already closed.
             if pr.head_branch == head_branch and pr.number not in self.closed | self.merged:
                 return pr
+        return None
+
+    def find_open_pr_touching(
+        self, repo: str, path_prefix: str, *, limit: int = 40
+    ) -> int | None:
+        self._maybe_fail("find_open_pr_touching")
+        for pr in reversed(self.pulls[-limit:]):
+            if pr.number in self.closed | self.merged:
+                continue
+            for (r, branch, path) in self.files:
+                if r == repo and branch == pr.head_branch and path.startswith(path_prefix):
+                    return pr.number
         return None
 
     def open_pull_request(
@@ -624,6 +653,37 @@ class HttpGitHubClient(GitHubClient):
         return PullRequest(
             number=data["number"], html_url=data["html_url"], head_branch=head_branch
         )
+
+    def find_open_pr_touching(
+        self, repo: str, path_prefix: str, *, limit: int = 40
+    ) -> int | None:
+        resp = self._client.get(
+            f"/repos/{repo}/pulls",
+            params={"state": "open", "per_page": min(limit, 100), "sort": "long-running",
+                    "direction": "desc"},
+        )
+        self._raise_for(resp, "find_open_pr_touching")
+        pulls = resp.json()[:limit]
+        # A pull request whose head branch is one of ours is one of ours. Skipping them first
+        # keeps a submitter's own in-flight edit from reading as a foreign writer, and saves a
+        # file listing per skipped pull request.
+        wpid = path_prefix.rstrip("/").rsplit("/", 1)[-1]
+        ours = (f"update/{wpid}", f"submit/{wpid}")
+        for pull in pulls:
+            head = str((pull.get("head") or {}).get("ref", ""))
+            if head.startswith(ours):
+                continue
+            files = self._client.get(
+                f"/repos/{repo}/pulls/{pull['number']}/files", params={"per_page": 100}
+            )
+            # One unreadable pull request must not be read as "nothing touches this pathway",
+            # but neither should it abort the scan — keep looking through the rest.
+            if files.is_error:
+                continue
+            for entry in files.json():
+                if str(entry.get("filename", "")).startswith(path_prefix):
+                    return int(pull["number"])
+        return None
 
     def open_pull_request(
         self, repo: str, head: str, base: str, title: str, body: str
