@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -81,6 +82,26 @@ _PREVIEW_PLACEHOLDER = (
     b'<text x="100" y="63" text-anchor="middle" font-family="sans-serif" font-size="11" '
     b'fill="#7c8a82">Preview unavailable</text></svg>'
 )
+
+
+#: A real WikiPathways identifier: at least one digit, never a leading zero. Declaring the path
+#: parameter as ``int`` is not enough — FastAPI coerces "0001" to 1, so the placeholder this app
+#: commits for a not-yet-published pathway silently addresses WP1, an unrelated real pathway.
+_WPID_RE = re.compile(r"^[1-9][0-9]{0,5}$")
+
+
+def parse_wpid(raw: str) -> int:
+    digits = raw[2:] if raw[:2].upper() == "WP" else raw
+    if not _WPID_RE.fullmatch(digits):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{raw!r} is not a WikiPathways identifier. They are WP followed by digits, "
+                "with no leading zero — WP0001 is the placeholder a submission carries until "
+                "the database assigns its id, not a pathway."
+            ),
+        )
+    return int(digits)
 
 
 def get_current_user(request: Request) -> str:
@@ -704,13 +725,28 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/pathways/{wpid}/update", response_model=SubmitResponse, status_code=201)
     async def update(
         request: Request,
-        wpid: int,
+        wpid: str,
         file: UploadFile,
         description: str = Form(""),
         submitter: str = Depends(get_current_user),
         github: GitHubClient = Depends(get_github_client),
         bot: GitHubClient | None = Depends(get_bot_optional),
     ) -> SubmitResponse:
+        wpid = parse_wpid(wpid)
+        # The same gate the revise route has. Without it a submitter can push a new commit onto
+        # an approved pull request that still carries the `accepted` label, so the repository
+        # may publish a GPML no curator has looked at — while the review still reads "approved"
+        # against a checklist silently rebuilt from the new file.
+        existing = _curation(request).find_open_review_for_pathway(wpid)
+        if existing is not None and existing.status.value not in ACTIONABLE:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"WP{wpid} has a pull request that is "
+                    f"{presentation(existing.status.value).label.lower()} "
+                    f"(#{existing.pr_number}); wait for it to finish before editing again."
+                ),
+            )
         content = await file.read()
         writer = _writer_client(settings, github, bot)
         service = UpdateService(
@@ -793,6 +829,17 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 status_code=409,
                 detail="this is an update, not a new submission; upload it as an update instead",
             )
+        if review.status.value not in ACTIONABLE:
+            # Committing onto an approved submission would put the review back to open while the
+            # `accepted` label is still on the pull request and the repository may already be
+            # publishing it — two venues telling different stories about the same pathway.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"this submission is {presentation(review.status.value).label.lower()}, so it "
+                    "can no longer be revised. Submit the change as a new upload instead."
+                ),
+            )
         if review.submitter != submitter and not request.app.state.curators.is_curator(submitter):
             raise HTTPException(
                 status_code=403, detail="only the submitter or a curator can revise this submission"
@@ -838,11 +885,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/pathways/{wpid}", response_model=PathwayInfo)
     def pathway_info(
         request: Request,
-        wpid: int,
+        wpid: str,
         github: GitHubClient = Depends(get_github_client),
     ) -> PathwayInfo:
         """Where does ``WP<wpid>`` live — on the base branch (an update), an open new-submission PR
         (a revise), or nowhere? Backs the update form's presence check and revise routing."""
+        wpid = parse_wpid(wpid)
         wpid_str = f"WP{wpid}"
         path = layout_paths(wpid)["gpml"]
         try:
@@ -858,7 +906,15 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 wpid=wpid_str,
                 name=parse_curation_metadata(content).name,
             )
-        # Not on main — is there still an open new-submission PR to revise?
+        # Not on main — is there still an open new-submission PR to revise? Ask our own registry
+        # first. It answers in both publish modes and costs no GitHub call, where the branch scan
+        # below only ever finds a *direct*-mode submission: a pipeline branch carries a timestamp
+        # and the pathway has no id to name it after in the first place.
+        review = _curation(request).find_open_new_review(wpid)
+        if review is not None:
+            return PathwayInfo(
+                exists=False, state="pending_new", wpid=wpid_str, pr_number=review.pr_number
+            )
         try:
             pr = github.find_open_pr(settings.content_repo, f"submit/{wpid_str}")
         except GitHubError:
@@ -1006,12 +1062,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/pathways/{wpid}/release")
     async def force_release(
-        request: Request, wpid: int, curator: str = Depends(get_current_user)
+        request: Request, wpid: str, curator: str = Depends(get_current_user)
     ) -> dict[str, bool]:
         # Curator override (design §4.3): restricted to the curator whitelist.
         if not request.app.state.curators.is_curator(curator):
             raise HTTPException(status_code=403, detail=f"{curator} is not a curator")
-        released = request.app.state.locks.release(wpid, curator, force=True)
+        released = request.app.state.locks.release(parse_wpid(wpid), curator, force=True)
         return {"released": released}
 
     # -- GitHub webhook (issue #8): release the lock when a PR is closed/merged outside the app --
