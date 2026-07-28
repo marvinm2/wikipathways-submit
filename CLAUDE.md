@@ -15,7 +15,7 @@ repos.
 - `mvp1/` + `fork-staging/` — MVP-1 PR-preview pipeline (two GitHub Actions workflows +
   `validate_pathway.py`), adversarially reviewed and hardened. Ships to a **fork** of
   `wikipathways-database`; `fork-staging/CHECKLIST.md` is the test procedure. See `mvp1/README.md`.
-- `app/` — the FastAPI app (MVP-2 → MVP-4). Implemented + tested (140 tests): the transactional
+- `app/` — the FastAPI app (MVP-2 → MVP-4). Implemented + tested (270 tests): the transactional
   registry (`app/wpid/` atomic allocator, `app/locks/` pathway check-out lock — both with
   threaded race tests), app-owned GPML naming/layout (`app/submit/gpml.py`), the `GitHubClient`
   abstraction (`app/github/` — ABC + `FakeGitHubClient` + httpx impl), the **submission service**
@@ -63,7 +63,10 @@ repos.
   curator-gated (403 for non-curators), matching approve.
   The **dashboard/landing UI was redesigned** (issue #7, `templates/` + `static/app.{css,js}`,
   server-rendered Jinja + vanilla JS, served from `/static`): landing/submit stepper, curation
-  queue with before/after preview slots, reviewer assignment, per-review detail page.
+  queue with before/after preview slots, reviewer assignment, per-review detail page. The review
+  card lives in `templates/_review_card.html` and is imported `with context` by both pages —
+  importing it from `dashboard.html` executed that page's body and rendered its empty state
+  against a context with no queue in it.
   **Curator whitelist resolves from a GitHub Team** (issue #9, `app/curators.py`,
   `WPSUBMIT_CURATOR_TEAM='org/slug'`): TTL-cached, fail-closed, `WPSUBMIT_CURATORS` list is the
   fallback. **OAuth token is encrypted at rest** (issue #4, `app/auth/session_tokens.py`, Fernet)
@@ -183,18 +186,24 @@ Docker secrets (never in the repo). The app needs a GitHub App identity installe
 
 **The app is deployed and live at https://upload.wikipathways.org**, pointed at the fork
 `marvinm2/sandbox-wp-db` in `pipeline` mode. The handoff doc is authoritative for what is
-proven, what is pending on other people, and the gotchas. Two things it says that matter most
+proven, what is pending on other people, and the gotchas. Three things it says that matter most
 here:
 
 - **Approval does not merge.** On a target repo that publishes through its own Actions
   (`WPSUBMIT_PUBLISH_MODE=pipeline`), approving applies that repo's `accepted` label and stops;
   the repo assigns the WPID, publishes, and closes the pull request unmerged. A close without a
-  merge is the *success* signal there. `direct` mode still merges, and is the default, so
-  `wikipathways-database`, a personal fork and the demo are unchanged.
+  merge is the *success* signal there — but only when the repo's marker comment says so. A silent
+  close is `PUBLISH_FAILED`, for updates as much as for new pathways. `direct` mode still merges,
+  and is the default, so `wikipathways-database`, a personal fork and the demo are unchanged.
 - **A new pathway carries no WPID** until publication. It is submitted on branch
   `WP0001_<user>_<stamp>` at `pathways/WP0001/WP0001.gpml`; `Review.wpid` is nullable and the
   branch is recorded on the row, because it can no longer be derived. Revise is therefore keyed
-  by pull request (`POST /api/reviews/{pr}/revise`), not by WPID.
+  by pull request (`POST /api/reviews/{pr}/revise`), not by WPID. `WP0001` is a placeholder and
+  **not** an address: the WPID routes refuse a leading zero rather than coercing it to WP1.
+- **Every `ReviewStatus` is reachable in the UI.** `app/review/status.py` owns the on-screen
+  vocabulary — the label, the banner sentence, the empty state, and which tabs the queue shows
+  per publish mode. It also owns `ACTIONABLE` (open / changes_requested), which gates both the
+  controls and `CurationService`'s own refusals. Add a status there, not in the template.
 
 `docs/sandbox-pipeline.md` maps the target repo's five workflows and its known breakages.
 `sandbox-workflows/` holds repaired copies staged for a pull request to that repo — **not opened

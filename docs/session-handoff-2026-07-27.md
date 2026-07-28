@@ -118,24 +118,78 @@ stay on their degraded path.
 The bridge cache is warm (`cached-bridge-files`, 1.6GB), which cut a run from ~40 minutes to
 about 3.
 
+## What changed after this was first written (later on 2026-07-27)
+
+A second pass closed items 3 and 4 below and a batch of defects an audit turned up. The state
+machine and the dashboard now cover the whole pipeline lifecycle rather than the first half of it.
+
+**Reachable states.** The queue has a tab per `ReviewStatus`, mode-dependent (`app/review/status.py`
+owns the vocabulary): pipeline mode shows Open / Changes requested / Approved / Published / Not
+published / Rejected / Closed and no Merged, because nothing merges there. Each tab carries a
+count, each status has a badge, a banner and its own empty-state copy, and the banner renders
+`decision_note` — until now the only carrier of "the accepted label has been on for 41 minutes and
+nothing published" was a database column nothing displayed.
+
+**Actions that were implemented but unreachable.** Reject (with a reason, and a warning that the
+repository's workflow deletes the drafts and closes the pull request) and record-the-published-WPID
+now have controls. Approve, Reject and Request changes only render on `open` and
+`changes_requested`, and `CurationService` refuses them elsewhere with a 409 rather than trusting
+the template.
+
+**The repository's own output** — the draft page, its render, the data-node and reference counts,
+the run link — is rendered in a panel. `_pipeline_view` was computing all of it and the templates
+were showing one field of it.
+
+**A submitter can find their own work.** `/dashboard?mine=1`, every status at once, because in
+pipeline mode there is no WPID to look a submission up by. The revise upload is theirs, not only a
+curator's.
+
+**Publish state-machine fixes**, all of which were silent:
+
+- a `publish_failed` review was rewritten to `closed` by the next reconcile, which is terminal —
+  the pathway was stranded with nobody looking. `handle_pr_closed` now routes both `approved` and
+  `publish_failed` through `_settle_publication`, so a late publication is still recorded.
+- an approved *update* was recorded as published whatever happened, because the fallback took the
+  WPID it already had and the "is it on main?" check passes trivially for a file that was there
+  first. Publication now needs the marker comment.
+- re-approving after a failed publication did nothing: GitHub emits no `labeled` event for a label
+  that is already on the pull request. Approval now removes `accepted` before adding it.
+- rejecting or requesting changes on an approved review left `accepted` in place, so the pull
+  request carried both labels.
+- rejecting by label on GitHub, and recording a WPID by hand, both leaked the pathway lock for the
+  full TTL.
+
+**Other defects the audit confirmed:** the update tab's revise path POSTed to
+`/api/pathways/{wpid}/revise`, a route that stopped existing when revise was re-keyed by pull
+request; `WP0001` typed into the update field was coerced to the integer 1 and addressed WP1, a
+real unrelated pathway (route parsing now refuses a leading zero); the submit result card said
+"Assigned WP0001"; the pathway lock was built without its open-PR scanner, so a raw pull request
+opened outside the app was invisible to it; `getattr` on a dict made the pipeline's reference
+check dead code; the second edit of a pathway reused a months-old branch while the PR body claimed
+it was cut from latest; a re-uploaded update kept the checklist derived from the file it replaced;
+and `naming_ok` auto-passed with "assigned by the app", which is false here and blocked the
+repository's own naming check from ever being applied.
+
+Plus the standing UI backlog from `docs/ui-review-2026-07-27.md` — items 9, 10, 13, 14, 15, 16,
+17, 19, 21, 22, 24, 25, 26, 27, 29, 31, 32, 33, 34 and 35.
+
 ## Next steps
 
 1. **The update flow**, unexercised. `demo/Test_pathway_update.gpml` adds a glucose node and a
    third interaction. The route targets `pathways/WP<id>/WP<id>.gpml` on `main`, so it needs a
    WPID already in the fork's tree — `WP1001` or `WP554`. The content will not match that
    pathway, which is fine for the mechanism and odd semantically; decide which.
-2. **Approve / reject / publish detection**, unexercised. Approving applies `accepted`, the
-   dispatcher fires 3A, and 3A's marker comment is what the app reads back. Expect
-   `PUBLISH_FAILED` on the fork, since 3A cannot push to the sister repos.
-3. **Queue tabs for the new states.** Still only Open / Changes requested / Merged / Closed —
-   Approved, Published, Publish failed and Rejected have no tab, so those reviews are unreachable
-   from the queue.
-4. **Draft artifacts in the UI** — `app/pipeline/drafts.py` and `refresh_pipeline_checks` are
-   built and tested but have never run against real artifacts, because the fork cannot produce
-   them. That needs the org install.
-5. **Fork-per-submitter.** Right now the bot pushes the branch to the target repo, so the PR is
+2. **Approve / reject / publish detection**, unexercised against live GitHub. All of it is now
+   covered against the fake, end to end. On the fork expect `PUBLISH_FAILED`, since 3A cannot push
+   to the sister repos — which is now a first-class state with a tab and a way out.
+3. **Draft artifacts** still have not run against real ones: the fork cannot produce them, so the
+   panel that renders them has only been exercised against a stub. That needs the org install.
+4. **Fork-per-submitter.** Right now the bot pushes the branch to the target repo, so the PR is
    authored by the bot. Real submitters have no push access to the org repo.
-6. **Open the `sandbox-workflows/` pull request** once Marvin decides.
+5. **Open the `sandbox-workflows/` pull request** once Marvin decides — and send the workflow-1
+   script injection (§6.1 of `docs/sandbox-pipeline.md`) to the maintainers privately rather than
+   in that pull request.
+6. **Lock and reservation TTLs** still want tuning against real submitter behaviour.
 
 ## Gotchas that cost time
 

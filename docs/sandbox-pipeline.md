@@ -364,15 +364,15 @@ Eight defects, found by reading the YAML and probing the API. They are listed wo
 what this table does *not* claim: none of these is established as the cause of the one failed 3a
 run, whose logs are gone. Each is a defect that would break the workflow if reached.
 
-Corrected copies of **two** of the five workflows live in `sandbox-workflows/`:
-`3a_approved_pull_request.yml` and `pr_label_dispatcher.yml`, plus `labels.md` and a `README.md`
-explaining how to open the PR. Workflows 1, 2 and 3b have no corrected copy, so defect 1 below is
-written up but not yet fixed anywhere. These files are ours until someone upstream takes them, and
-this repo files no PRs against the wikipathways org without Marvin saying so.
+Corrected copies of **three** of the five workflows live in `sandbox-workflows/`:
+`1_on_pull_request.yml`, `3a_approved_pull_request.yml` and `pr_label_dispatcher.yml`, plus
+`labels.md` and a `README.md` explaining how to open the PR. Workflows 2 and 3b have no corrected
+copy. These files are ours until someone upstream takes them, and this repo files no PRs against
+the wikipathways org without Marvin saying so.
 
 | # | Where | What happens | Fixed |
 |---|---|---|---|
-| 1 | Workflow 1, `update-pr-desc` | Submitter-controlled GPML text is spliced into a `run:` shell script by `${{ }}` before bash parses it, in a `pull_request_target` job holding the base repo's token. Actions script injection; see 6.1 | No. Workflow 1 has no corrected copy here. This is the one to raise with the WikiPathways maintainers |
+| 1 | Workflow 1, `update-pr-desc` | Submitter-controlled GPML text is spliced into a `run:` shell script by `${{ }}` before bash parses it, in a `pull_request_target` job holding the base repo's token. Actions script injection; see 6.1 | **No, deliberately.** `sandbox-workflows/` now carries a corrected workflow 1, but it fixes only the three first-contributor defects; line 1108 still splices. Fixing it in a public pull request would advertise the hole before the maintainers have it. This one goes to them directly |
 | 2 | 3a, "Get WPID" | `WPID_NUM=$(echo $DRAFT_FILE \| sed -E 's/WP([0-9]+)__PR.*/\1/')` runs on the full path `_drafts/WP0__PR54.md`, so the substitution anchors mid-string and yields `_drafts/0`. The next line, `[ "$WPID_NUM" -eq "0" ]`, prints "integer expression expected" but **does not abort**: a failing command in an `if` condition is exempt from `set -e`, so control falls to the else branch and `$((_drafts/0))` follows. Running the exact snippet: a new pathway ends with `WPID=WP` and `old_prefix=WP_drafts/0__PR54`, an edit ends with `WPID=WP0`, and the script exits 0 either way. Silent mis-assignment, not a red step | Yes: `basename` first, then match on `^WP([0-9]+)__PR` |
 | 3 | 3a, twice | `echo "::set-output name=..."`. GitHub deprecated the command in 2022 and the runners warn on it. Whether the outputs on the 2025-09-03 run were actually empty cannot be checked, because that run's logs have expired | Yes: `>> "$GITHUB_OUTPUT"`, which removes the question |
 | 4 | 3a, the `sandbox-wp.gh.io` and `sandbox-wp-assets` checkouts and pushes | Both checkouts pass `token: ${{ secrets.GITHUB_TOKEN }}`, which is scoped to `sandbox-wp-db`. Both sister repos are public, so the **checkout still reads fine**; it is the **push** that has no write credential. 3b does the same cross-repo checkout with `ssh-key: ${{ secrets.ACTIONS_SANDBOX_DEPLOY_KEY }}` and can push | Partly: the `.gh.io` checkout switches to the deploy key, matching 3b. The assets repo needs its own credential (see below) |
