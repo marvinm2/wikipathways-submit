@@ -179,6 +179,12 @@ button { font: inherit; }
   color: var(--amber);
   border-bottom: 1px solid color-mix(in srgb, var(--amber) 35%, transparent);
 }
+/* .container carries the page's 2.2rem/4rem vertical padding, which inside a one-line banner
+   reads as a huge empty amber block. Reuse it for the horizontal gutter and alignment only. */
+.site-notice .container {
+  padding-top: 0;
+  padding-bottom: 0;
+}
 .site-notice p {
   margin: 0;
   padding: 0.7rem 0;
