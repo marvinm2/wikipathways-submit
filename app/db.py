@@ -22,6 +22,16 @@ def make_engine(url: str, **kwargs) -> Engine:
         # Allow the connection to be shared across threads in the test race harness;
         # each session still checks out its own connection from the pool.
         connect_args["check_same_thread"] = False
+    else:
+        # A pooled connection outlives the request that opened it, and on the Swarm overlay
+        # network an idle TCP session is dropped without either end being told. The pool then
+        # hands the dead socket to the next request — so the *first* request after any quiet
+        # period fails with "server closed the connection unexpectedly", which is exactly when
+        # a curator comes back to the dashboard. Pre-ping makes that a transparent reconnect.
+        # Recycle is the belt to its braces: retire connections before they get old enough to
+        # be dropped at all. setdefault, so a caller (or a test) can still override either.
+        kwargs.setdefault("pool_pre_ping", True)
+        kwargs.setdefault("pool_recycle", 1800)
     engine = create_engine(url, future=True, connect_args=connect_args, **kwargs)
 
     if url.startswith("sqlite"):
