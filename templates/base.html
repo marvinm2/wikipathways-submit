@@ -37,8 +37,8 @@
     </header>
 
     {# A deployment can point at a target that cannot publish, and until this existed nothing on
-       screen said so — a real contributor submitted real work to one and it went nowhere. Plain
-       text, so Jinja escapes it: the value comes from deploy config, but config is not markup. #}
+       screen said so. Plain text, so Jinja escapes it: the value comes from deploy config, but
+       config is not markup. #}
     {% if site_notice %}
     <aside class="site-notice" aria-label="Service notice">
       <div class="container">

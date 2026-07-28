@@ -118,11 +118,14 @@ class Settings(BaseSettings):
     # A standing notice shown at the top of every page. Empty → no banner at all.
     #
     # This exists because a deployment can be pointed at a target that cannot actually publish —
-    # a sandbox, a fork without the sister-repo credentials — and nothing on screen said so. A
-    # real contributor submitted a real pathway to exactly such a deployment and it went nowhere,
-    # silently, which is worse than the portal being down: they had no way to know. The submit
-    # page promises the database will publish the pathway, so wherever that promise does not
-    # hold, say it here.
+    # a sandbox, a fork without the sister-repo credentials — and nothing on screen said so. The
+    # submit page promises the database will publish the pathway and assign its WPID, so wherever
+    # that promise does not hold, say it here.
+    #
+    # The prompt was a submission arriving from an unfamiliar account on a deployment that could
+    # not publish it. That one turned out to be a colleague testing, so nobody actually lost work
+    # — but it was indistinguishable from the real thing from the inside, which is the point:
+    # by the time you can tell the difference, the silent failure has already happened.
     #
     # Deliberately free text rather than derived from publish_mode: "can this target publish"
     # depends on credentials held by other repositories, which this app cannot see.

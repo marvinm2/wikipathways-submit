@@ -156,11 +156,12 @@ sandbox, or a fork that lacks the sister-repo credentials the publish workflow p
 submit page tells people the database will publish their pathway and assign its WPID; where that
 is not true, this is the only thing that says so.
 
-This is not hypothetical. On 2026-07-28 a contributor submitted a real pathway through
+The prompt for it, on 2026-07-28: a pathway arrived from an unfamiliar account through
 `upload.wikipathways.org` while it pointed at a fork where neither the publish workflow nor the
-rejection workflow can close a pull request. Their work went nowhere, silently, and nothing on
-screen gave them a way to know. Deploying without this banner on such a target is how that
-happens again.
+rejection workflow can close a pull request. That one turned out to be a colleague testing, so
+nobody lost anything — but from inside the app it was indistinguishable from a real submission,
+and had it been real it would have gone nowhere with nothing on screen to say so. That is the
+case for the banner: by the time you can tell the two apart, the silent failure has happened.
 
 ```bash
 docker service update \

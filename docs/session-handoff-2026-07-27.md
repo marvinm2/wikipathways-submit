@@ -261,14 +261,19 @@ six PRs on the fork are OPEN regardless of being approved, rejected or published
 ### The portal has users who are not us
 
 PRs #5 and #6 arrived through `upload.wikipathways.org` mid-session with nobody in the session
-making them — #6 a real **PPAR signaling pathway from @MadhushriMSV**, 88 data nodes, 14
-references, which the app parsed, rendered and checklisted correctly.
+making them — #6 a **PPAR signaling pathway from @MadhushriMSV**, 88 data nodes, 14 references,
+which the app parsed, rendered and checklisted correctly.
 
-Two consequences, both load-bearing. The queue is **shared with real work**, so test submissions
-must be labelled as such and only ever approved or rejected against your own. And a real
-contributor submitted real work to a target that cannot publish it — which is why
-`WPSUBMIT_SITE_NOTICE` now exists (`docs/deployment.md`). **Set it on any deployment whose target
-cannot complete a publication.**
+**#6 was a colleague testing the portal**, confirmed by Marvin the same day, and has been closed.
+It was first read here as a contributor's real submission going into a dead end, which was a
+guess presented as a finding: a pathway from an unfamiliar account is not evidence of intent, and
+one question settled it. Nobody has lost work to this deployment.
+
+Two things survive that correction. The queue is **shared**, so test submissions want labelling
+as such and only ever approving or rejecting against your own. And from inside the app a test was
+indistinguishable from the real thing — which is the actual case for `WPSUBMIT_SITE_NOTICE`
+(`docs/deployment.md`): by the time you can tell them apart, a silent failure has already
+happened. **Set it on any deployment whose target cannot complete a publication.**
 
 ### Still open
 

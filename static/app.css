@@ -170,10 +170,10 @@ button { font: inherit; }
   padding: 0 1.5rem;   /* match .container so the brand lines up with page content */
 }
 /* Standing service notice, shown on every page when WPSUBMIT_SITE_NOTICE is set. It sits under
-   the header and above the content because it qualifies the promise the submit form makes —
-   "the database publishes it" is not true on every target this app can be pointed at, and a
-   contributor has already lost work to that silence. Not dismissible: it stays true all session,
-   and a notice you can close is one a submitter closes before reading. */
+   the header and above the content because it qualifies the promise the submit form makes:
+   "the database publishes it" is not true on every target this app can be pointed at. Not
+   dismissible, since it stays true all session, and a notice you can close is one a submitter
+   closes before reading. */
 .site-notice {
   background: var(--amber-tint);
   color: var(--amber);
