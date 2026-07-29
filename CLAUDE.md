@@ -73,10 +73,13 @@ repos.
   and `SessionMiddleware` `https_only` is config-driven. **Cluster deployment is authored** (issue
   #5, `Dockerfile` + `docker-entrypoint.sh` + `.github/workflows/{ci,docker-publish}.yml` +
   `docker-compose.yml` + `docs/deployment.md`; image builds/boots, not yet deployed live).
-  **#14 is the only issue still open** (clickable data nodes in the preview). Its plan is stale —
-  it is written around PinPath, which is retired, and around pipeline artifacts the app no longer
-  reads and the current target cannot produce; see the scoping comment on the issue. TTL tuning
-  still wants real submitter data, and no longer has an issue of its own.
+  **The before/after preview says what changed** (issue #24, `app/preview/diff.py`): every data
+  node is classified added / removed / re-annotated / relabelled / moved by matching GraphId,
+  then label plus type, then database plus identifier, cached as `diff.json` and served at
+  `GET /previews/{pr}/diff.json`. The card carries the count sentence server-rendered; the
+  overlay colours each hotspot and the panel strikes the previous value through. The overlay is
+  also **one tab stop, not one per node** (issue #19): a roving tabindex under a toolbar role,
+  arrow keys in reading order, selection following focus into a polite live region.
   Everything is verified against `FakeGitHubClient` (tests override `get_github_client`,
   `get_bot_client`/`get_bot_optional`, `get_current_user`); the OAuth + App token flows are
   tested via injected `httpx.MockTransport`.

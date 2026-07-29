@@ -72,13 +72,23 @@ trusted), #18 render cache freed at every terminal transition, #20 `robots.txt`.
 verified against production, not just tests — a 5 MB post returns 413, a normal pathway 200,
 `robots.txt` serves, and closing a pull request removed its cache directory from GlusterFS.
 
-**Open, not started:** #17 unpaginated queue, #19 every data node is a tab stop (an accessibility
-regression introduced by #14 — buttons are what make it keyboard-usable and also what add one tab
-stop per node), #21 no rate limiting, #22 fork-per-submitter, #23 TTL tuning, #24 visual diff on
-updates.
+**Open, not started:** #17 unpaginated queue, #21 no rate limiting, #22 fork-per-submitter,
+#23 TTL tuning.
 
-`#19` and `#24` are the two most worth doing next: one is a regression this session caused, the
-other is the last unsolved piece of the audit's problem #1.
+**Done later the same day:** #19 (the overlay is now one tab stop — roving tabindex under a
+toolbar role, arrow keys in reading order, selection following focus into a polite live region)
+and #24 (`app/preview/diff.py` classifies every data node added / removed / re-annotated /
+relabelled / moved; the card carries the count sentence, the overlay colours the hotspots, the
+panel strikes the previous value through). Both are verified by tests and by driving the real
+markup in a browser; **neither has been looked at on screen**, because the Chrome window was not
+visible on the desktop for the whole session — see the gotcha below. Worth an eyeball before
+deploying, particularly the five diff colours over an already-coloured diagram.
+
+Two things fell out of building them. Arrow keys could walk focus off the clipped edge of a
+zoomed viewport: it pans by transform and so carries no scroll offset for the browser's own
+scroll-into-view to write, and at 1.7x only 10 of 30 nodes were reachable. `initZoom` now exposes
+`__revealRect`. And `labelRow` assigned an element to `textContent`, which renders as the string
+`[object HTMLElement]`.
 
 ## A correction to the record
 
@@ -122,9 +132,20 @@ nothing (use coordinates). Added since:
 
 - **Find which node runs the task before reading logs.** An empty log on the wrong node is
   indistinguishable from an app that never got the request.
-- **Bump `?v=` on `app.css`/`app.js` in `base.html` with every frontend change.** It is at `v=14`.
+- **Bump `?v=` on `app.css`/`app.js` in `base.html` with every frontend change.** It is at `v=16`.
 - A `ResizeObserver` whose callback writes anything affecting the observed element's box is a
   loop, and it presents as an unresponsive page rather than an error.
+- **A Chrome tab at `document.visibilityState === 'hidden'` lies to you, and it looks exactly
+  like a broken page.** When the browser window is minimised or behind another window, that tab
+  stops compositing: `Page.captureScreenshot` times out after 30s reporting a frozen renderer,
+  `loading="lazy"` images never load (so the zoom measures a zero-width image and does nothing),
+  real key events are not delivered, programmatic `.focus()` sets `activeElement` without firing
+  a `focus` event, and — the worst one — **`getComputedStyle` returns stale values**, including
+  after an inline style write, so a CSS rule that is applying reads as though it is not. Check
+  `document.visibilityState` before believing any of it. `requestAnimationFrame` still runs at
+  60fps in that state, which is what rules out an actual freeze.
+- Setting `document.cookie` is refused outright in that browser profile, so a session cannot be
+  faked from the page. Fetch the authenticated HTML with `curl` and serve the snapshot instead.
 - The `.container` class carries the page's `2.2rem`/`4rem` vertical padding. Reusing it for a
   banner's gutter brings that with it.
 
