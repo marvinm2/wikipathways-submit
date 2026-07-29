@@ -295,13 +295,20 @@ jobs:
         env:
           WPID: ${{ steps.get_wpid.outputs.wpid }}
           WPID_NUM: ${{ steps.get_wpid.outputs.wpid_num }}
+          # FIX: the announcement hardcoded the sandbox's own hostname, so on any deployment
+          # that is not that host -- a fork, most obviously -- the one link a submitter is
+          # most likely to click led to a site where their pathway does not exist. Worse than
+          # a dead link: on the real sandbox that id belongs to somebody else's pathway.
+          # Override per deployment with a repository variable; the default keeps the
+          # original behaviour for the sandbox itself.
+          SITE_BASE_URL: ${{ vars.PATHWAY_SITE_BASE_URL || 'https://sandbox.wikipathways.org' }}
         run: |
           set -euo pipefail
           {
             printf '<!-- wikipathways-publish {"pr":%s,"wpid":%s,"status":"published"} -->\n' \
               "$PR_NUMBER" "$WPID_NUM"
-            printf 'Published as [%s](https://sandbox.wikipathways.org/pathways/%s).\n' \
-              "$WPID" "$WPID"
+            printf 'Published as [%s](%s/pathways/%s).\n' \
+              "$WPID" "${SITE_BASE_URL%/}" "$WPID"
           } > publish-comment.md
           gh pr comment "$PR_NUMBER" --body-file publish-comment.md --repo "$GITHUB_REPOSITORY"
 
