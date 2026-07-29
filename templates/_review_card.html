@@ -21,13 +21,22 @@
       <img class="zoom__img" src="{{ url }}" alt="{{ alt }}" draggable="false" loading="lazy">
       {# Filled by JS from <side>-nodes.json (issue #14). The drawing is an <img>, so its own
          markup is inert; clickability has to be laid over it. Empty and invisible without JS,
-         which leaves exactly the static image that shipped before. #}
-      <div class="zoom__hotspots" hidden></div>
+         which leaves exactly the static image that shipped before.
+
+         A toolbar because that is the ARIA pattern for a set of buttons sharing one tab stop:
+         the hotspots use a roving tabindex, so a hundred-node pathway costs the keyboard one
+         stop and not a hundred (issue #19). #}
+      <div class="zoom__hotspots" hidden role="toolbar"
+           aria-label="Data nodes. Use the arrow keys to move between them, Escape to close the properties.">
+      </div>
     </div>
   </div>
-  <div class="node-panel" hidden role="dialog" aria-label="Data node properties">
+  {# Not a dialog: focus stays on the node so the arrows keep working, and the properties are
+     announced where they change. That is what lets a screen-reader user read the diagram at all,
+     since the drawing itself is an inert image to them. #}
+  <div class="node-panel" hidden role="group" aria-label="Data node properties">
     <button type="button" class="node-panel__close" aria-label="Close">&times;</button>
-    <div class="node-panel__body"></div>
+    <div class="node-panel__body" aria-live="polite" aria-atomic="true"></div>
   </div>
   <div class="zoom__controls" role="group" aria-label="Zoom and pan">
     <button type="button" class="zoom__btn" data-zoom-out aria-label="Zoom out">&minus;</button>

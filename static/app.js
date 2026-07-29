@@ -728,6 +728,24 @@
       apply();
     });
 
+    // Pan whatever the caller names into view. The viewport clips at overflow:hidden and moves
+    // by transform, so it has no scroll offset for the browser's own scroll-into-view to write:
+    // focusing a hotspot outside the visible edge moves focus and shows nothing. Zoomed out
+    // there is nothing off-screen, so this is a no-op at scale 1.
+    root.__revealRect = function (rect) {
+      if (scale <= 1.001) return;
+      var v = viewport.getBoundingClientRect();
+      var pad = 8, dx = 0, dy = 0;
+      if (rect.left < v.left + pad) dx = (v.left + pad) - rect.left;
+      else if (rect.right > v.right - pad) dx = (v.right - pad) - rect.right;
+      if (rect.top < v.top + pad) dy = (v.top + pad) - rect.top;
+      else if (rect.bottom > v.bottom - pad) dy = (v.bottom - pad) - rect.bottom;
+      if (!dx && !dy) return;
+      tx += dx; ty += dy;
+      clampPan();
+      apply();
+    };
+
     var zin = root.querySelector('[data-zoom-in]'), zout = root.querySelector('[data-zoom-out]'), zr = root.querySelector('[data-zoom-reset]');
     if (zin) zin.addEventListener('click', function () { var c = center(); zoomAt(1.3, c[0], c[1]); });
     if (zout) zout.addEventListener('click', function () { var c = center(); zoomAt(1 / 1.3, c[0], c[1]); });
@@ -761,6 +779,10 @@
 
   function showNode(panel, node) {
     var body = panel.querySelector('.node-panel__body');
+    // Unhide before filling. The body is a polite live region, and a live region inside a
+    // hidden subtree announces nothing — populating first and revealing second would leave a
+    // screen-reader user arrowing through nodes in silence, which is the whole point of it.
+    panel.hidden = false;
     body.textContent = '';
     var h = document.createElement('p');
     h.className = 'node-panel__title';
@@ -782,7 +804,28 @@
     }
     if (node.comment) labelRow(dl, 'Comment', node.comment);
     body.appendChild(dl);
-    panel.hidden = false;
+  }
+
+  // Reading order for arrow-key navigation (issue #19). A plain sort on (top, left) is not it:
+  // a node sitting a hair higher than its neighbours comes before the entire rest of its row, so
+  // the cursor appears to jump around the diagram. Bucket into rows first, then order each row
+  // left to right. The row's limit is fixed by the node that opened it, so a staircase layout
+  // cannot greedily swallow the whole page into one row.
+  function readingOrder(nodes) {
+    var rows = [];
+    nodes.slice()
+      .sort(function (a, b) { return (a.top - b.top) || (a.left - b.left); })
+      .forEach(function (n) {
+        var row = rows[rows.length - 1];
+        if (row && n.top < row.limit) row.items.push(n);
+        else rows.push({ items: [n], limit: n.top + n.height / 2 });
+      });
+    var out = [];
+    rows.forEach(function (row) {
+      row.items.sort(function (a, b) { return a.left - b.left; });
+      out.push.apply(out, row.items);
+    });
+    return out;
   }
 
   function initHotspots(root) {
@@ -817,16 +860,58 @@
     root.__syncOverlay = syncLayer;
     if (img.complete && img.naturalWidth) syncLayer();
 
+    // Roving tabindex over the hotspots (issue #19). Buttons are what make the overlay usable
+    // without a mouse and also what put one tab stop per node in the middle of the page — the
+    // 88-node pathway that came through the portal is 88 stops before the checklist, 176 on an
+    // update card. Exactly one hotspot is in the tab order at a time; the arrow keys move
+    // between them. tabindex="-1" on all of them would have bought the same saving by deleting
+    // the keyboard path, and the properties panel is precisely what a screen-reader user needs,
+    // because they cannot read the diagram at all.
+    var order = [];
+    var current = 0;
+    // Set while focus is being handed back to a hotspot after the panel was dismissed. Selection
+    // follows focus, so without this the close button would put focus on the node it was
+    // describing and the focus handler would immediately reopen the panel it just closed.
+    var restoring = false;
+
+    function select(i, moveFocus) {
+      if (!order.length) return;
+      i = Math.max(0, Math.min(order.length - 1, i));
+      order[current].tabIndex = -1;
+      order[current].classList.remove('hotspot--active');
+      current = i;
+      var b = order[current];
+      b.tabIndex = 0;
+      b.classList.add('hotspot--active');
+      if (moveFocus) {
+        b.focus();
+        // initZoom runs over the same roots first, so this is set by now. Arrowing across a
+        // zoomed-in diagram otherwise walks focus off the clipped edge.
+        if (root.__revealRect) root.__revealRect(b.getBoundingClientRect());
+      }
+      if (!restoring) showNode(panel, b.__node);
+    }
+
+    function refocusCurrent() {
+      if (!order.length) return;
+      restoring = true;
+      order[current].focus();
+      restoring = false;
+    }
+
     fetch(src.replace(/\.svg$/, '-nodes.json'), { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (nodes) {
         // null = nothing on file (a placeholder side, or a cache predating this). Leave the
         // static image exactly as it was rather than showing an overlay we cannot trust.
         if (!nodes || !nodes.length) return;
-        nodes.forEach(function (node) {
+        readingOrder(nodes).forEach(function (node, i) {
           var b = document.createElement('button');
           b.type = 'button';
           b.className = 'hotspot';
+          b.__node = node;
+          // Only the first is reachable by Tab; the rest are reached with the arrow keys.
+          b.tabIndex = i === 0 ? 0 : -1;
           b.style.left = node.left + '%';
           b.style.top = node.top + '%';
           b.style.width = node.width + '%';
@@ -834,12 +919,13 @@
           b.setAttribute('aria-label', (node.label || 'Unlabelled node') + ' — show properties');
           b.addEventListener('click', function (e) {
             e.stopPropagation();
-            layer.querySelectorAll('.hotspot--active').forEach(function (o) {
-              o.classList.remove('hotspot--active');
-            });
-            b.classList.add('hotspot--active');
-            showNode(panel, node);
+            select(order.indexOf(b), false);
           });
+          // Selection follows focus, so arrowing across the diagram reads out each node in turn
+          // rather than requiring a second keystroke per node to open the panel. Safari does not
+          // focus a button on click, which is why the click handler selects on its own.
+          b.addEventListener('focus', function () { select(order.indexOf(b), false); });
+          order.push(b);
           layer.appendChild(b);
         });
         layer.hidden = false;
@@ -847,14 +933,43 @@
       })
       .catch(function () { /* overlay is an enhancement; the picture still works */ });
 
+    layer.addEventListener('keydown', function (e) {
+      if (!order.length) return;
+      var next;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = current + 1;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = current - 1;
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = order.length - 1;
+      else return;
+      e.preventDefault();
+      // The viewport handles these too — arrows pan the diagram and Home resets the zoom. Both
+      // would fire on the way up and yank the view out from under the node being read.
+      e.stopPropagation();
+      select(next, true);
+    });
+
     function close() {
       panel.hidden = true;
       layer.querySelectorAll('.hotspot--active').forEach(function (o) {
         o.classList.remove('hotspot--active');
       });
     }
-    panel.querySelector('.node-panel__close').addEventListener('click', close);
-    root.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+    panel.querySelector('.node-panel__close').addEventListener('click', function () {
+      // Focus is about to be destroyed along with the button's visibility; hand it back to the
+      // node the panel was describing rather than dropping it on <body> at the top of the page.
+      close();
+      refocusCurrent();
+    });
+    root.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape' || panel.hidden) return;
+      // Escape means "close the panel", not "leave the overlay": focus stays on the node so the
+      // arrow keys keep working from where the reader was.
+      e.stopPropagation();
+      close();
+      if (layer.contains(document.activeElement) || panel.contains(document.activeElement)) {
+        refocusCurrent();
+      }
+    });
   }
   document.querySelectorAll('[data-zoom]').forEach(initHotspots);
 

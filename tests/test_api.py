@@ -612,6 +612,27 @@ def test_dashboard_shows_the_render_after_changes_are_requested(tmp_path):
         assert b"No render on file" not in page.content
 
 
+def test_hotspot_overlay_is_one_tab_stop_and_announces_itself(tmp_path):
+    # Issue #19. The overlay puts a button on every data node, so a dense pathway inserted one
+    # tab stop per node between the diagram and the checklist. Two things keep it to one stop
+    # without deleting the keyboard path, and both are markup a later edit could quietly drop:
+    # the toolbar role (which is what the roving tabindex in app.js implements) and the polite
+    # live region that reads out each node's properties as the selection moves.
+    app, current = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        c.post("/api/submit", files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")})
+        _login(c, "curator")
+        page = c.get("/dashboard").text
+
+    assert 'class="zoom__hotspots" hidden role="toolbar"' in page
+    assert "Use the arrow keys to move between them" in page
+    assert 'class="node-panel__body" aria-live="polite" aria-atomic="true"' in page
+    # Not a dialog: focus stays on the node so the arrow keys keep working, which a dialog's
+    # focus trap would break.
+    assert 'class="node-panel" hidden role="dialog"' not in page
+
+
 def test_preview_missing_side_serves_placeholder(tmp_path):
     app, current = _authed_app(tmp_path, curators=["curator"])
     with TestClient(app) as c:
