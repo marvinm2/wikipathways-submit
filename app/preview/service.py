@@ -15,6 +15,7 @@ could not be drawn (so the queue can say so instead of spinning on "generating" 
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -123,6 +124,25 @@ class PreviewService:
         if (self._cache_dir / str(pr_number) / _FAILED_MARKER).is_file():
             return "failed"
         return "pending"
+
+    def discard(self, pr_number: int) -> bool:
+        """Delete a pull request's cached render (issue #18). True if there was one.
+
+        Called when a review reaches a terminal state: nothing renders it again, and the cache
+        lives on the GlusterFS volume shared with every other service on the cluster, so keeping
+        every pathway ever submitted is a slow leak into someone else's disk.
+
+        Best-effort like every other write here — a cache that will not delete must never be the
+        reason a curator cannot close a review.
+        """
+        target = self._cache_dir / str(pr_number)
+        if not target.is_dir():
+            return False
+        try:
+            shutil.rmtree(target)
+        except OSError:
+            return False
+        return True
 
     def nodes(self, pr_number: int, side: str) -> list[dict] | None:
         """Clickable data-node hotspots for one side (issue #14), or None when there are none on

@@ -115,6 +115,16 @@ class Settings(BaseSettings):
     # → the comment carries no link rather than a link to somebody's localhost.
     app_base_url: str = ""
 
+    # Largest upload accepted on any endpoint that takes a GPML file (issue #16). Every one of
+    # them reads the body into memory before parsing it, and both the metadata parse and the
+    # renderer walk the whole tree, so an unbounded upload is a way to take the process down —
+    # by accident as easily as on purpose, since posting the wrong file does it too.
+    #
+    # 4 MB is generous for the format: a real pathway is tens to low hundreds of KB, and the
+    # largest to come through the live portal so far (88 data nodes, 14 references) is well under
+    # a megabyte.
+    max_upload_bytes: int = 4 * 1024 * 1024
+
     # A standing notice shown at the top of every page. Empty → no banner at all.
     #
     # This exists because a deployment can be pointed at a target that cannot actually publish —

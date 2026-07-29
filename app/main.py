@@ -91,6 +91,34 @@ _PREVIEW_PLACEHOLDER = (
 )
 
 
+async def _read_upload(file: UploadFile, limit: int) -> bytes:
+    """Read an uploaded file, refusing anything over ``limit`` with a 413 (issue #16).
+
+    Reads in chunks and stops at the first one that crosses the limit, so an oversized body is
+    never fully held in memory. ``Content-Length`` is deliberately not trusted as the authority —
+    it is a claim by the client, absent under chunked encoding, and free to disagree with what
+    actually arrives; the running total is what refuses.
+    """
+    chunk_size = 64 * 1024
+    total = 0
+    parts: list[bytes] = []
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"That file is larger than the {limit // (1024 * 1024)} MB limit. "
+                    "A pathway this size is usually a sign the wrong file was chosen."
+                ),
+            )
+        parts.append(chunk)
+    return b"".join(parts)
+
+
 #: A real WikiPathways identifier: at least one digit, never a leading zero. Declaring the path
 #: parameter as ``int`` is not enough — FastAPI coerces "0001" to 1, so the placeholder this app
 #: commits for a not-yet-published pathway silently addresses WP1, an unrelated real pathway.
@@ -384,6 +412,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 seconds=settings.reconcile_min_interval_seconds
             ),
             drafts=st.drafts,
+            previews=st.preview,
         )
 
     def _fetch_base_gpml(github: GitHubClient, path: str) -> bytes | None:
@@ -536,6 +565,29 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             # is otherwise only visible several clicks into the Actions tab.
             "run_failed": conclusion not in (None, "success"),
         }
+
+    @app.get("/robots.txt", response_class=Response)
+    def robots() -> Response:
+        """Keep crawlers out of everything but the landing page (issue #20).
+
+        Not about the scanners already probing this host — they ignore it. It is that
+        ``/auth/login`` is a real redirect into GitHub's OAuth flow, so a crawler following it
+        mints authorization requests and the state entries that go with them, and that per-pull-
+        request URLs (review pages, preview SVGs) have no business in a search index.
+
+        Served from a route rather than ``static/`` so it does not depend on how that mount is
+        configured.
+        """
+        body = (
+            "User-agent: *\n"
+            "Disallow: /dashboard\n"
+            "Disallow: /previews\n"
+            "Disallow: /auth\n"
+            "Disallow: /api\n"
+            "Disallow: /webhooks\n"
+            "Allow: /$\n"
+        )
+        return Response(content=body, media_type="text/plain; charset=utf-8")
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
@@ -723,7 +775,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/validate", response_model=ValidateResponse)
     async def validate(file: UploadFile) -> ValidateResponse:
-        content = await file.read()
+        content = await _read_upload(file, settings.max_upload_bytes)
         try:
             meta = validate_gpml(content)
         except InvalidGpml as exc:
@@ -750,7 +802,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         github: GitHubClient = Depends(get_github_client),
         bot: GitHubClient | None = Depends(get_bot_optional),
     ) -> SubmitResponse:
-        content = await file.read()
+        content = await _read_upload(file, settings.max_upload_bytes)
         service = SubmissionService(
             request.app.state.allocator,
             _writer_client(settings, github, bot),
@@ -819,7 +871,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                     f"(#{existing.pr_number}); wait for it to finish before editing again."
                 ),
             )
-        content = await file.read()
+        content = await _read_upload(file, settings.max_upload_bytes)
         writer = _writer_client(settings, github, bot)
         service = UpdateService(
             request.app.state.locks,
@@ -894,7 +946,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         Keyed by pull request, not by WPID: in pipeline mode a new submission has no id until
         the target repo publishes it, so there is nothing to look it up by until then.
         """
-        content = await file.read()
+        content = await _read_upload(file, settings.max_upload_bytes)
         curation = _curation(request, bot)
         try:
             review = curation.get(pr_number)

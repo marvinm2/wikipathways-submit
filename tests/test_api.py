@@ -728,3 +728,43 @@ def test_site_notice_is_escaped(tmp_path):
         body = c.get("/").text
         assert "<script>alert(1)</script>" not in body
         assert "&lt;script&gt;" in body
+
+
+def test_oversized_upload_is_refused_with_413(tmp_path):
+    # Issue #16: every upload endpoint read the body into memory unbounded, so a large post — by
+    # accident as easily as on purpose — took the single-replica process with it.
+    settings = _settings(
+        database_url=f"sqlite:///{tmp_path / 'reg.db'}", max_upload_bytes=1024
+    )
+    with TestClient(build_app(settings)) as c:
+        big = b"<Pathway>" + b"x" * 4096
+        r = c.post(
+            "/api/validate", files={"file": ("big.gpml", io.BytesIO(big), "application/xml")}
+        )
+        assert r.status_code == 413
+        assert "larger than" in r.json()["detail"]
+
+
+def test_upload_at_the_limit_is_still_accepted(tmp_path):
+    # The boundary belongs to the caller: refusing at exactly the limit would make the documented
+    # number a lie.
+    settings = _settings(
+        database_url=f"sqlite:///{tmp_path / 'reg.db'}", max_upload_bytes=len(GOOD_GPML)
+    )
+    with TestClient(build_app(settings)) as c:
+        r = c.post(
+            "/api/validate",
+            files={"file": ("ok.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        )
+        assert r.status_code == 200
+
+
+def test_robots_txt_keeps_crawlers_off_the_oauth_and_preview_routes(client):
+    # Issue #20. /auth/login is a real redirect into GitHub's OAuth flow, so a crawler walking it
+    # mints authorization requests and the state entries behind them.
+    r = client.get("/robots.txt")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    body = r.text
+    for path in ("/auth", "/previews", "/dashboard", "/api"):
+        assert f"Disallow: {path}" in body

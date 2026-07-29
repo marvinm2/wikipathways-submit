@@ -34,7 +34,7 @@ def locks(session_factory):
 
 
 def _service(
-    session_factory, github=None, allocator=None, locks=None, app_base_url=""
+    session_factory, github=None, allocator=None, locks=None, app_base_url="", previews=None
 ) -> CurationService:
     return CurationService(
         session_factory,
@@ -44,6 +44,7 @@ def _service(
         allocator=allocator,
         locks=locks,
         app_base_url=app_base_url,
+        previews=previews,
     )
 
 
@@ -392,3 +393,38 @@ def test_approve_does_not_mutate_state_if_merge_fails(session_factory, allocator
     assert locks.is_locked(wpid)
     with session_factory() as s:
         assert s.get(WpidReservation, wpid).status == ReservationStatus.RESERVED
+
+
+class _RecordingPreviews:
+    """Stands in for PreviewService: records which PRs were freed."""
+
+    def __init__(self) -> None:
+        self.discarded: list[int] = []
+
+    def discard(self, pr_number: int) -> bool:
+        self.discarded.append(pr_number)
+        return True
+
+
+def test_rejecting_frees_the_cached_render(session_factory):
+    # Issue #18. Reject is the case worth pinning: it is the one terminal transition that does
+    # not post a mirror comment, so hanging the cleanup off the mirror would have leaked exactly
+    # the state a curator reaches most often.
+    gh = FakeGitHubClient()
+    previews = _RecordingPreviews()
+    svc = _service(session_factory, github=gh, previews=previews)
+    svc.register(pr_number=3, wpid=5637, submitter="bob", kind="new")
+    assert previews.discarded == []
+
+    svc.reject(3, "curator", note="not a pathway")
+    assert previews.discarded == [3]
+
+
+def test_a_service_without_a_preview_cache_still_works(session_factory):
+    # previews is optional; every test that does not care about renders should not have to
+    # build one, and a deployment without a cache must not fail its terminal transitions.
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    svc.register(pr_number=4, wpid=5638, submitter="bob", kind="new")
+    svc.reject(4, "curator", note="no")
+    assert svc.get(4).status.value == "rejected"

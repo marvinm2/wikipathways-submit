@@ -216,6 +216,7 @@ class CurationService:
         close_rejected_after_timeout: bool = True,
         reconcile_min_interval: timedelta = timedelta(seconds=30),
         drafts=None,
+        previews=None,
     ) -> None:
         self._session_factory = session_factory
         self._github = github
@@ -240,6 +241,10 @@ class CurationService:
         self._reconcile_min_interval = reconcile_min_interval
         # A DraftsReader, or None where the target repo publishes no draft artifacts.
         self._drafts = drafts
+        # Optional: the render cache, so a review reaching a terminal state can free its disk
+        # (issue #18). Optional because nothing else in this service needs it, and every test
+        # that does not care about previews should not have to build one.
+        self._previews = previews
 
     @property
     def is_pipeline_mode(self) -> bool:
@@ -247,6 +252,20 @@ class CurationService:
 
     def is_curator(self, user: str) -> bool:
         return self._curators.is_curator(user)
+
+    def _free_preview(self, pr_number: int) -> None:
+        """Drop the cached render once a review is terminal (issue #18).
+
+        Called explicitly at each terminal transition rather than folded into ``_maybe_mirror``:
+        the two only look interchangeable, and the reject path does not mirror, so hanging this
+        off that would have leaked exactly the case a curator hits most.
+        """
+        if self._previews is None:
+            return
+        try:
+            self._previews.discard(pr_number)
+        except Exception:  # noqa: BLE001 - freeing disk must never fail a curation action
+            pass
 
     def _maybe_mirror(self, review: Review) -> None:
         """Best-effort: sync the read-only PR mirror comment via the bot client.
@@ -686,6 +705,7 @@ class CurationService:
             review.decided_by = curator
             review.merged_at = utcnow()
             s.commit()
+            self._free_preview(review.pr_number)
             self._maybe_mirror(review)
             return review
 
@@ -766,6 +786,7 @@ class CurationService:
             review.decided_by = curator
             review.decision_note = note.strip() or None
             s.commit()
+            self._free_preview(review.pr_number)
 
         body = f"@{curator} rejected this submission."
         if note.strip():
@@ -843,6 +864,7 @@ class CurationService:
             review.published_at = utcnow()
             review.decision_note = f"WPID recorded by @{curator}"
             s.commit()
+            self._free_preview(review.pr_number)
             self._maybe_mirror(review)
         # Terminal, so whatever the submission was holding has to come free — an update holds
         # the lock on the pathway it edits, and nothing else will release it now.
@@ -966,6 +988,7 @@ class CurationService:
             if merged:
                 review.merged_at = utcnow()
             s.commit()
+            self._free_preview(review.pr_number)
             self._maybe_mirror(review)
             return review
 

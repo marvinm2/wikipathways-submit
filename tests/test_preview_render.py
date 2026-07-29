@@ -211,3 +211,27 @@ def test_render_gpml_still_returns_bytes():
     # The one-argument form is what every existing caller uses.
     out = render_gpml('<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="P"/>')
     assert isinstance(out, bytes) and out.startswith(b"<svg")
+
+
+def test_discard_frees_a_pull_requests_cache(tmp_path):
+    # Issue #18: nothing ever deleted a cached render, so the GlusterFS volume the whole cluster
+    # shares grew by one directory per submission, forever.
+    svc = PreviewService(cache_dir=tmp_path / "cache")
+    svc.render_local(11, 5637, after_gpml=_GPML.encode())
+    assert svc.status(11) == "ready"
+    assert svc.svg_path(11, "after") is not None
+
+    assert svc.discard(11) is True
+    assert svc.status(11) == "pending"
+    assert svc.svg_path(11, "after") is None
+    assert svc.nodes(11, "after") is None
+    # Idempotent: a second terminal transition, or a webhook redelivery, must not raise.
+    assert svc.discard(11) is False
+
+
+def test_discard_leaves_other_pull_requests_alone(tmp_path):
+    svc = PreviewService(cache_dir=tmp_path / "cache")
+    svc.render_local(11, 5637, after_gpml=_GPML.encode())
+    svc.render_local(12, 5638, after_gpml=_GPML.encode())
+    svc.discard(11)
+    assert svc.status(12) == "ready"
