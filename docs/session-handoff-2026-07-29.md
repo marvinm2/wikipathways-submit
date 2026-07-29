@@ -7,9 +7,20 @@ and what is true now.
 ## Deployed right now
 
 **https://upload.wikipathways.org**, image
-`ghcr.io/marvinm2/wikipathways-submit@sha256:906885e4d5264e7ce79bf97582c0476ddf5be3d3686f4615e289e860980d8d64`
-(built from `81a67a4`), running on **tgx1** — it moved from tgx2 during a deploy, which is the
-no-pinning arrangement working as intended.
+`ghcr.io/marvinm2/wikipathways-submit@sha256:cf6c425f906719fd1c85327a768f9220615d19e25ececda163df108d8f71b69a`
+(built from `c4a877e`), running on **tgx1** — it moved from tgx2 during an earlier deploy, which
+is the no-pinning arrangement working as intended.
+
+**The webhook is on** as of 2026-07-29 afternoon. `wpsubmit_webhook_secret` exists and is
+attached, and `POST /webhooks/github` answers **401** to an unsigned request rather than 503.
+Verified with genuine signed events (a `labeled` / `unlabeled` pair on a closed pull request,
+both 200) — but **no real `closed` delivery has happened yet**, because the only closed pull
+request predates the secret. The next real submission is the first proper test of that path.
+
+Reconcile has been quietly covering for the missing webhook all along: it runs on the queue and
+on a review page, so a stale row clears as soon as anyone looks. The webhook's value is
+promptness, not correctness — with nobody watching the dashboard, a closed pull request used to
+sit until its TTL.
 
 That move is worth knowing because it wasted time: `ssh tgx2 "docker logs $(docker ps -q -f
 name=wikipathways-submit.1)"` on the wrong node returns an empty log rather than an error, which
@@ -75,20 +86,7 @@ verified against production, not just tests — a 5 MB post returns 413, a norma
 **Open, not started:** #17 unpaginated queue, #21 no rate limiting, #22 fork-per-submitter,
 #23 TTL tuning.
 
-**Done later the same day:** #19 (the overlay is now one tab stop — roving tabindex under a
-toolbar role, arrow keys in reading order, selection following focus into a polite live region)
-and #24 (`app/preview/diff.py` classifies every data node added / removed / re-annotated /
-relabelled / moved; the card carries the count sentence, the overlay colours the hotspots, the
-panel strikes the previous value through). Both are verified by tests and by driving the real
-markup in a browser; **neither has been looked at on screen**, because the Chrome window was not
-visible on the desktop for the whole session — see the gotcha below. Worth an eyeball before
-deploying, particularly the five diff colours over an already-coloured diagram.
-
-Two things fell out of building them. Arrow keys could walk focus off the clipped edge of a
-zoomed viewport: it pans by transform and so carries no scroll offset for the browser's own
-scroll-into-view to write, and at 1.7x only 10 of 30 nodes were reachable. `initZoom` now exposes
-`__revealRect`. And `labelRow` assigned an element to `textContent`, which renders as the string
-`[object HTMLElement]`.
+#19, #24 and #25 were done later the same day — see the section below.
 
 ## A correction to the record
 
@@ -101,9 +99,44 @@ checked. The banner is still right, on the honest ground: from inside the app a 
 indistinguishable from the real thing, and by the time you can tell them apart the silent failure
 has already happened.
 
+## 2026-07-29, later — three more things shipped
+
+**#19, the overlay is one tab stop.** Roving tabindex under a toolbar role, arrow keys in reading
+order, selection following focus into a polite live region. Measured on the live 64-node WP100
+card: 64 hotspots per frame, 1 tab stop per frame — it was 128 stops between the diagram and
+Approve. Building it surfaced that arrow keys could walk focus off the clipped edge of a zoomed
+viewport (it pans by transform, so there is no scroll offset for the browser's own
+scroll-into-view to write); `initZoom` now exposes `__revealRect`.
+
+**#24, an update says what changed.** `app/preview/diff.py` classifies every data node added /
+removed / re-annotated / relabelled / moved, cached as `diff.json`. Two things the renderer had
+to start recording: `GraphId`, and the node centre **in user units** — the hotspot percentages
+are relative to each side's own board, so a submitter who changes `BoardWidth` moves every
+percentage without moving anything, and a movement test built on them would report the whole
+pathway as relocated. Proven on production against a real WP100 edit carrying one of each
+category.
+
+**#25, the submitter's note never reached GitHub.** Found by doing the above, not by a tool. The
+note went only into the pull request body, and a pipeline target's own workflow replaces that
+body with its template — silently, after the app's write succeeded. It now also goes in the
+mirror comment (blockquoted, every line, or a multi-line note escapes the quote) and onto the
+review row, because the other copy lives in the render cache that #18 deletes at every terminal
+transition. Migration `e5f1b2d3c4a6`.
+
+Closed late: #16 and #20 (shipped the previous session, never closed). #18 stays open — the
+terminal-transition pruning works, the orphan sweep does not exist, and directories `1`-`6` are
+still in the cache.
+
+**Suite is at 325.** An earlier note in this repo and in the KnowledgeBase said 331; that number
+was never measured and has been corrected.
+
 ## Still needing a person
 
-1. **The security disclosure is unsent.** `wikipathways/sandbox-wp-db` workflow 1 has an unfixed
+1. **The security disclosure is unsent, and now has a second finding.** Alongside workflow 1,
+   `pr_label_dispatcher.yml` interpolates `${{ github.event.label.name }}` straight into a shell
+   `case`. Much smaller surface — only someone with write access can apply a label — but the same
+   shape, and it belongs in the same disclosure rather than a separate one later. Marvin said on
+   2026-07-29 that he would send the email. `wikipathways/sandbox-wp-db` workflow 1 has an unfixed
    command injection. There is no private channel — private vulnerability reporting is
    **disabled** on that repo, there is no `SECURITY.md` in it, in `wikipathways-database`, or in
    the org `.github`, and the org publishes no contact address. So it goes by **email**, which
