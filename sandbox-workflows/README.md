@@ -12,7 +12,8 @@ target layout (`.github/workflows/...`) so the files can be copied across verbat
 The three files:
 
 - `.github/workflows/1_on_pull_request.yml` — the PR processor. Two one-line fixes on the
-  new-contributor path; see "Workflow 1: the first-contributor path" below.
+  new-contributor path, plus two on the data-node test; see "Workflow 1: the
+  first-contributor path" and "Workflow 1: the node test dies without saying so" below.
 - `.github/workflows/3a_approved_pull_request.yml` — the publish workflow. Renames the
   draft files produced by workflow 1 to their final WPID, pushes them to `sandbox-wp-db`,
   `sandbox-wp.gh.io` and `sandbox-wp-assets`, announces the WPID on the PR, and closes it.
@@ -55,6 +56,38 @@ cp authors/author_list.csv wikipathways.github.io/scripts/.  # fixed
 `authors` moves `scripts/author_list.csv` into `authors/` (line 487) and uploads that
 directory as the `authors` artifact, so on download the file is at `authors/author_list.csv`.
 The copy looked for it in the workspace root.
+
+## Workflow 1: the node test dies without saying so
+
+Also observed on a live run rather than read out of the YAML, and it hits far more people than
+the first-contributor path: the `testing` job's data-node step runs under `bash -e`, and two of
+its assignments end in a `grep`. An assignment takes its exit status from the command
+substitution, and grep exits 1 when it matches nothing, so the step aborts — with **no output at
+all**, not even a stderr line. The log shows the step's `##[endgroup]` and then
+`Process completed with exit code 1`.
+
+```bash
+matching_added_node=$(echo "$added_or_modified_nodes" | grep "GraphId=\"$graph_id\"")           # dies
+matching_added_node=$(echo "$added_or_modified_nodes" | grep "GraphId=\"$graph_id\"" || true)   # fixed
+
+actual_deleted_nodes=$(echo "$deleted_nodes" | grep -vF "$safe_modified_nodes")                 # dies
+actual_deleted_nodes=$(echo "$deleted_nodes" | grep -vF "$safe_modified_nodes" || true)         # fixed
+```
+
+The first fires on any edit that **deletes** a data node, which is precisely the case the test
+exists to detect. The second fires on any edit that only re-annotates, where the filter removes
+every line. `update-pr-desc` and `commit-outputs` both `needs: testing`, so the submitter loses
+their drafts and their PR-body report, and nothing anywhere says why.
+
+Observed on `marvinm2/sandbox-wp-db` run `30442228975` (an edit to WP100) and reproduced offline
+against that pull request's diff, where the loop dies on the fifth deleted node, `GraphId="a57"`.
+
+One thing deliberately **not** changed: the counts these variables feed are wrong for a separate
+reason. `modified_nodes` is accumulated as `"$modified_nodes\n$deleted_node"`, and neither bash's
+double quotes nor its `echo` turns that `\n` into a newline, so `grep -vF` is handed a single
+pattern line that matches nothing and every deleted node is counted as deleted. Nothing gates on
+those numbers — they render as coloured text in a report — so rewriting the logic in someone
+else's workflow would enlarge the pull request for no gain.
 
 ## What is known, and what is not
 
@@ -289,6 +322,14 @@ original behaves too; it is not introduced here.
 `ACTIONS_SANDBOX_DEPLOY_KEY` needs no such confirmation: `1_on_pull_request.yml` uses the
 same secret to push to `sandbox-wp.gh.io`, and the most recent such commit is 2026-07-15,
 so the key still has write access.
+
+**Both credentials now exist on the fork**, which is the closest thing to a rehearsal available
+without org access. `marvinm2/sandbox-wp.gh.io` and `marvinm2/sandbox-wp-assets` were forked on
+2026-07-29 and each carries its own write-enabled deploy key, under exactly the two secret names
+above. That is what turned run `30451444585` into the first all-green workflow 1 anywhere,
+`commit-outputs` included. The assets key is still unexercised — 3A has not been run since — but
+the shape an admin would have to reproduce upstream is now written down and demonstrated rather
+than proposed. See `docs/sandbox-pipeline.md` §7.
 
 ## How the claims here were checked
 

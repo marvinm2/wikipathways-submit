@@ -130,6 +130,57 @@ still in the cache.
 **Suite is at 325.** An earlier note in this repo and in the KnowledgeBase said 331; that number
 was never measured and has been corrected.
 
+## 2026-07-29, later still — the fork can now produce a draft page
+
+The target repo's own rendered output had never worked on the fork, and the reason was one
+missing credential rather than anything subtle. A fork inherits no Actions secrets, so
+`ACTIONS_SANDBOX_DEPLOY_KEY` was empty, `actions/checkout` fell back to `GITHUB_TOKEN`, and
+`commit-outputs` got a 403 pushing to `wikipathways/sandbox-wp.gh.io` on **every run the fork had
+ever had**. No draft was ever written — which is also why 3a died in nineteen seconds: its first
+step looks for a draft for the PR and there was none. Both halves of "approve and publish" were
+dead for that single reason.
+
+Fixed by giving the fork its own sister repos: `marvinm2/sandbox-wp.gh.io` and
+`marvinm2/sandbox-wp-assets`, each with a write-enabled deploy key whose private half is a secret
+on `marvinm2/sandbox-wp-db` (`ACTIONS_SANDBOX_DEPLOY_KEY`, `ACTIONS_SANDBOX_ASSETS_DEPLOY_KEY` —
+the second is the name the repaired 3a already expected). A deploy key is per-repository, which
+is why there are two. Every `repository:` in workflows 1, 3a and 3b now names a fork; 3a was
+replaced with the repaired copy from `sandbox-workflows/`.
+
+Pages is on for the site fork as a legacy branch build, and `_config.yml` gained
+`baseurl: "/sandbox-wp.gh.io"` — it is project pages now, not an apex domain, so without the
+subpath every generated link is wrong.
+
+The app was repointed with two env vars, which is the whole app-side change:
+
+```
+WPSUBMIT_DRAFTS_REPO=marvinm2/sandbox-wp.gh.io
+WPSUBMIT_DRAFTS_SITE_BASE_URL=https://marvinm2.github.io/sandbox-wp.gh.io
+```
+
+No code changed — `DraftsReader` and the card's "Draft page" link were already built for this and
+had simply never had an artifact to point at. Its disk cache is keyed on a hash of repo plus
+branch, so repointing does not serve the old target's cached misses.
+
+**Run `30451444585` is the first run of workflow 1 anywhere with all ten jobs green.** It wrote
+`_drafts/WP0__PR5.md`, both `_data/drafts/` TSVs and all nine `draft_assets/WP0__PR5/` files, and
+`https://marvinm2.github.io/sandbox-wp.gh.io/drafts/WP0__PR5` renders the pathway and its SVG.
+`DraftsReader` against the new repo returns `available=True` with resolving `draft_url`,
+`svg_url` and `thumb_url`.
+
+**A ninth pipeline defect, found on the way.** The `testing` job's data-node step runs under
+`bash -e` and two of its assignments end in a `grep`; grep exits 1 on no match, so the step died
+**with no output whatsoever** — the log goes straight from `##[endgroup]` to `exit code 1`. One
+fires on any edit that deletes a data node, the other on any edit that only re-annotates.
+`update-pr-desc` and `commit-outputs` both need that job, so the submitter lost their drafts *and*
+their report, silently. Reproduced offline against PR #8's diff (it dies on the fifth deleted
+node, `GraphId="a57"`) and fixed with `|| true` in both the fork and `sandbox-workflows/`. Full
+write-up in `docs/sandbox-pipeline.md` §6 defect 9 and §7.
+
+**Not proven:** 3a has still never published anything, on the fork or upstream. The assets deploy
+key is unexercised. That is the next thing to try, and it is now the only step of the lifecycle
+with no green run behind it.
+
 ## Still needing a person
 
 1. **The security disclosure is unsent, and now has a second finding.** Alongside workflow 1,

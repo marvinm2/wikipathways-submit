@@ -1,8 +1,11 @@
 # The sandbox-wp-db pipeline
 
-Read first-hand from the five workflow files and from the GitHub API on 2026-07-27. Section 7
+Read first-hand from the five workflow files and from the GitHub API on 2026-07-27. Section 8
 lists the commands, so the next person can re-check rather than trust this page. Where something
 could not be checked, this page says so instead of guessing at a cause.
+
+Sections 1-6 describe the **upstream** repo. Section 7 covers what is different on the fork the
+app actually points at, and is the one to read if you are wondering why a run went red.
 
 ## 1. What this is
 
@@ -380,6 +383,7 @@ the wikipathways org without Marvin saying so.
 | 6 | 3a, "Append Message to PR Description" | `gh pr edit --add-body` is not a real flag (`gh pr edit` has `--body`/`--body-file` and `--add-label`/`--add-reviewer`/`--add-assignee`/`--add-project`, no `--add-body`). The step would exit non-zero, and the "Close PR" step after it would not run. The three pushes happen before it, so a run failing here leaves a published pathway with an open PR and no record of its id. This step is **after** the pushes, and the one 3a run pushed nothing, so that run never reached it | Yes: the step is kept, rewritten to read the current body with `gh pr view --json body` and write the concatenation back with `--body`, and marked `continue-on-error` so it cannot block the close. A `gh pr comment` marker is added alongside it, because the body is overwritten by workflow 1 anyway |
 | 7 | `pr_label_dispatcher.yml` | No `permissions:` block. `gh workflow run` needs `actions: write`. The workflow succeeded twice in 2025 and failed four times; the one failure whose log survives (`26719401516`, 2026-05-31, an `accepted` label on PR #45) got `HTTP 403: Resource not accessible by integration`, and that PR is still open and still labelled `accepted` | Yes: explicit `permissions: actions: write, contents: read` |
 | 8 | `pr_label_dispatcher.yml`, the `resubmitted` case | It passes `-f pr_number=N`, but workflow 1's `workflow_dispatch` input is named `manual-pr-number`. GitHub rejects a dispatch carrying an unexpected input. Read from the two files; no surviving log shows such a call | Yes, and moot: the case is dropped, because pushing to the PR head already re-triggers workflow 1 via `synchronize` |
+| 9 | Workflow 1, the `testing` job's data-node step | The step runs under `bash -e`, and two of its assignments take their exit status from a command substitution that **ends in grep**: `matching_added_node=$(… \| grep "GraphId=\"$graph_id\"")` and `actual_deleted_nodes=$(… \| grep -vF "$safe_modified_nodes")`. grep exits 1 when it matches nothing, so the step dies **with no message at all** — no stderr, just `Process completed with exit code 1`. The first fires on any edit that genuinely deletes a data node (the exact case the test exists to detect); the second on any edit that only re-annotates. `update-pr-desc` and `commit-outputs` both `needs: testing`, so they are skipped and the submission loses its drafts *and* its PR-body report. Found on run `30442228975` and reproduced against PR #8's real diff, where it dies on the fifth deleted node, `GraphId="a57"` | Yes: `\|\| true` on both. Note the counts are still wrong for a separate reason — `modified_nodes` is accumulated with a **literal** `\n` (bash does not expand it inside double quotes, and `echo` does not either), so the filter matches nothing and every deleted node is counted as deleted. That only mis-states a report nothing gates on, so it is left alone rather than rewritten in someone else's workflow |
 
 Alongside the fixes, the corrected 3a gains four things the original does not have: a concurrency
 group so two approvals cannot both read the same `max(WP*)`, a guard that refuses to publish a
@@ -445,9 +449,69 @@ files are a mirror of files that also go to `sandbox-wp-db`, the SVG excepted, s
 loses less than aborting mid-publish. Once the secret exists, both steps start working with no
 further edit.
 
-## 7. How we checked
+## 7. Running the pipeline on a fork
 
-Everything above came from these, run on 2026-07-27 against the live repos.
+Everything above describes `wikipathways/sandbox-wp-db`. The app is pointed at
+**`marvinm2/sandbox-wp-db`**, and a fork does not inherit the parent's Actions secrets. Until
+2026-07-29 that was silently fatal to the whole downstream half.
+
+**The symptom.** `commit-outputs` failed on every run the fork had ever had. With
+`ACTIONS_SANDBOX_DEPLOY_KEY` empty, `actions/checkout` falls back to `GITHUB_TOKEN`, which is
+scoped to `sandbox-wp-db` and cannot write to the site repo:
+
+```
+remote: Permission to wikipathways/sandbox-wp.gh.io.git denied to github-actions[bot].
+fatal: unable to access '.../sandbox-wp.gh.io/': The requested URL returned error: 403
+```
+
+So no draft was ever written, which also explains 3a: its first step is
+`find _drafts -name "WP*__PR${PR_NUMBER}.md"`, that came back empty, and it exited 1. Both halves
+of "approve and publish" were dead for one reason, and it was not any of the eight defects above.
+
+Note the failure would have been *worse* if it had succeeded: a fork pushing into the upstream
+org's site repo would publish a personal test into the shared sandbox website.
+
+**The setup that fixes it**, all of it on Marvin's own account:
+
+| Piece | Value |
+|---|---|
+| Site repo | `marvinm2/sandbox-wp.gh.io`, forked 2026-07-29 |
+| Assets repo | `marvinm2/sandbox-wp-assets`, forked 2026-07-29 |
+| Deploy key on the site fork | write-enabled; private half is `ACTIONS_SANDBOX_DEPLOY_KEY` on `marvinm2/sandbox-wp-db` |
+| Deploy key on the assets fork | write-enabled; private half is `ACTIONS_SANDBOX_ASSETS_DEPLOY_KEY`, the name the repaired 3a already expected |
+| Pages | enabled on the site fork, legacy branch build from `main` |
+| `_config.yml` | `baseurl: "/sandbox-wp.gh.io"`, `url: "https://marvinm2.github.io"` — it is project pages now, not an apex domain, so every generated link needs the subpath |
+
+A deploy key is **per repository**; one key cannot serve both forks, which is why there are two.
+
+Every `repository:` in the fork's workflows 1, 3a and 3b now names the forks rather than the org
+(commit `6f49c7e0`). The fork also carries the repaired 3a from `sandbox-workflows/`, since that
+is the version the assets key was written for.
+
+**What the app needs to match**, or it reads drafts from a repo that no longer receives them:
+
+```
+WPSUBMIT_DRAFTS_REPO=marvinm2/sandbox-wp.gh.io
+WPSUBMIT_DRAFTS_SITE_BASE_URL=https://marvinm2.github.io/sandbox-wp.gh.io
+```
+
+`DraftsReader`'s disk cache is keyed on a hash of repo plus branch, so repointing does not serve
+the old target's cached misses; there is nothing to flush.
+
+**Proven, not inferred.** Run `30451444585` on 2026-07-29 is the first run of workflow 1
+**anywhere** with all ten jobs green, `commit-outputs` included. It wrote `_drafts/WP0__PR5.md`,
+both `_data/drafts/` TSVs and all nine `draft_assets/WP0__PR5/` files, and
+`https://marvinm2.github.io/sandbox-wp.gh.io/drafts/WP0__PR5` renders the pathway with its SVG.
+`DraftsReader` against that repo returns `available=True` with a resolving `draft_url`, `svg_url`
+and `thumb_url`.
+
+**Still unproven on the fork:** 3a has not been run since the repoint, so publication remains a
+design intention. The standing fact in section 6 is unchanged — nothing has ever been published
+by 3a, anywhere.
+
+## 8. How we checked
+
+Everything in sections 1-6 came from these, run on 2026-07-27 against the live repos.
 
 ```bash
 # The workflows themselves

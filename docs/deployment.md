@@ -127,6 +127,8 @@ docker service create \
   --secret wpsubmit_app_key \
   --mount type=bind,source=/mnt/gluster/docker/wikipathways-submit/data,target=/data \
   --env WPSUBMIT_CONTENT_REPO=wikipathways/sandbox-wp-db \
+  --env WPSUBMIT_DRAFTS_REPO=wikipathways/sandbox-wp.gh.io \
+  --env WPSUBMIT_DRAFTS_SITE_BASE_URL=https://sandbox.wikipathways.org \
   --env WPSUBMIT_PUBLISH_MODE=pipeline \
   --env WPSUBMIT_SUBMIT_IDENTITY=bot \
   --env WPSUBMIT_REQUIRE_PREVIEW_CHECK=false \
@@ -146,6 +148,15 @@ docker service create \
 `WPSUBMIT_REQUIRE_PREVIEW_CHECK=false` is not optional here. It defaults to true and gates on
 `pr-preview.yml`, which does not exist on `sandbox-wp-db` and never will — left on, every
 approval returns 409.
+
+**The two `WPSUBMIT_DRAFTS_*` values move with `WPSUBMIT_CONTENT_REPO`.** They are shown at their
+defaults above, so the command works as written; the point of spelling them out is that a
+deployment aimed at a *fork* of the content repo must repoint them at that fork's own site repo
+too. The target repo pushes its rendered drafts into a sister site repo, and the app reads them
+back from there — so leaving these at the org's site makes the dashboard's pipeline panel and
+"Draft page" link permanently and silently empty, because a missing draft is the ordinary case
+and the reader degrades quietly rather than erroring. Standing up the fork's side of this
+(sister-repo forks, deploy keys, Pages) is `docs/sandbox-pipeline.md` §7.
 
 ### `WPSUBMIT_SITE_NOTICE` — say so when the target cannot publish
 

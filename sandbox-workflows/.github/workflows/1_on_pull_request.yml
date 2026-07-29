@@ -912,8 +912,14 @@ jobs:
             if [ -n "$deleted_node" ]; then
               graph_id=$(echo "$deleted_node" | grep -o 'GraphId="[^"]*"' | sed 's/GraphId="//;s/"//')
               
-              # Check if the same GraphId exists in the added/modified nodes
-              matching_added_node=$(echo "$added_or_modified_nodes" | grep "GraphId=\"$graph_id\"")
+              # Check if the same GraphId exists in the added/modified nodes.
+              # The `|| true` is load-bearing: this step runs under `bash -e`, the assignment
+              # takes its exit status from the command substitution, and grep exits 1 when it
+              # matches nothing. A genuinely deleted node -- one whose GraphId is absent from
+              # the added lines, which is exactly what this test is looking for -- therefore
+              # killed the whole step with no message, taking update-pr-desc and commit-outputs
+              # down with it because both need this job.
+              matching_added_node=$(echo "$added_or_modified_nodes" | grep "GraphId=\"$graph_id\"" || true)
               
               if [ -n "$matching_added_node" ]; then
                 modified_nodes="$modified_nodes\n$deleted_node"
@@ -924,7 +930,10 @@ jobs:
           # Safely remove modified nodes from deleted nodes
           if [ -n "$modified_nodes" ]; then
             safe_modified_nodes=$(echo "$modified_nodes" | sed '/^$/d' | sed 's/[\/&]/\\&/g')
-            actual_deleted_nodes=$(echo "$deleted_nodes" | grep -vF "$safe_modified_nodes")
+            # `|| true` for the same reason as above: grep -v exits 1 when it filters
+            # everything out, which is the ordinary case for an edit that only re-annotates
+            # nodes and deletes none.
+            actual_deleted_nodes=$(echo "$deleted_nodes" | grep -vF "$safe_modified_nodes" || true)
           else
             actual_deleted_nodes="$deleted_nodes"
           fi

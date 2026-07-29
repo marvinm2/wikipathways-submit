@@ -216,9 +216,20 @@ here:
   per publish mode. It also owns `ACTIONABLE` (open / changes_requested), which gates both the
   controls and `CurationService`'s own refusals. Add a status there, not in the template.
 
-`docs/sandbox-pipeline.md` maps the target repo's five workflows and its known breakages.
-`sandbox-workflows/` holds repaired copies staged for a pull request to that repo — **not opened
-yet**, and not part of this app.
+- **The fork now produces the target repo's own rendered draft page.** A fork inherits no Actions
+  secrets, so `commit-outputs` had 403'd on every run the fork ever had and no draft was ever
+  written — which is also why 3a died instantly, since it looks for a draft first. The fix is
+  entirely account-side: `marvinm2/sandbox-wp.gh.io` and `marvinm2/sandbox-wp-assets` are forked,
+  each with its own write-enabled deploy key (`ACTIONS_SANDBOX_DEPLOY_KEY` /
+  `ACTIONS_SANDBOX_ASSETS_DEPLOY_KEY`), Pages is on with `baseurl: "/sandbox-wp.gh.io"`, and every
+  `repository:` in workflows 1/3a/3b names a fork. The app needed **no code change** — just
+  `WPSUBMIT_DRAFTS_REPO` and `WPSUBMIT_DRAFTS_SITE_BASE_URL`. Run `30451444585` is the first
+  all-ten-jobs-green run of workflow 1 anywhere. **3a has still never published anything.**
+
+`docs/sandbox-pipeline.md` maps the target repo's five workflows and its known breakages; §7 is
+the fork-specific setup and is the one to read when a run goes red. `sandbox-workflows/` holds
+repaired copies staged for a pull request to that repo — **not opened yet**, and not part of this
+app; the fork already runs them.
 
 ## Open decisions (still unresolved — scaffolding-plan §0, proposal §9)
 
