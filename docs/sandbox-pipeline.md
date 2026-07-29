@@ -391,10 +391,18 @@ newly allocated id over an existing `pathways/WP<new>/`, a check that the target
 non-empty before pushing, and the marker comment plus `published` / `publish failed` labelling,
 including an `if: failure()` counterpart that names the step that broke.
 
-**One standing fact, not a defect.** 3a has run exactly once, and it failed. There is no
-successful publication anywhere in this repo's history, so "what a published pathway looks like"
-is a design intention rather than an observed fact. No amount of YAML review substitutes for the
-first green run.
+**One standing fact, not a defect** — *superseded 2026-07-29, kept because it was true for a
+year and its lesson held.* Upstream, 3a has run exactly once and failed, and there is still no
+successful publication in `wikipathways/sandbox-wp-db`'s history. What changed is that the
+**repaired** 3a published successfully on the fork (§7), so "what a published pathway looks like"
+is now an observed fact rather than a design intention.
+
+The lesson stands, and the first green run collected on it immediately: the repaired 3a carried a
+tenth defect that no amount of YAML review had caught, because nothing had ever dispatched it.
+
+| # | Where | What happens | Fixed |
+|---|---|---|---|
+| 10 | The **repaired** 3a, `push_jekyll` | A `# FIX:` comment inside the `run:` block quoted the old commit message, and that quotation contained a GitHub expression. A `run:` block is a single string value: the runner substitutes expressions into its **text** before bash ever sees it, so a leading `#` protects nothing. The expression did not parse, and an unparseable expression fails the **whole workflow at startup** — `gh workflow run` returns `HTTP 422: failed to parse workflow: (Line: 224, Col: 14): Unexpected symbol: '...wpid'`, and the line it names is the `run:`, not the comment. GitHub also files a zero-job `failure` run named by *path* rather than by workflow name when the file lands, which is the only warning you get | Yes. Note this is the **same mechanism** as defect 1: `${{ }}` is text substitution, not shell expansion. That is worth internalising once rather than meeting twice |
 
 ### 6.1 Redacted: an unfixed security defect, reported privately
 
@@ -505,9 +513,41 @@ both `_data/drafts/` TSVs and all nine `draft_assets/WP0__PR5/` files, and
 `DraftsReader` against that repo returns `available=True` with a resolving `draft_url`, `svg_url`
 and `thumb_url`.
 
-**Still unproven on the fork:** 3a has not been run since the repoint, so publication remains a
-design intention. The standing fact in section 6 is unchanged — nothing has ever been published
-by 3a, anywhere.
+### 7.1 The first publication
+
+Run `30460071900`, 2026-07-29, **succeeded — every step green**. This is the first pathway ever
+published by 3a anywhere, and it closes the last unobserved step of the lifecycle.
+
+What it did, checked afterwards rather than assumed:
+
+| Claim | Observed |
+|---|---|
+| WPID assigned at publication time | `5423`, computed as `max(_pathways/WP<n>.md) + 1` over 1000 pages |
+| Three pushes, three repos | `pathways/WP5423/` in the db fork (9 files) and the assets fork (9, including the SVG), `_pathways/WP5423.md` in the site fork |
+| The assets deploy key works | `Commit and push changes to sandbox-wp-assets` green — the credential defect 4 describes is genuinely closed, not merely routed around |
+| Marker comment | `<!-- wikipathways-publish {"pr":5,"wpid":5423,"status":"published"} -->` |
+| Labels | `published` applied |
+| The PR closes, never merges | `state=CLOSED`, unmerged |
+| Drafts are moved, not copied | `_drafts/WP0__PR5.md` now 404s — the draft page is *meant* to disappear on publication |
+| The app follows | `GET /api/reviews/5` → `status: published`, `wpid: 5423`, read from the marker comment via the webhook rather than from its own write |
+
+The published page renders at `https://marvinm2.github.io/sandbox-wp.gh.io/pathways/WP5423`.
+
+One cosmetic wrongness on a fork: the marker comment's human-readable half hardcodes
+`https://sandbox.wikipathways.org/pathways/WP<id>`, so on the fork it links to the upstream site,
+where that pathway does not exist. The machine-readable half — the part the app parses — is
+correct, so nothing malfunctions.
+
+**What the approval did not exercise.** The `accepted` label was applied directly rather than
+through the dashboard, because PR #5's checklist legitimately fails (`datanodes_mapped`: IRS1
+carries no identifier) and the Approve button is correctly disabled. Applying the label is
+byte-for-byte what `approve` does, and the dashboard's approve path was already proven live on
+2026-07-28, so what remained untested was 3a — which is what this ran. A single end-to-end pass
+that starts at the Approve button still has not happened.
+
+Also confirmed in passing, from the 07-28 session: **GitHub emits no `labeled` event for a label
+already on the pull request.** The first dispatcher run failed, and re-firing it needed the label
+removed and re-added, not simply re-applied.
 
 ## 8. How we checked
 

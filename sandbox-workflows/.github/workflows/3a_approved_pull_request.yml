@@ -226,9 +226,15 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add .
-          # FIX: the commit message said "WP${{ ...wpid }}" but the output already carries
-          # the WP prefix, producing "WPWP1234". The `|| echo` matches 3B: a bare
+          # FIX: the commit message prefixed the step output with a literal WP, but the output
+          # already carries that prefix, producing "WPWP1234". The `|| echo` matches 3B: a bare
           # `git commit` exits 1 when there is nothing staged.
+          #
+          # Never write a GitHub expression -- dollar, two braces -- into a comment in here.
+          # A `run:` block is one string value, and the runner substitutes expressions into its
+          # *text* before bash sees any of it, so a leading `#` protects nothing. An expression
+          # that does not parse fails the entire workflow at startup, and the error points at
+          # the `run:` line rather than at the comment that caused it.
           git commit -m "Publish approved pathway ${WPID}" || echo "No changes to commit"
           # FIX: no rebase before pushing. Workflow 1 pushes drafts to this repository on
           # every processed pull request, so a concurrent commit is ordinary and would make

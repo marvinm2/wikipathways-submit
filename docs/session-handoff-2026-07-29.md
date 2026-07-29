@@ -177,9 +177,50 @@ their report, silently. Reproduced offline against PR #8's diff (it dies on the 
 node, `GraphId="a57"`) and fixed with `|| true` in both the fork and `sandbox-workflows/`. Full
 write-up in `docs/sandbox-pipeline.md` §6 defect 9 and §7.
 
-**Not proven:** 3a has still never published anything, on the fork or upstream. The assets deploy
-key is unexercised. That is the next thing to try, and it is now the only step of the lifecycle
-with no green run behind it.
+## 2026-07-29, last — a pathway was published, for the first time ever
+
+Run `30460071900`, every step green. **WP5423.** The last unobserved step of the lifecycle now has
+a green run behind it.
+
+- WPID assigned at publication (`max(_pathways/WP<n>.md) + 1` over 1000 pages), not before.
+- All three pushes landed — including **assets**, so the `ACTIONS_SANDBOX_ASSETS_DEPLOY_KEY`
+  arrangement works rather than merely being skipped by `continue-on-error`.
+- Marker comment `{"pr":5,"wpid":5423,"status":"published"}`, `published` label, PR closed
+  **unmerged**.
+- The drafts are *moved*, so `_drafts/WP0__PR5.md` now 404s. A draft page disappearing on
+  publication is correct, not a regression.
+- **The app followed on its own**: `GET /api/reviews/5` reads `status: published, wpid: 5423`,
+  taken from the marker comment via the webhook rather than from its own write. That path had
+  never seen a real published marker before.
+- The published page renders at `marvinm2.github.io/sandbox-wp.gh.io/pathways/WP5423`.
+
+**A tenth defect, and the run is the only reason it was found.** The repaired 3a would not start
+at all. A `# FIX:` comment inside a `run:` block quoted the old commit message, and the quotation
+contained a GitHub expression — but a `run:` block is one string value, and the runner substitutes
+expressions into its **text** before bash ever exists, so `#` protects nothing. An expression that
+does not parse fails the *whole workflow at startup*:
+
+```
+HTTP 422: failed to parse workflow: (Line: 224, Col: 14): Unexpected symbol: '...wpid'
+```
+
+The line it names is the `run:`, not the comment. The only other warning is a zero-job `failure`
+run named by **path** rather than workflow name, filed when the file lands — easy to read as
+noise. Same mechanism as the security defect in workflow 1: `${{ }}` is text substitution, not
+shell expansion.
+
+`tests/test_sandbox_workflows.py` now parses every staged workflow and rejects any `run:`-block
+expression that is not a plain reference. Verified by mutation, not by assumption — reintroducing
+the original `...wpid` makes it fail. **332 tests.**
+
+Also re-confirmed: **GitHub emits no `labeled` event for a label already present.** The first
+dispatch failed and re-firing needed the label removed and re-added.
+
+**What this did not exercise:** the label was applied directly, not through the dashboard, because
+PR #5's checklist legitimately fails (`datanodes_mapped` — IRS1 has no identifier) and Approve is
+correctly disabled. That is the same call the app makes, and the dashboard's approve path was
+proven on 2026-07-28 — but a single pass that *starts* at the Approve button still has not
+happened. That is the next thing worth doing, and it needs a logged-in curator.
 
 ## Still needing a person
 

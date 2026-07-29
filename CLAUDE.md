@@ -224,7 +224,19 @@ here:
   `ACTIONS_SANDBOX_ASSETS_DEPLOY_KEY`), Pages is on with `baseurl: "/sandbox-wp.gh.io"`, and every
   `repository:` in workflows 1/3a/3b names a fork. The app needed **no code change** — just
   `WPSUBMIT_DRAFTS_REPO` and `WPSUBMIT_DRAFTS_SITE_BASE_URL`. Run `30451444585` is the first
-  all-ten-jobs-green run of workflow 1 anywhere. **3a has still never published anything.**
+  all-ten-jobs-green run of workflow 1 anywhere.
+- **A pathway has been published — WP5423, run `30460071900`, every step green.** The first ever,
+  on the fork. All three pushes landed (assets included), the marker comment carried the WPID, the
+  pull request closed unmerged, and the app moved itself to `published` by reading that marker
+  over the webhook. The drafts are *moved* at publication, so a draft page 404ing afterwards is
+  correct. Approve was applied as a label directly rather than through the dashboard, because
+  PR #5's checklist legitimately fails — a pass that *starts* at the Approve button is still
+  outstanding.
+- **Never put a GitHub expression in a `run:`-block comment.** A `run:` block is one string value
+  and the runner substitutes into its *text* before bash exists, so `#` protects nothing; an
+  expression that does not parse fails the **whole workflow at startup**, naming the `run:` line
+  rather than the comment. It kept 3a from starting at all. `tests/test_sandbox_workflows.py`
+  parses every staged workflow and rejects this.
 
 `docs/sandbox-pipeline.md` maps the target repo's five workflows and its known breakages; §7 is
 the fork-specific setup and is the one to read when a run goes red. `sandbox-workflows/` holds

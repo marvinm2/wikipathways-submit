@@ -92,7 +92,18 @@ else's workflow would enlarge the pull request for no gain.
 ## What is known, and what is not
 
 Read this section as the reason for the changes, not as a diagnosis. Nothing has ever been
-published by 3A, and the evidence that would explain why is gone.
+published by the **original** 3A, and the evidence that would explain why is gone.
+
+> [!note] The repaired 3A has now published, 2026-07-29
+> Run `30460071900` on `marvinm2/sandbox-wp-db` succeeded with every step green: WPID `5423`
+> assigned, all three pushes landing (assets included, so the `ACTIONS_SANDBOX_ASSETS_DEPLOY_KEY`
+> arrangement works as designed), marker comment posted, `published` label applied, pull request
+> closed unmerged. So the changes below are no longer only reasoned-from-YAML — the whole workflow
+> has been observed end to end, on forks of all three repositories.
+>
+> It also collected a defect on the way, which is the strongest argument for having run it: see
+> "Do not put an expression in a run-block comment" below. Nothing had ever dispatched 3A, so a
+> file that fails to parse at startup looked exactly like a file that was fine.
 
 **Observed, from the API on 2026-07-27:**
 
@@ -115,6 +126,31 @@ very likely turn up something none of us saw by reading.
 The submission app depends on this pipeline. The app opens the PR and gives curators a
 dashboard, but publication and WPID assignment belong to the target repository. If 3A does
 not work, an approved submission never becomes a pathway.
+
+## Do not put an expression in a run-block comment
+
+Found by dispatching the repaired 3A for the first time. A `# FIX:` note inside a `run:` block
+quoted the commit message it was replacing, and that quotation contained a GitHub expression.
+
+A `run:` block is **one string value**. The runner substitutes expressions into its *text* before
+bash ever sees any of it, so a leading `#` protects nothing — it is a bash comment, and the
+substitution happens before bash exists. The expression did not parse, and an unparseable
+expression does not fail a step; it fails the **entire workflow at startup**:
+
+```
+could not create workflow dispatch event: HTTP 422: Invalid Argument -
+failed to parse workflow: (Line: 224, Col: 14): Unexpected symbol: '...wpid'
+```
+
+Line 224 is the `run:` line, not the comment eight lines below it, which is what makes this
+expensive to find. The only other warning is a zero-job `failure` run that GitHub files when the
+file lands, named by **path** rather than by workflow name — easy to mistake for noise.
+
+This is the same mechanism as the security defect in workflow 1: `${{ }}` is text substitution,
+not shell expansion. Worth internalising once rather than meeting twice.
+
+The three staged workflows are now checked with a parser that walks every `run:` block and
+rejects any expression that is not a plain reference, so this cannot recur silently.
 
 ## What changed in 3A
 
