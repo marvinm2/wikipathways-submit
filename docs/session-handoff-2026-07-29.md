@@ -222,6 +222,34 @@ correctly disabled. That is the same call the app makes, and the dashboard's app
 proven on 2026-07-28 — but a single pass that *starts* at the Approve button still has not
 happened. That is the next thing worth doing, and it needs a logged-in curator.
 
+## 2026-07-29, also — the card links to the finished page
+
+Under the diagram, one link to the target repository's own full pathway page: the draft while the
+submission is open, the published pathway once it is out. Exactly one is ever live, because
+publication **moves** the drafts rather than copying them.
+
+That move is also why `published_url` is built from the assigned id and **not** from
+`DraftArtifacts`. Deriving it from the artifacts looks natural and is exactly backwards: by the
+time it is the right link to show, every draft URL 404s and `available` is False, so a published
+review offered no link to the finished page at all — the one page a submitter most wants. Three
+tests pin it, including the no-WPID case, which would otherwise render `/pathways/WPNone`.
+
+The duplicate in the pipeline panel is dropped. Two identical links a screen apart read as two
+destinations.
+
+Also updated, because both had become false since publication started working:
+
+- **The site notice.** It said submissions "are not published to WikiPathways yet and no WPID is
+  assigned". Both untrue now. It says what actually happens, and that the sandbox is disposable.
+- **3a's publication announcement** hardcoded `sandbox.wikipathways.org`, so on a fork the one
+  link a submitter is most likely to click led where their pathway does not exist — and on the
+  real sandbox that id belongs to somebody else's pathway. Now a repository variable
+  (`PATHWAY_SITE_BASE_URL`), defaulting to the old value.
+
+**The update path published for the first time**: PR #4 kept **WP1001** rather than allocating a
+new id, and the app read `kind=update, wpid=1001, published` off the marker. Both halves of the
+lifecycle now have a green run.
+
 ## Still needing a person
 
 1. **The security disclosure is unsent, and now has a second finding.** Alongside workflow 1,
