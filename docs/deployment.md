@@ -197,11 +197,120 @@ docker service update \
 curl -sI https://upload.wikipathways.org/health
 ```
 
+## Turning the webhook on (issue #8)
+
+Everything in the app is already built for this: `docker-entrypoint.sh` loads
+`/run/secrets/wpsubmit_webhook_secret` into `WPSUBMIT_GITHUB_WEBHOOK_SECRET`, and
+`POST /webhooks/github` verifies HMAC-SHA256 over the raw body. **The only missing piece is the
+secret itself.** Until it exists the endpoint answers **503** and nothing is lost — but nothing
+is heard either, so a pull request closed outside the app sits in the queue until its TTL.
+
+Confirm the current state before and after:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://upload.wikipathways.org/webhooks/github
+# 503 = no secret configured.  401 = configured, and this unsigned request was correctly refused.
+```
+
+**401 is the success signal.** An unsigned `curl` *should* be rejected once the secret is set; a
+200 there would mean the signature check is not running.
+
+### 1. Generate the secret on the node
+
+This one differs from the other four: GitHub needs the same value, so unlike the session key or
+the Fernet key it cannot be write-only. Generate it once on tgx1, keep it on screen long enough
+to paste into GitHub in step 3, and do not save it anywhere else.
+
+```bash
+ssh tgx1
+SECRET=$(openssl rand -hex 32)
+printf '%s' "$SECRET" | docker secret create wpsubmit_webhook_secret -
+echo "$SECRET"          # paste this into the GitHub App in step 3
+docker secret ls | grep wpsubmit_webhook_secret
+```
+
+`printf '%s'` rather than `echo` matters. `echo` appends a newline, that newline becomes part of
+the stored secret, GitHub signs without it, and every delivery then fails the HMAC check with a
+401 that looks exactly like a wrong secret.
+
+If you lose the value before step 3, read it back from the running container once step 2 has
+attached it — or just delete the secret and start over, which is cheaper:
+
+```bash
+docker exec $(docker ps -q -f name=wikipathways-submit.1) cat /run/secrets/wpsubmit_webhook_secret; echo
+```
+
+### 2. Attach it to the service
+
+A Swarm secret cannot be added to a running service without recreating its task, so this is a
+short restart:
+
+```bash
+docker service update --secret-add wpsubmit_webhook_secret wikipathways-submit
+docker service ps wikipathways-submit -f desired-state=running --format '{{.Node}} {{.CurrentState}}'
+```
+
+### 3. Point the GitHub App at it
+
+This part cannot be scripted from here — it is in the App's own settings, under the account that
+owns it. GitHub → **Settings → Developer settings → GitHub Apps → wikipathways-submit-bot (dev)**
+(App ID `4403728`) → **General**:
+
+| Field | Value |
+|---|---|
+| Webhook — Active | ✔ |
+| Webhook URL | `https://upload.wikipathways.org/webhooks/github` |
+| Webhook secret | the string from step 1 |
+
+Then **Permissions & events → Subscribe to events → Pull requests** ✔.
+
+One subscription covers everything the handler uses: it acts on the `closed` action (release the
+lock, finalise the reservation, terminalise the review) and on `labeled` / `unlabeled`, which are
+how a curator applying the target repo's own labels on GitHub stays in step with the dashboard.
+
+### 4. Verify
+
+GitHub sends a `ping` on save. The app answers it, so the App's **Advanced → Recent Deliveries**
+tab is the fastest check — look for a `ping` with a green 200 and a `{"ok":true,"pong":true}`
+body. Then:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://upload.wikipathways.org/webhooks/github  # expect 401
+ssh tgx1 "docker service logs wikipathways-submit --since 10m 2>&1 | grep -i webhook"
+```
+
+The end-to-end proof is to close a pull request **on GitHub** and watch the review leave the open
+queue without anyone touching the dashboard. That is the whole point of the feature.
+
+### If deliveries fail
+
+- **401 on every delivery** — the secret differs. Most often the trailing newline above; otherwise
+  the value in GitHub was pasted from a different generation than the one in the secret.
+- **503** — the secret is not reaching the container. Check it is attached
+  (`docker service inspect wikipathways-submit --format '{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}'`)
+  and that the task actually restarted after step 2.
+- **Nothing arrives at all** — the App is installed on the repo but not subscribed to *Pull
+  requests*, or the webhook URL still points at a previous host.
+- Deliveries are **replayable** from the Recent Deliveries tab, and the handler is idempotent, so
+  redelivering to test costs nothing.
+
 ## Update
 
 ```bash
 docker service update --image ghcr.io/marvinm2/wikipathways-submit:latest wikipathways-submit
 ```
+
+That form is a **no-op** when the service spec holds a bare tag — Swarm compares the spec string,
+sees no change, and keeps the old task running while printing success. Deploy by digest:
+
+```bash
+DIG=$(ssh tgx1 "docker pull -q ghcr.io/marvinm2/wikipathways-submit:latest >/dev/null; \
+  docker image inspect ghcr.io/marvinm2/wikipathways-submit:latest --format '{{index .RepoDigests 0}}'")
+ssh tgx1 docker service update --image "$DIG" wikipathways-submit
+```
+
+Confirm by something version-specific the app serves — the `?v=` on `app.css`/`app.js`, or a new
+route in `/openapi.json` — not by the update command's output.
 
 ## Reminders
 
