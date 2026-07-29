@@ -182,8 +182,18 @@ jobs:
           MD_COUNT=0
           while IFS= read -r file; do
             new_file=$(basename "$file" | sed "s/${OLD_PREFIX}/${WPID}/")
-            cp "$file" "../sandbox-wp-db/pathways/${WPID}/${new_file}"
             mv "$file" "_pathways/${new_file}"
+            # FIX: renaming the file left its *contents* still calling the pathway by its
+            # draft slug. `wpid:` in the frontmatter is what the pathway layout builds the
+            # title, the diagram URL, all four download links, the data-node and bibliography
+            # links and the discussion links from -- so a published page announced itself as
+            # WP0__PR<n> and pointed every asset at a draft directory this step had just
+            # emptied. `redirect_from:` and the schema.org `@id` carried the slug too, so the
+            # published pathway claimed a canonical identifier that was never its own.
+            # Rewrite before the copy, so the content repo gets the corrected page rather
+            # than the draft one.
+            sed -i "s/${OLD_PREFIX}/${WPID}/g" "_pathways/${new_file}"
+            cp "_pathways/${new_file}" "../sandbox-wp-db/pathways/${WPID}/${new_file}"
             MD_COUNT=$((MD_COUNT + 1))
           done < <(find _drafts -type f -name "${OLD_PREFIX}.md")
 

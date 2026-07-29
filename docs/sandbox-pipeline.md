@@ -402,6 +402,7 @@ tenth defect that no amount of YAML review had caught, because nothing had ever 
 
 | # | Where | What happens | Fixed |
 |---|---|---|---|
+| 11 | 3a, "Rename and Move Files" (original **and** repaired) | The draft page is `mv`'d to `_pathways/WP<new>.md` and its **contents are never touched**, so the published page still calls the pathway by its draft slug. That is not cosmetic: `wpid:` in the frontmatter is what the pathway layout builds the title, the diagram URL, all four download links, the data-node and bibliography links and the discussion links from — so every asset on a published page pointed into a `draft_assets/` directory the same step had just emptied. `redirect_from:` and the schema.org `@id` carried the slug too, so the pathway advertised a canonical identifier that was never its own. Observed on WP5423, the first publication: 5 stale references | Yes: `sed -i "s/${OLD_PREFIX}/${WPID}/g"` on the moved page, **before** the copy to the content repo so that repo gets the corrected file rather than the draft one. This is the same class as the open question about the GPML's `Version` attribute below — 3a renames, it does not rewrite |
 | 10 | The **repaired** 3a, `push_jekyll` | A `# FIX:` comment inside the `run:` block quoted the old commit message, and that quotation contained a GitHub expression. A `run:` block is a single string value: the runner substitutes expressions into its **text** before bash ever sees it, so a leading `#` protects nothing. The expression did not parse, and an unparseable expression fails the **whole workflow at startup** — `gh workflow run` returns `HTTP 422: failed to parse workflow: (Line: 224, Col: 14): Unexpected symbol: '...wpid'`, and the line it names is the `run:`, not the comment. GitHub also files a zero-job `failure` run named by *path* rather than by workflow name when the file lands, which is the only warning you get | Yes. Note this is the **same mechanism** as defect 1: `${{ }}` is text substitution, not shell expansion. That is worth internalising once rather than meeting twice |
 
 ### 6.1 Redacted: an unfixed security defect, reported privately
@@ -548,6 +549,44 @@ that starts at the Approve button still has not happened.
 Also confirmed in passing, from the 07-28 session: **GitHub emits no `labeled` event for a label
 already on the pull request.** The first dispatcher run failed, and re-firing it needed the label
 removed and re-added, not simply re-applied.
+
+### 7.2 Making the site fork actually render
+
+The first published page looked half-built, and three unrelated causes stacked up. Worth
+separating, because only one of them is about the fork.
+
+**1. The site's own paths ignore `baseurl`.** Every `src`/`href` in `_layouts` and `_includes` was
+root-relative — 79 of them, with **zero** uses of `site.baseurl`. On project pages
+(`marvinm2.github.io/sandbox-wp.gh.io/…`) those resolve to the *user* root, so the stylesheet,
+Font Awesome, the logo, the favicons, the whole navigation and the pathway diagram all 404'd. Only
+one reference worked, because Jekyll's own `relative_url` filter had been used there.
+
+Fixed by prefixing them with `{{ site.baseurl }}`. **This does not have to be undone if the site
+ever gets its own domain** — `baseurl` is empty at a domain root, so the templates stay correct
+either way. That is why it was not worth waiting on a DNS request.
+
+**2. Collection permalinks carry no `baseurl` either, and a scan for a leading slash cannot see
+them.** `{{ pw.url }}`, `{{ org.url }}` and `{{ com.url }}` are Jekyll collection permalinks: the
+path comes from the collection at build time, not from the template, so the first pass missed all
+of them and the organism button still 404'd. Same for `{{ site.url }}/authors/…`, since `site.url`
+skips `baseurl` by construction. Fixed with `| relative_url` and `site.baseurl` respectively.
+
+**3. The published diagram was pinned to production.** `pathway-page.html` loaded it from
+`https://www.wikipathways.org/wikipathways-assets/…`, so a pathway published *anywhere else* shows
+a broken image by construction. This is not a fork problem — `sandbox.wikipathways.org` serves that
+path as a 404 too, so the upstream sandbox has it as well; it has just never had a published
+pathway to reveal it. The layouts now read `{{ site.assets_base_url }}`, set in `_config.yml`, and
+on the fork that points at `raw.githubusercontent.com/marvinm2/sandbox-wp-assets/main` (which
+serves SVG as `image/svg+xml`, so an `<img>` renders it).
+
+**Verified in a browser, not from the HTML.** The published page: zero broken images, 9 images
+loaded, 7 stylesheets applied, the diagram at its natural 800×600, title reading `WP5423`, and 27
+of 28 internal references resolving (the 28th is a commented-out `sejda.com` link). The draft page
+`WP100__PR8` likewise, with its 58-row data-node table.
+
+A caution on how the earlier claim in §7 was made: "renders the pathway with its SVG" was read off
+the presence of `<img>` references in the HTML, which is not the same as their resolving. They did
+not. Check `naturalWidth`, or look at the page.
 
 ## 8. How we checked
 
