@@ -698,6 +698,34 @@ def test_dashboard_shows_the_render_after_changes_are_requested(tmp_path):
         assert b"No render on file" not in page.content
 
 
+def test_the_submitter_note_reaches_github_in_the_mirror_comment(tmp_path):
+    # Issue #25, found on production. The note went only into the pull request body, and the
+    # target repo's own workflow replaced that body with its template — so a note reading, in
+    # capitals, "this is a test, do not publish" left no trace on GitHub. The mirror comment is
+    # the app's own and is updated in place, so it is the copy that survives.
+    app, current = _authed_app(tmp_path, curators=["curator"])
+    note = "Curated from Reactome; please check the HGNC identifiers."
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+            data={"description": note},
+        ).json()["pr_number"]
+
+        mirror = app.state._fake.comments[(app.state.settings.content_repo, pr)][
+            "<!-- wikipathways-submit:mirror -->"
+        ]
+        assert "What the submitter said about this change" in mirror
+        assert f"> {note}" in mirror
+
+        # And it is on the review row, not only in the render cache — so it is still there once
+        # the cache is pruned at a terminal transition.
+        _login(c, "curator")
+        assert c.get(f"/api/reviews/{pr}").json()["submitter_note"] == note
+        assert note in c.get(f"/dashboard/{pr}").text
+
+
 def test_hotspot_overlay_is_one_tab_stop_and_announces_itself(tmp_path):
     # Issue #19. The overlay puts a button on every data node, so a dense pathway inserted one
     # tab stop per node between the diagram and the checklist. Two things keep it to one stop

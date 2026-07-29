@@ -228,14 +228,22 @@
   </section>
   {% endif %}
 
-  {% if r.metadata %}
-  <div class="meta-panel">
-    {% if r.metadata.submitter_note %}
+  {# The note comes off the review row first and the render cache second. Both hold a copy, but
+     the cached one is deleted at every terminal transition (issue #18) and never exists for a
+     GPML the renderer refused — so a published or rejected submission would lose the only record
+     of why it was made. #}
+  {% set submitter_note = r.submitter_note or (r.metadata.submitter_note if r.metadata else None) %}
+  {% if submitter_note %}
+  <div class="meta-panel meta-panel--lead">
     <div class="meta-panel__block meta-panel__block--note">
       <h3>Submitter note</h3>
-      <p>{{ r.metadata.submitter_note }}</p>
+      <p>{{ submitter_note }}</p>
     </div>
-    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if r.metadata %}
+  <div class="meta-panel">
     {% if r.metadata.description %}
     <div class="meta-panel__block">
       <h3>Description</h3>

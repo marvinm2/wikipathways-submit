@@ -377,6 +377,92 @@ def test_mirror_comment_omits_the_render_link_without_a_public_url(session_facto
     assert "Before/after render:" not in body
 
 
+def test_mirror_comment_carries_the_submitter_note(session_factory):
+    # Issue #25. The note was written only into the pull request body, and a target repo that
+    # generates its own body overwrites it there — silently, after the app's write succeeded.
+    # The mirror comment is the app's own and is the one place on GitHub it survives.
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    svc.register(
+        pr_number=3,
+        wpid=5639,
+        submitter="bob",
+        kind="new",
+        submitter_note="Curated from Reactome. The HGNC ids need checking.",
+    )
+    body = gh.comments[(REPO, 3)]["<!-- wikipathways-submit:mirror -->"]
+    assert "What the submitter said about this change" in body
+    assert "> Curated from Reactome. The HGNC ids need checking." in body
+
+
+def test_a_multi_line_note_stays_inside_the_quote(session_factory):
+    # Only the first line is prefixed if the note is quoted naively, so the rest escapes the
+    # blockquote and reads as the bot's own words rather than the submitter's.
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    svc.register(
+        pr_number=3, wpid=5639, submitter="bob", kind="new",
+        submitter_note="First line.\n\nSecond line.",
+    )
+    body = gh.comments[(REPO, 3)]["<!-- wikipathways-submit:mirror -->"]
+    assert "> First line." in body
+    assert "> Second line." in body
+    # The blank line between them has to stay quoted too, or the quote ends at it.
+    assert "> First line.\n>\n> Second line." in body
+
+
+def test_mirror_comment_says_nothing_when_there_is_no_note(session_factory):
+    # The note is optional. An empty heading over an empty quote is worse than no heading.
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    svc.register(pr_number=3, wpid=5639, submitter="bob", kind="new", submitter_note="   ")
+    body = gh.comments[(REPO, 3)]["<!-- wikipathways-submit:mirror -->"]
+    assert "What the submitter said" not in body
+
+
+def test_a_blank_note_on_re_upload_keeps_the_previous_one(session_factory):
+    # Blank means "nothing further to add", not "delete what I said". Treating it as an erase
+    # would lose the explanation as soon as anyone re-uploaded without retyping it.
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    kw = dict(pr_number=3, wpid=5639, submitter="bob", kind="new")
+    svc.register(**kw, submitter_note="Why I did it.")
+    svc.register(**kw, submitter_note="")
+    assert svc.get(3).submitter_note == "Why I did it."
+    # A real new note does replace it — it describes the file that just landed.
+    svc.register(**kw, submitter_note="Fixed the ids.")
+    assert svc.get(3).submitter_note == "Fixed the ids."
+    assert "> Fixed the ids." in gh.comments[(REPO, 3)]["<!-- wikipathways-submit:mirror -->"]
+
+
+def test_revise_updates_the_note_and_the_mirror(session_factory):
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh)
+    svc.register(pr_number=3, wpid=5639, submitter="bob", kind="new", submitter_note="First go.")
+    svc.revise(3, submitter_note="Addressed the review.")
+    assert svc.get(3).submitter_note == "Addressed the review."
+    body = gh.comments[(REPO, 3)]["<!-- wikipathways-submit:mirror -->"]
+    assert "> Addressed the review." in body
+    assert "First go." not in body
+
+
+def test_the_note_outlives_the_render_cache(session_factory, tmp_path):
+    # The other copy lives beside the render, which is deleted at every terminal transition
+    # (issue #18) and never written at all for a GPML the renderer refuses. Rejecting a
+    # submission must not destroy the record of why it was made.
+    from app.preview import PreviewService
+
+    previews = PreviewService(cache_dir=tmp_path / "cache")
+    gh = FakeGitHubClient()
+    svc = _service(session_factory, github=gh, previews=previews)
+    svc.register(
+        pr_number=3, wpid=5639, submitter="bob", kind="new", submitter_note="Why I did it.",
+    )
+    svc.reject(3, "curator", note="not ready")
+    assert svc.get(3).status == ReviewStatus.REJECTED
+    assert svc.get(3).submitter_note == "Why I did it."
+
+
 def test_approve_does_not_mutate_state_if_merge_fails(session_factory, allocator, locks):
     gh = FakeGitHubClient(fail_on={"merge_pull_request"})
     svc = _service(session_factory, github=gh, allocator=allocator, locks=locks)

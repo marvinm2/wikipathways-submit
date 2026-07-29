@@ -963,6 +963,9 @@ main { flex: 1; }
 
 /* curation metadata panel */
 .meta-panel { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.4rem 0 1rem; }
+/* The submitter's own words, lifted out of the collapsible metadata block. It is the only part
+   of that panel written by a person, and it is what a curator reads first. */
+.meta-panel--lead { margin-bottom: 0.6rem; }
 .meta-panel__block { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 0.6rem 0.75rem; background: var(--surface-2); }
 .meta-panel__block--note { background: var(--moss-tint); border-color: transparent; }
 .meta-panel__block h4 { margin: 0 0 0.3rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); }

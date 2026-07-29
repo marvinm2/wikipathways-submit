@@ -85,6 +85,19 @@ def render_mirror_comment(review: Review, repo: str, *, base_url: str = "") -> s
         f"### Curation status for {review.wpid_str}",
         "",
         f"Written by the curation bot. {subject} from @{review.submitter}, **{where}**.{assigned}",
+    ]
+    # What the submitter said they changed, quoted so it is visibly theirs and not the bot's.
+    # This comment is the only place on GitHub it reliably survives: the app also writes it into
+    # the pull request body, and a target repo that generates its own body overwrites it there
+    # without anything failing (issue #25). Blockquote every line, or a multi-line note breaks
+    # out of the quote and reads as the bot talking.
+    if review.submitter_note:
+        quoted = "\n".join(
+            f"> {line}" if line.strip() else ">"
+            for line in review.submitter_note.strip().splitlines()
+        )
+        lines += ["", "**What the submitter said about this change:**", "", quoted]
+    lines += [
         "",
         "| Check | State | Notes |",
         "|---|---|---|",
@@ -299,6 +312,7 @@ class CurationService:
         metadata=None,
         before_metadata=None,
         head_branch: str | None = None,
+        submitter_note: str | None = None,
     ) -> Review:
         """Create the review row for a freshly opened submission PR (idempotent by PR number).
 
@@ -309,6 +323,10 @@ class CurationService:
         ``wpid`` is None for a new pathway in pipeline mode: the id does not exist until the
         target repo assigns one. ``head_branch`` is recorded because the branch name can then no
         longer be derived from the id, and a revise has to find it again.
+
+        ``submitter_note`` is what they said they changed. A blank one on a re-upload leaves the
+        stored note alone: the field is optional, so blank means "nothing further to add" rather
+        than "delete what I said last time".
         """
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
@@ -319,6 +337,7 @@ class CurationService:
                     submitter=submitter,
                     kind=kind,
                     head_branch=head_branch,
+                    submitter_note=(submitter_note or "").strip() or None,
                     checklist=build_checklist(
                         metadata=metadata,
                         before=before_metadata,
@@ -344,6 +363,10 @@ class CurationService:
                             pipeline_mode=self.is_pipeline_mode,
                         ),
                     )
+                if (submitter_note or "").strip():
+                    # The new note describes the file that just landed, so it replaces the old
+                    # one. Blank does not: see the docstring.
+                    review.submitter_note = submitter_note.strip()  # type: ignore[union-attr]
                 if review.status == ReviewStatus.CHANGES_REQUESTED:
                     # A re-upload after changes were requested puts it back in the queue.
                     review.status = ReviewStatus.OPEN
@@ -448,14 +471,18 @@ class CurationService:
                 .order_by(Review.updated_at.desc())
             ).scalars().first()
 
-    def revise(self, pr_number: int, metadata=None) -> Review:
+    def revise(self, pr_number: int, metadata=None, submitter_note: str | None = None) -> Review:
         """A revision landed on a review's PR: re-open it and rebuild the checklist from the new
         metadata, so the curator re-reviews the changed content from a fresh auto-derived baseline.
+
+        ``submitter_note`` follows the same rule as ``register``: a blank one keeps what is there.
         """
         with self._session_factory() as s:
             review = s.get(Review, pr_number)
             if review is None:
                 raise ReviewNotFound(f"no review for PR #{pr_number}")
+            if (submitter_note or "").strip():
+                review.submitter_note = submitter_note.strip()  # type: ignore[union-attr]
             review.status = ReviewStatus.OPEN
             review.checklist = build_checklist(
                 metadata=metadata, kind=review.kind, pipeline_mode=self.is_pipeline_mode

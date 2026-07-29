@@ -109,6 +109,13 @@ class Review(Base):
     #: The PR's head branch. In pipeline mode the branch name carries a timestamp, so it can no
     #: longer be derived from the WPID — a revise has to look it up here.
     head_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: What the submitter said they changed, and why — the checkbox selections and free text from
+    #: the submit form, joined. Stored on the review rather than read back from the render cache
+    #: (where ``PreviewService`` also keeps a copy) for two reasons: the cache is deleted at every
+    #: terminal transition by design, and a GPML the renderer refuses has no cache at all. It is
+    #: also written into the pull request body, but that cannot be relied on — a target repo whose
+    #: own workflow rewrites the body discards it silently (issue #25).
+    submitter_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     assigned_curator: Mapped[str | None] = mapped_column(String(255), nullable=True)
     checklist: Mapped[list] = mapped_column(JSON, default=default_checklist)
     approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -875,6 +875,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             kind="new",
             metadata=after_meta,  # pre-fills the checklist with auto-derived states
             head_branch=result.branch,
+            submitter_note=description,
         )
         _label_submission(settings, bot, result.pr_number, kind="new")
         _render_preview(
@@ -960,6 +961,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             metadata=after_meta,
             before_metadata=before_meta,
             head_branch=result.branch,
+            submitter_note=description,
         )
         _label_submission(settings, bot, result.pr_number, kind="update")
         _render_preview(
@@ -1040,7 +1042,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         # Re-open the review and rebuild its checklist from the revised content.
-        curation.revise(result.pr_number, metadata=parse_curation_metadata(content))
+        curation.revise(
+            result.pr_number,
+            metadata=parse_curation_metadata(content),
+            submitter_note=description,
+        )
         _render_preview(
             request,
             pr_number=result.pr_number,
@@ -1342,6 +1348,9 @@ class ReviewSummary(BaseModel):
 class ReviewDetail(ReviewSummary):
     checklist: list[dict]
     approved_by: str | None
+    #: What the submitter said they changed. Also cached beside the render, but that copy is
+    #: deleted at every terminal transition, so this is the one that outlives the review.
+    submitter_note: str | None = None
 
 
 def _summary(r) -> ReviewSummary:
@@ -1360,6 +1369,7 @@ def _detail(r) -> ReviewDetail:
         **_summary(r).model_dump(),
         checklist=r.checklist,
         approved_by=r.approved_by,
+        submitter_note=r.submitter_note,
     )
 
 
