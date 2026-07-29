@@ -568,6 +568,92 @@ def test_preview_nodes_route_serves_the_clickable_hotspots(tmp_path):
         assert c.get("/previews/999999/after-nodes.json").status_code == 404
 
 
+_DIFF_BEFORE = (
+    b'<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Mitophagy" '
+    b'Organism="Homo sapiens" Version="WP5636_r20260520113005">'
+    b'<Graphics BoardWidth="400" BoardHeight="300"/>'
+    b'<DataNode TextLabel="AKT1" Type="GeneProduct" GraphId="n1">'
+    b'<Graphics CenterX="100" CenterY="100" Width="80" Height="20"/>'
+    b'<Xref Database="Ensembl" ID="ENSG00000000000"/></DataNode>'
+    b'<DataNode TextLabel="Dropped" Type="GeneProduct" GraphId="n2">'
+    b'<Graphics CenterX="100" CenterY="200" Width="80" Height="20"/>'
+    b'<Xref Database="Ensembl" ID="ENSG00000111111"/></DataNode>'
+    b"</Pathway>"
+)
+_DIFF_AFTER = (
+    b'<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Mitophagy" '
+    b'Organism="Homo sapiens" Version="WP5636_r20260521113005">'
+    b'<Graphics BoardWidth="400" BoardHeight="300"/>'
+    b'<DataNode TextLabel="AKT1" Type="GeneProduct" GraphId="n1">'
+    b'<Graphics CenterX="100" CenterY="100" Width="80" Height="20"/>'
+    b'<Xref Database="Ensembl" ID="ENSG00000142208"/></DataNode>'
+    b'<DataNode TextLabel="Fresh" Type="GeneProduct" GraphId="n3">'
+    b'<Graphics CenterX="250" CenterY="200" Width="80" Height="20"/>'
+    b'<Xref Database="Ensembl" ID="ENSG00000222222"/></DataNode>'
+    b"</Pathway>"
+)
+
+
+def test_update_preview_says_what_changed(tmp_path):
+    # Issue #24. Two pictures side by side left the curator to spot the difference by eye; the
+    # counts and the per-node classification are what make an update legible rather than merely
+    # visible. AKT1 keeps its box and changes its identifier — the case a picture cannot show.
+    settings = _settings(database_url=f"sqlite:///{tmp_path / 'reg.db'}")
+    repo, branch = settings.content_repo, settings.default_branch
+    fake = FakeGitHubClient(
+        default_branches={f"{repo}#{branch}": "basesha"},
+        existing_files={f"{repo}#pathways/WP5636/WP5636.gpml": "oldsha"},
+        existing_contents={f"{repo}#pathways/WP5636/WP5636.gpml": _DIFF_BEFORE.decode()},
+    )
+    app, current = _authed_app(tmp_path, curators=["curator"], fake=fake)
+    with TestClient(app) as c:
+        current["user"] = "alice"
+        pr = c.post(
+            "/api/pathways/5636/update",
+            files={"file": ("rev.gpml", io.BytesIO(_DIFF_AFTER), "application/xml")},
+        ).json()["pr_number"]
+
+        d = c.get(f"/previews/{pr}/diff.json")
+        assert d.status_code == 200
+        body = d.json()
+        assert body["summary"]["reannotated"] == 1
+        assert body["summary"]["added"] == 1
+        assert body["summary"]["removed"] == 1
+
+        # The overlay colours hotspot i from entry i, so the two files must stay the same length.
+        for side in ("before", "after"):
+            nodes = c.get(f"/previews/{pr}/{side}-nodes.json").json()
+            assert len(body[side]) == len(nodes)
+
+        _login(c, "curator")
+        page = c.get(f"/dashboard/{pr}").text
+        # The sentence is server-rendered: it is what a curator reads before deciding whether to
+        # look at the pictures at all, so it cannot wait on a fetch.
+        assert "1 re-annotated" in page and "1 added" in page and "1 removed" in page
+
+
+def test_a_new_pathway_has_nothing_to_diff_against(tmp_path):
+    # One side, so there is no comparison to make and the card shows no summary at all — rather
+    # than a comparison against an empty "before" reporting every node as newly added.
+    app, current = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()["pr_number"]
+        assert c.get(f"/previews/{pr}/diff.json").status_code == 404
+        _login(c, "curator")
+        assert "diff-summary" not in c.get(f"/dashboard/{pr}").text
+
+
+def test_preview_diff_requires_a_known_review(tmp_path):
+    # Same rule as the SVG and hotspot routes: an unknown PR is not a way to probe the cache.
+    app, _ = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        assert c.get("/previews/4242/diff.json").status_code == 404
+
+
 def test_preview_nodes_route_requires_a_known_review(tmp_path):
     # Same rule as the SVG route: an unknown PR must not be a way to probe the cache directory.
     app, _ = _authed_app(tmp_path, curators=["curator"])

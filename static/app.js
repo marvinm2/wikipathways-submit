@@ -770,12 +770,26 @@
       a.rel = 'noopener noreferrer';
       a.textContent = value.text;
       dd.appendChild(a);
+    } else if (value instanceof Node) {
+      // Markup the caller built, e.g. the struck-through previous value. Assigning it to
+      // textContent instead renders the string "[object HTMLElement]", which it did.
+      dd.appendChild(value);
     } else {
       dd.textContent = value;
     }
     dl.appendChild(dt);
     dl.appendChild(dd);
   }
+
+  // How each diff classification reads on screen (issue #24). Unchanged is deliberately absent:
+  // saying so on every one of a hundred nodes buries the five that did change.
+  var CHANGE_WORD = {
+    added: 'added',
+    removed: 'removed',
+    reannotated: 're-annotated',
+    relabelled: 'relabelled',
+    moved: 'moved',
+  };
 
   function showNode(panel, node) {
     var body = panel.querySelector('.node-panel__body');
@@ -788,6 +802,13 @@
     h.className = 'node-panel__title';
     // A node with no TextLabel is legal GPML and reads as an empty panel otherwise.
     h.textContent = node.label || '(unlabelled node)';
+    if (CHANGE_WORD[node.__change]) {
+      var tag = document.createElement('span');
+      tag.className = 'node-panel__change node-panel__change--' + node.__change;
+      tag.textContent = CHANGE_WORD[node.__change];
+      h.appendChild(document.createTextNode(' '));
+      h.appendChild(tag);
+    }
     body.appendChild(h);
 
     var dl = document.createElement('dl');
@@ -803,7 +824,23 @@
       labelRow(dl, 'Identifier', 'Not annotated');
     }
     if (node.comment) labelRow(dl, 'Comment', node.comment);
+    // What this node used to say, struck through beside what it says now (issue #24). A
+    // re-annotation is invisible in the drawing — the box is identical and only the Xref behind
+    // it moved — so the panel is the only place it can be read at all.
+    if (node.__was) {
+      var wasXref = (node.__was.database || node.__was.identifier)
+        ? ((node.__was.database ? node.__was.database + ':' : '') + (node.__was.identifier || ''))
+        : 'not annotated';
+      if (node.__change === 'relabelled') labelRow(dl, 'Was', strike(node.__was.label || '(unlabelled)'));
+      else labelRow(dl, 'Was', strike(wasXref));
+    }
     body.appendChild(dl);
+  }
+
+  function strike(text) {
+    var s = document.createElement('s');
+    s.textContent = text;
+    return s;
   }
 
   // Reading order for arrow-key navigation (issue #19). A plain sort on (top, left) is not it:
@@ -899,16 +936,38 @@
       restoring = false;
     }
 
-    fetch(src.replace(/\.svg$/, '-nodes.json'), { credentials: 'same-origin' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (nodes) {
+    // Which frame this is, and where its diff lives. /previews/<pr>/after.svg -> "after" and
+    // /previews/<pr>/diff.json. Both derived from the src so the preview contract and every
+    // call site stay untouched.
+    var side = (src.match(/\/(before|after)\.svg$/) || [])[1];
+    var diffUrl = src.replace(/\/(before|after)\.svg$/, '/diff.json');
+
+    Promise.all([
+      fetch(src.replace(/\.svg$/, '-nodes.json'), { credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : null; }),
+      // 404 is the normal answer for a new pathway: one side, nothing to compare against. The
+      // overlay must not wait on it failing, hence one Promise.all rather than a chain.
+      side ? fetch(diffUrl, { credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; }) : Promise.resolve(null),
+    ])
+      .then(function (both) {
+        var nodes = both[0], diff = both[1];
         // null = nothing on file (a placeholder side, or a cache predating this). Leave the
         // static image exactly as it was rather than showing an overlay we cannot trust.
         if (!nodes || !nodes.length) return;
+        // The diff is index-aligned with this exact file, so a length mismatch means the two
+        // were written by different renders and every colour would be on the wrong box. Drop
+        // the whole comparison rather than show one that is quietly a node out.
+        var marks = diff && diff[side] && diff[side].length === nodes.length ? diff[side] : null;
+        if (marks) {
+          nodes.forEach(function (n, i) { n.__change = marks[i].change; n.__was = marks[i].was; });
+          root.classList.add('zoom--diffed');
+        }
         readingOrder(nodes).forEach(function (node, i) {
           var b = document.createElement('button');
           b.type = 'button';
-          b.className = 'hotspot';
+          b.className = 'hotspot' + (node.__change ? ' hotspot--' + node.__change : '');
           b.__node = node;
           // Only the first is reachable by Tab; the rest are reached with the arrow keys.
           b.tabIndex = i === 0 ? 0 : -1;
@@ -916,7 +975,11 @@
           b.style.top = node.top + '%';
           b.style.width = node.width + '%';
           b.style.height = node.height + '%';
-          b.setAttribute('aria-label', (node.label || 'Unlabelled node') + ' — show properties');
+          // The colour is the whole point of the diff and is exactly what a screen-reader user
+          // cannot see, so the classification goes in the name as well.
+          b.setAttribute('aria-label', (node.label || 'Unlabelled node')
+            + (CHANGE_WORD[node.__change] ? ', ' + CHANGE_WORD[node.__change] : '')
+            + ' — show properties');
           b.addEventListener('click', function (e) {
             e.stopPropagation();
             select(order.indexOf(b), false);
@@ -972,6 +1035,16 @@
     });
   }
   document.querySelectorAll('[data-zoom]').forEach(initHotspots);
+
+  // A node that only moved is the category the issue itself calls noise, and after a re-layout
+  // it can be every node on the diagram. The hotspot stays clickable either way; only its
+  // colour goes, so hiding the noise never hides the node behind it (issue #24).
+  document.addEventListener('change', function (e) {
+    var box = e.target.closest('.diff-hide-moved');
+    if (!box) return;
+    var card = box.closest('.review-card');
+    if (card) card.classList.toggle('review-card--hide-moved', !box.checked);
+  });
 
   document.addEventListener('change', function (e) {
     var select = e.target.closest('.assign__select');

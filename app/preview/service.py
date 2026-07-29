@@ -19,6 +19,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.preview.diff import diff_nodes
 from app.preview.metadata import parse_curation_metadata
 from app.preview.render import RenderError, render_gpml_with_nodes
 
@@ -57,6 +58,7 @@ class PreviewService:
         out = self._cache_dir / str(pr_number)
         out.mkdir(parents=True, exist_ok=True)
         rendered: dict[str, bool] = {"before": False, "after": False}
+        drawn_nodes: dict[str, list[dict]] = {}
         for side, gpml in (("before", before_gpml), ("after", after_gpml)):
             if gpml is None:
                 continue
@@ -64,16 +66,18 @@ class PreviewService:
                 svg, hotspots = render_gpml_with_nodes(gpml)
             except RenderError:
                 continue
+            drawn_nodes[side] = [h.as_dict() for h in hotspots]
             (out / f"{side}.svg").write_bytes(svg)
             # The clickable-node overlay (issue #14). Written beside the drawing it belongs to,
             # so a side that failed to render has no stale hotspots left pointing at nothing.
             try:
                 (out / f"{side}-nodes.json").write_text(
-                    json.dumps([h.as_dict() for h in hotspots]), encoding="utf-8"
+                    json.dumps(drawn_nodes[side]), encoding="utf-8"
                 )
             except OSError:
                 pass  # the overlay is an enhancement; never fail a render on it
             rendered[side] = True
+        self._write_diff(out, drawn_nodes)
         self._write_metadata(out, after_gpml, submitter_note)
         drawn = rendered["before"] or rendered["after"]
         # Record the outcome so a re-upload that now renders clears a previous failure, and a
@@ -92,6 +96,37 @@ class PreviewService:
     def _local_side_exists(self, pr_number: int) -> bool:
         d = self._cache_dir / str(pr_number)
         return any((d / f"{s}.svg").is_file() for s in _SIDES)
+
+    # -- before/after diff sidecar (issue #24) ---------------------------------------------
+    @staticmethod
+    def _write_diff(out: Path, drawn: dict[str, list[dict]]) -> None:
+        """Cache what changed between the two sides, or clear a stale one (best-effort).
+
+        Only an update has two sides. A new pathway has nothing to compare against, and a
+        re-upload that drops a side must not leave the previous comparison on disk claiming to
+        describe the render beside it.
+        """
+        path = out / "diff.json"
+        if "before" not in drawn or "after" not in drawn:
+            path.unlink(missing_ok=True)
+            return
+        try:
+            data = diff_nodes(drawn["before"], drawn["after"]).as_dict()
+            path.write_text(json.dumps(data), encoding="utf-8")
+        except OSError:
+            pass  # the summary is an enhancement; never fail a render on it
+
+    def diff(self, pr_number: int) -> dict | None:
+        """What changed between the two sides (issue #24), or None — a new pathway, a side that
+        would not render, or a cache written before this existed."""
+        path = self._cache_dir / str(pr_number) / "diff.json"
+        if not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
 
     # -- curation metadata sidecar (dashboard panel) --------------------------------------
     @staticmethod

@@ -63,6 +63,18 @@ class NodeHotspot:
     identifier: str
     url: str | None
     comment: str
+    # Identity and position for the before/after diff (issue #24), not for the overlay.
+    #
+    # ``graph_id`` is GPML's own per-element id. PathVisio preserves it across an edit, which
+    # makes it the one reliable way to say "this is the same node"; it is absent or rewritten
+    # often enough that the diff cannot rely on it alone.
+    #
+    # ``cx``/``cy`` are the centre in *user units*, deliberately not the percentages above: a
+    # submitter who changes BoardWidth moves every percentage without moving anything on the
+    # diagram, so a diff computed from them would report the whole pathway as relocated.
+    graph_id: str = ""
+    cx: float | None = None
+    cy: float | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -180,6 +192,9 @@ def render_gpml_with_nodes(gpml: bytes | str) -> tuple[bytes, list[NodeHotspot]]
                             "identifier": identifier.strip(),
                             "url": resolver_url(database, identifier),
                             "comment": comment,
+                            "graph_id": (el.get("GraphId") or "").strip(),
+                            "cx": x + w / 2,
+                            "cy": y + h / 2,
                         },
                     )
                 )

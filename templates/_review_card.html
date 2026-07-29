@@ -139,6 +139,36 @@
   </p>
   {% endif %}
 
+  {# What changed, before the pictures (issue #24). Two renders side by side made the change
+     visible and left spotting it to the eye, across two images that can be a hundred nodes each.
+     Only an update has a "before" to compare against. #}
+  {% if r.kind == 'update' and r.preview and r.preview.diff %}
+  <div class="diff-summary{% if not r.preview.diff.changed %} diff-summary--quiet{% endif %}"
+       data-diff-pr="{{ r.pr_number }}">
+    <p class="diff-summary__line"><strong>Data nodes:</strong> {{ r.preview.diff.sentence }}</p>
+    {% if r.preview.diff.changed %}
+    <ul class="diff-legend">
+      {% for key, word in [('added', 'added'), ('removed', 'removed'), ('reannotated', 're-annotated'), ('relabelled', 'relabelled'), ('moved', 'moved')] %}
+        {% if r.preview.diff.counts.get(key) %}
+        <li class="diff-legend__item diff-legend__item--{{ key }}">
+          <span class="diff-legend__swatch" aria-hidden="true"></span>{{ r.preview.diff.counts[key] }} {{ word }}
+        </li>
+        {% endif %}
+      {% endfor %}
+    </ul>
+    {# A node that only moved is the one category the issue calls noise, and it is the one most
+       likely to swamp the others after a re-layout. Off by default only when it would drown
+       them out is guesswork, so it ships on with a switch. #}
+    {% if r.preview.diff.counts.get('moved') %}
+    <label class="diff-summary__toggle">
+      <input type="checkbox" class="diff-hide-moved" checked>
+      <span>Show nodes that only moved</span>
+    </label>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+
   <div class="preview">
     {% set preview_status = r.preview.status if r.preview else 'pending' %}
     {% if r.kind == 'update' %}

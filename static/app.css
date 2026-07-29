@@ -809,6 +809,92 @@ main { flex: 1; }
 }
 .zoom--interactive .zoom__viewport { cursor: default; }
 
+/* ---------- before/after diff (issue #24) ---------- */
+/* The colours are the summary. Kept as variables so the legend swatch, the hotspot and the
+   panel tag cannot drift into three different greens. */
+:root {
+  --diff-added: #1a9850;
+  --diff-removed: #c0392b;
+  --diff-reannotated: #b8860b;
+  --diff-relabelled: #7b4fa8;
+  --diff-moved: #6b7785;
+}
+/* Persistent, unlike the plain hotspot: a changed node has to be findable without hovering
+   every box on the diagram, which is the entire point. Unchanged nodes stay invisible. */
+.zoom--diffed .hotspot--added { background: color-mix(in srgb, var(--diff-added) 20%, transparent); border-color: var(--diff-added); }
+.zoom--diffed .hotspot--removed { background: color-mix(in srgb, var(--diff-removed) 20%, transparent); border-color: var(--diff-removed); }
+.zoom--diffed .hotspot--reannotated { background: color-mix(in srgb, var(--diff-reannotated) 24%, transparent); border-color: var(--diff-reannotated); }
+.zoom--diffed .hotspot--relabelled { background: color-mix(in srgb, var(--diff-relabelled) 20%, transparent); border-color: var(--diff-relabelled); }
+.zoom--diffed .hotspot--moved { background: color-mix(in srgb, var(--diff-moved) 14%, transparent); border-color: var(--diff-moved); border-style: dashed; }
+/* Colour alone is not a distinction for everyone reading this, and five hues over a diagram
+   that is itself coloured is a lot to ask of any eye. The border weight and dashes carry the
+   same information, and the hotspot's own aria-label says the word. */
+.zoom--diffed .hotspot--added,
+.zoom--diffed .hotspot--removed,
+.zoom--diffed .hotspot--reannotated,
+.zoom--diffed .hotspot--relabelled { border-width: 2px; }
+.zoom--diffed .hotspot--reannotated { border-style: double; border-width: 3px; }
+.zoom--diffed .hotspot--removed { border-style: dotted; border-width: 2px; }
+/* Drops the colour, keeps the button: the node is still clickable and still readable. */
+.review-card--hide-moved .hotspot--moved { background: transparent; border-color: transparent; }
+
+.diff-summary {
+  margin: 0 0 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--iris);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.diff-summary--quiet { border-left-color: var(--line-strong); }
+.diff-summary__line { margin: 0; font-size: 0.88rem; }
+.diff-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+.diff-legend__item { display: flex; align-items: center; gap: 0.3rem; }
+.diff-legend__swatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 2px;
+  border: 2px solid currentColor;
+}
+.diff-legend__item--added .diff-legend__swatch { color: var(--diff-added); background: color-mix(in srgb, var(--diff-added) 20%, transparent); }
+.diff-legend__item--removed .diff-legend__swatch { color: var(--diff-removed); border-style: dotted; background: color-mix(in srgb, var(--diff-removed) 20%, transparent); }
+.diff-legend__item--reannotated .diff-legend__swatch { color: var(--diff-reannotated); border-style: double; border-width: 3px; background: color-mix(in srgb, var(--diff-reannotated) 24%, transparent); }
+.diff-legend__item--relabelled .diff-legend__swatch { color: var(--diff-relabelled); background: color-mix(in srgb, var(--diff-relabelled) 20%, transparent); }
+.diff-legend__item--moved .diff-legend__swatch { color: var(--diff-moved); border-style: dashed; background: color-mix(in srgb, var(--diff-moved) 14%, transparent); }
+.diff-summary__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+.node-panel__change {
+  display: inline-block;
+  vertical-align: middle;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+.node-panel__change--added { color: var(--diff-added); }
+.node-panel__change--removed { color: var(--diff-removed); }
+.node-panel__change--reannotated { color: var(--diff-reannotated); }
+.node-panel__change--relabelled { color: var(--diff-relabelled); }
+.node-panel__change--moved { color: var(--diff-moved); }
+.node-panel__props s { color: var(--ink-muted); }
+
 .node-panel {
   position: absolute;
   left: 0.4rem;

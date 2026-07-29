@@ -486,6 +486,31 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "site_notice": settings.site_notice.strip(),
         }
 
+    # Order matters: this is the sentence, and it runs most to least review-relevant. A
+    # re-annotation is the change a curator most needs told about, because the two boxes look
+    # identical; "moved" comes last because it is usually noise.
+    _DIFF_WORDS = (
+        ("reannotated", "re-annotated"),
+        ("added", "added"),
+        ("removed", "removed"),
+        ("relabelled", "relabelled"),
+        ("moved", "moved"),
+    )
+
+    def _diff_summary(diff: dict | None) -> dict | None:
+        """"3 added, 1 re-annotated" and the counts behind it, or None when there is nothing to
+        compare (a new pathway) — and a truthful "no data nodes changed" when there is."""
+        if not diff or not isinstance(diff.get("summary"), dict):
+            return None
+        counts = diff["summary"]
+        parts = [f"{counts[k]} {word}" for k, word in _DIFF_WORDS if counts.get(k)]
+        return {
+            "counts": counts,
+            "sentence": ", ".join(parts) if parts else "No data nodes were added, removed or "
+            "re-annotated.",
+            "changed": bool(parts),
+        }
+
     def _review_view(request: Request, r) -> dict:
         """The per-review dict the templates consume (design §4.5) — enriched beyond the API model.
 
@@ -504,6 +529,10 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "after_svg_url": f"/previews/{r.pr_number}/after.svg",
                 "datanodes_url": f"{pr_url}/files",
                 "validation_url": f"{pr_url}/checks",
+                # What changed, in words, above the two frames (issue #24). Server-rendered
+                # because it is the sentence a curator reads *before* deciding whether to look at
+                # the pictures at all — waiting on a fetch to say "nothing changed" defeats it.
+                "diff": _diff_summary(request.app.state.preview.diff(r.pr_number)),
             }
         elif status == "failed":
             preview = {"status": "failed"}
@@ -685,6 +714,23 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         data = request.app.state.preview.nodes(pr_number, side)
         if data is None:
             raise HTTPException(status_code=404, detail="no hotspots on file for this side")
+        return JSONResponse(data)
+
+    @app.get("/previews/{pr_number}/diff.json")
+    def preview_diff(request: Request, pr_number: int):
+        """What changed between the two sides, per node (issue #24).
+
+        Index-aligned with each side's ``-nodes.json``, which is what lets the overlay colour a
+        hotspot without a second identity scheme. 404 when there is nothing to compare — a new
+        pathway has one side, and a cache written before this existed has no diff on file.
+        """
+        try:
+            _curation(request).get(pr_number)
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        data = request.app.state.preview.diff(pr_number)
+        if data is None:
+            raise HTTPException(status_code=404, detail="no diff on file for this pull request")
         return JSONResponse(data)
 
     @app.get("/dashboard/{pr_number}", response_class=HTMLResponse)
