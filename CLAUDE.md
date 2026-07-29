@@ -184,7 +184,13 @@ GlusterFS-backed data at `/mnt/gluster/docker/<service>/data`, **no node pinning
 Docker secrets (never in the repo). The app needs a GitHub App identity installed on
 `wikipathways-database` with contents RW, pull_requests RW, and issues/comments RW.
 
-## Current state (2026-07-27) — read `docs/session-handoff-2026-07-27.md` first
+## Current state (2026-07-29) — read `docs/session-handoff-2026-07-29.md` first
+
+That is the read-me-first handoff and supersedes the 07-27 one, which is still worth reading for
+the sandbox pipeline and the first deployment. In short, since then: the whole submit → review →
+approve → publish lifecycle has been driven against live GitHub, clickable data nodes shipped
+(#14), `WPSUBMIT_SITE_NOTICE` warns when a target cannot publish, and the issue tracker was
+reconciled against the code — nine open, none of them stale.
 
 **The app is deployed and live at https://upload.wikipathways.org**, pointed at the fork
 `marvinm2/sandbox-wp-db` in `pipeline` mode. The handoff doc is authoritative for what is
