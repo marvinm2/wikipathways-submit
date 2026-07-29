@@ -236,6 +236,20 @@ class DraftsReader:
     def _draft_url(self, slug: str) -> str:
         return f"{self._site_base_url}/drafts/{slug}"
 
+    def published_url(self, wpid: int) -> str:
+        """Where the pathway lives on the site once the repo has published it.
+
+        Public, and deliberately not derived from `DraftArtifacts`: publication *moves* the
+        drafts rather than copying them, so by the time this URL is the right one to show,
+        `fetch()` reports `available=False` and every draft URL 404s. A published review would
+        otherwise offer no link to the finished page at all — the one page a submitter most
+        wants to see.
+
+        Takes the id rather than a slug because the slug is a draft-time construct
+        (`WP0__PR54`); the published page is filed under the id the repo assigned.
+        """
+        return f"{self._site_base_url}/pathways/WP{wpid}"
+
     # -- fetch -----------------------------------------------------------------------------
     def fetch(self, slug: str) -> DraftArtifacts:
         """Read a draft's artifacts, from the disk cache when it is still fresh.

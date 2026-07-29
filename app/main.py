@@ -20,6 +20,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
@@ -216,6 +217,17 @@ def _writer_client(
 def _submitter_email(settings: Settings, submitter: str) -> str:
     """GitHub's noreply address, so a bot-pushed commit still shows the submitter as author."""
     return f"{submitter}@{settings.noreply_email_domain}"
+
+
+def _host_of(url: str) -> str:
+    """The bare hostname of a configured URL, for naming where an outbound link goes.
+
+    Falls back to the input rather than raising or returning empty: this only ever feeds link
+    text, and a misconfigured value showing up on screen is far better than a page that will
+    not render. `urlparse` puts a scheme-less string in `path`, not `netloc`, so a value like
+    `sandbox.wikipathways.org` would otherwise render as nothing at all.
+    """
+    return urlparse(url).netloc or url.strip("/") or ""
 
 
 def _label_submission(
@@ -484,6 +496,11 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             # Shown on every page when set, so a deployment pointed somewhere that cannot
             # publish says so before anyone spends an afternoon on a submission.
             "site_notice": settings.site_notice.strip(),
+            # Just the host of the site the target repo publishes to, for naming the
+            # destination of an outbound link. A bare hostname says "this leaves the portal"
+            # in a way "the published page" does not, and on a fork it is the honest answer to
+            # "published where?" — which is not wikipathways.org.
+            "site_host": _host_of(settings.drafts_site_base_url),
         }
 
     # Order matters: this is the sentence, and it runs most to least review-relevant. A
@@ -578,10 +595,21 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         artifacts = drafts.fetch(slug)
         run = r.pipeline_run or {}
         conclusion = run.get("conclusion")
+        # The finished page, once the repo has published it. Kept separate from `draft_url`
+        # because publication *moves* the drafts: the moment this is the right link to show,
+        # every draft URL 404s and `available` goes false. Gated on the id actually existing,
+        # since a new pathway has none until publication and a review can reach PUBLISHED with
+        # the WPID recorded by hand.
+        published_url = (
+            drafts.published_url(r.wpid)
+            if r.wpid and r.status == ReviewStatus.PUBLISHED
+            else None
+        )
         return {
             "slug": slug,
             "available": artifacts.available,
             "draft_url": artifacts.draft_url,
+            "published_url": published_url,
             "svg_url": artifacts.svg_url,
             "thumb_url": artifacts.thumb_url,
             "datanode_count": len(artifacts.datanodes or []) or None,

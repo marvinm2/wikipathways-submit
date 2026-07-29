@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -15,7 +16,7 @@ from app.main import (
     get_current_user,
     get_github_client,
 )
-from app.models import Review
+from app.models import Review, ReviewStatus
 from tests.test_api import _login
 
 REPO = "wikipathways/sandbox-wp-db"
@@ -476,3 +477,83 @@ def test_a_publish_failure_still_offers_the_curator_something_to_do(tmp_path):
     assert "btn--reject" in page
     assert "btn--changes" in page
     assert "Approve for publication" in page  # re-approving re-fires the repository's dispatcher
+
+
+# ---------------------------------------------------------------------------------------------
+# The link to the target repo's own pathway page, under the diagram.
+
+
+def _offline_drafts(app, tmp_path):
+    """Point the app's reader at a site that serves nothing, over a mock transport.
+
+    Deliberately a real `DraftsReader` rather than a stub: what is under test here is the wiring
+    and the template, and the published URL has to come out of the same code the deployment uses.
+    Serving nothing is also the honest shape of a published review — publication *moves* the
+    drafts, so by then every draft file really is a 404.
+    """
+    from app.pipeline.drafts import DraftsReader
+
+    app.state.drafts = DraftsReader(
+        repo="wikipathways/sandbox-wp.gh.io",
+        branch="main",
+        site_base_url="https://sandbox.wikipathways.org",
+        cache_dir=str(tmp_path / "drafts-cache"),
+        transport=httpx.MockTransport(lambda req: httpx.Response(404, text="nope")),
+    )
+
+
+def _publish(client, pr: int, wpid: int) -> None:
+    factory = client.app.state.session_factory
+    with factory() as s:
+        review = s.get(Review, pr)
+        review.status = ReviewStatus.PUBLISHED
+        review.wpid = wpid
+        s.commit()
+
+
+def test_a_published_review_links_to_the_finished_pathway_page(tmp_path):
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        _offline_drafts(app, tmp_path)
+        pr = _submit(client)["pr_number"]
+        _publish(client, pr, 5423)
+        _login(client, "marvinm2")
+        page = client.get(f"/dashboard/{pr}").text
+
+    assert "https://sandbox.wikipathways.org/pathways/WP5423" in page
+    assert "See the published pathway page" in page
+    # The draft is gone by now, so offering it would be a link to a 404.
+    assert "See the full draft page" not in page
+
+
+def test_an_open_review_does_not_offer_a_published_page(tmp_path):
+    """The finished page does not exist yet, and a link to a 404 is worse than no link."""
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        _offline_drafts(app, tmp_path)
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+        page = client.get(f"/dashboard/{pr}").text
+
+    assert "See the published pathway page" not in page
+    assert "/pathways/WP" not in page
+
+
+def test_a_published_review_with_no_wpid_offers_no_page_link(tmp_path):
+    """PUBLISHED without an id is reachable — a marker comment that parsed but carried no wpid.
+
+    Building the URL anyway yields `/pathways/WPNone`, which is a confident link to nothing.
+    """
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        _offline_drafts(app, tmp_path)
+        pr = _submit(client)["pr_number"]
+        factory = client.app.state.session_factory
+        with factory() as s:
+            s.get(Review, pr).status = ReviewStatus.PUBLISHED
+            s.commit()
+        _login(client, "marvinm2")
+        page = client.get(f"/dashboard/{pr}").text
+
+    assert "WPNone" not in page
+    assert "See the published pathway page" not in page

@@ -1039,6 +1039,31 @@ main { flex: 1; }
 
 .review-card__links { display: flex; gap: 1rem; font-size: 0.85rem; margin: -0.4rem 0 1.1rem; }
 
+/* The target repository's own full pathway page, sitting directly under the diagram. Given more
+   weight than the plain link rows because it answers a different question from the render above
+   it: not "what changed" but "what will this actually look like". */
+.preview__site-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.3rem 0.7rem;
+  margin: 0.55rem 0 1.1rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.preview__site-link a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+/* Sized in em so it tracks the link text rather than the root, and flex-shrink:0 so a long
+   label on a narrow screen cannot squash the glyph into a sliver. */
+.preview__site-link a svg { width: 0.85em; height: 0.85em; flex-shrink: 0; }
+.preview__site-hint { font-size: 0.83rem; color: var(--ink-muted); }
+
 /* checklist */
 .checklist__title {
   font-size: 0.78rem;

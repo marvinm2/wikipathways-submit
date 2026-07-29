@@ -466,3 +466,27 @@ def test_unparseable_json_degrades_to_no_info_without_losing_the_tables(tmp_path
     assert art.info is None
     assert info_checks(art) == {}
     assert datanode_check(art)[0] == ChecklistState.PENDING.value
+
+
+# ---- the published page -------------------------------------------------------------------
+
+
+def test_published_url_is_built_from_the_assigned_id(tmp_path):
+    reader = make_reader(serve(real_files()), tmp_path)
+    assert reader.published_url(5423) == f"{SITE}/pathways/WP5423"
+
+
+def test_published_url_does_not_depend_on_the_drafts_still_existing(tmp_path):
+    """Publication *moves* the drafts, so this has to work when `fetch` finds nothing.
+
+    The regression this guards: deriving the published link from `DraftArtifacts` looks natural
+    and is exactly backwards — by the time it is the right link to show, every draft has been
+    moved out from under it and `available` is False. A published review would then offer no
+    link to the finished page at all, which is the one page a submitter wants most.
+    """
+    reader = make_reader(serve({}), tmp_path)  # nothing on the site at all
+    art = reader.fetch(SLUG)
+
+    assert art.available is False
+    assert art.draft_url is None
+    assert reader.published_url(5423) == f"{SITE}/pathways/WP5423"

@@ -193,6 +193,29 @@
     {% endif %}
   </div>
 
+  {# The target repository builds a full pathway page for every submission, and that page is the
+     "what will this actually look like" answer the diagram above cannot give. It belongs under
+     the diagram rather than in the panel further down, which is below the fold on the queue.
+
+     Exactly one of these two is ever live, because publication *moves* the drafts rather than
+     copying them: while the submission is open the draft page exists and the published one does
+     not; the moment it publishes, that reverses. #}
+  {% if r.pipeline and (r.pipeline.published_url or r.pipeline.draft_url) %}
+  <p class="preview__site-link">
+    {% if r.pipeline.published_url %}
+      <a href="{{ r.pipeline.published_url }}" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3h7v7M13 3L3 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        See the published pathway page</a>
+      <span class="preview__site-hint">the finished page on {{ site_host }}, as anyone else will see it</span>
+    {% else %}
+      <a href="{{ r.pipeline.draft_url }}" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3h7v7M13 3L3 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        See the full draft page</a>
+      <span class="preview__site-hint">how this will look once published. It can take a few minutes to appear after the run finishes.</span>
+    {% endif %}
+  </p>
+  {% endif %}
+
   <p class="review-card__links">
     <a href="{{ r.pr_url }}" target="_blank" rel="noopener">Open the pull request</a>
     {# Not "Data nodes" and "Validation report": the Files-changed tab holds one thing, the GPML
@@ -211,12 +234,12 @@
         {% if r.pipeline.datanode_count %}<li>{{ r.pipeline.datanode_count }} data nodes annotated</li>{% endif %}
         {% if r.pipeline.reference_count %}<li>{{ r.pipeline.reference_count }} references resolved</li>{% endif %}
       </ul>
+      {# The page link lives directly under the diagram now, so it is deliberately not repeated
+         here — two identical links a screen apart read as two different destinations. #}
       <p class="pipeline-panel__links">
-        {% if r.pipeline.draft_url %}<a href="{{ r.pipeline.draft_url }}" target="_blank" rel="noopener">Draft page</a>{% endif %}
         {% if r.pipeline.svg_url %}<a href="{{ r.pipeline.svg_url }}" target="_blank" rel="noopener">Its own render</a>{% endif %}
         {% if r.pipeline.run_url %}<a href="{{ r.pipeline.run_url }}" target="_blank" rel="noopener">Workflow run</a>{% endif %}
       </p>
-      <p class="pipeline-panel__hint">The draft page can take a few minutes to appear after the run finishes.</p>
     {% elif r.pipeline.run_status in ('queued', 'in_progress', 'waiting') %}
       <p class="pipeline-panel__hint">
         Still running{% if r.pipeline.run_url %} — <a href="{{ r.pipeline.run_url }}" target="_blank" rel="noopener">follow it</a>{% endif %}.
