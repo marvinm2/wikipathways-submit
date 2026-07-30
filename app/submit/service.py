@@ -233,12 +233,20 @@ class SubmissionService:
                 if attempt == _BRANCH_COLLISION_RETRIES:
                     raise
 
+        # Every new submission writes the *same* placeholder path, so unlike the direct mode's
+        # per-WPID path it cannot be assumed free. It is free on a healthy base branch — the
+        # target repo publishes by moving the placeholder aside and closes the PR unmerged — but
+        # a pipeline PR merged by hand leaves the placeholder sitting on `main`, and from then on
+        # a create-only write 422s for everyone. Overwriting is the right resolution: the
+        # placeholder is a slot, not a pathway, and the repo still reads "new" off the basename.
+        existing_sha = self._github.get_file_sha(self._repo, branch, path)
         self._github.put_file(
             self._repo,
             branch,
             path,
             gpml_out,
             message=f"Add {meta.name or 'new pathway'}",
+            sha=existing_sha,
             author_name=submitter,
             author_email=author_email,
         )

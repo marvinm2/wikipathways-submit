@@ -8,6 +8,7 @@ completes the lifecycle — promoting the WPID reservation to MERGED and releasi
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import UTC, timedelta
 
@@ -21,7 +22,10 @@ from app.github import GitHubClient, GitHubError
 from app.locks import PathwayLockRegistry
 from app.models import Review, ReviewStatus, utcnow
 from app.review.checklist import ChecklistState, build_checklist, is_complete, is_valid_key
+from app.submit.gpml import PLACEHOLDER_GPML_PATH, PLACEHOLDER_WPID_STR
 from app.wpid import WpidAllocator
+
+logger = logging.getLogger(__name__)
 
 #: Hidden token embedded in the mirror comment so we update the same one instead of spamming.
 MIRROR_MARKER = "<!-- wikipathways-submit:mirror -->"
@@ -64,8 +68,21 @@ _APPROVAL_STANDS = (
     ReviewStatus.MERGED,
 )
 
+#: Statuses where the pull request is already closed, so telling anyone not to merge it is both
+#: too late and confusing. Deliberately not ``CurationService._TERMINAL``: an approved pipeline
+#: submission is not terminal but its pull request is very much still open and mergeable, which
+#: is precisely the window the warning exists for.
+_TERMINAL_FOR_MIRROR = (
+    ReviewStatus.PUBLISHED,
+    ReviewStatus.MERGED,
+    ReviewStatus.REJECTED,
+    ReviewStatus.CLOSED,
+)
 
-def render_mirror_comment(review: Review, repo: str, *, base_url: str = "") -> str:
+
+def render_mirror_comment(
+    review: Review, repo: str, *, base_url: str = "", pipeline_mode: bool = False
+) -> str:
     """Render the read-only PR mirror comment (design §4.5): checklist + approval state.
 
     Approval always flows through the app, so this comment is a *mirror* — it tells GitHub-native
@@ -122,6 +139,21 @@ def render_mirror_comment(review: Review, repo: str, *, base_url: str = "") -> s
             "",
             f"The pathway is drawn at {base_url.rstrip('/')}/dashboard/"
             f"{review.pr_number}. This pull request holds the GPML.",
+        ]
+    # The one instruction aimed at somebody holding the merge button. It is the only mistake a
+    # GitHub-native reviewer can make here that harms people other than themselves: this
+    # repository publishes by pushing to its default branch and then closing the pull request,
+    # so a merge lands the WP0001 placeholder on that branch, where it is the path every later
+    # submission writes to. It happened on 2026-07-30 and no submission worked until it was
+    # removed by hand. The app now survives it and repairs it, but not making the mistake is
+    # still better than being healed from it.
+    if pipeline_mode and review.status not in _TERMINAL_FOR_MIRROR:
+        lines += [
+            "",
+            "**Do not merge this pull request.** It is closed, not merged, once the pathway "
+            "is published — that is what success looks like here. Merging instead copies the "
+            f"`{PLACEHOLDER_WPID_STR}` placeholder onto the default branch, which is the slot "
+            "every later submission is written to.",
         ]
     lines += [
         "",
@@ -292,7 +324,12 @@ class CurationService:
             self._github.upsert_issue_comment(
                 self._repo,
                 review.pr_number,
-                render_mirror_comment(review, self._repo, base_url=self._app_base_url),
+                render_mirror_comment(
+                    review,
+                    self._repo,
+                    base_url=self._app_base_url,
+                    pipeline_mode=self.is_pipeline_mode,
+                ),
                 marker=MIRROR_MARKER,
             )
         except (GitHubError, httpx.HTTPError):
@@ -992,6 +1029,20 @@ class CurationService:
                 ReviewStatus.PUBLISH_FAILED,
             )
             wpid = review.wpid
+            kind = review.kind
+
+        # A merge is never how a pipeline submission ends: the repository publishes by pushing
+        # to its default branch and closes the pull request unmerged. So a merge here means a
+        # human pressed the button, and for a new submission that has just copied the WP0001
+        # placeholder onto the default branch, where it blocks nobody's submission but everyone's.
+        if merged and self.is_pipeline_mode:
+            if kind == "new":
+                self._repair_stray_placeholder(pr_number)
+            # The publication itself may well have happened anyway — on 2026-07-30 it had, and
+            # reading the marker is the only way to learn the WPID it assigned. Falling straight
+            # through to MERGED (a state this mode otherwise never reaches) threw that away.
+            if awaiting_publication:
+                return self._settle_publication(pr_number)
 
         if awaiting_publication and not merged:
             return self._settle_publication(pr_number)
@@ -1018,6 +1069,58 @@ class CurationService:
             self._free_preview(review.pr_number)
             self._maybe_mirror(review)
             return review
+
+    def _repair_stray_placeholder(self, pr_number: int) -> bool:
+        """Take the submission placeholder back off the base branch. Returns whether it did.
+
+        The invariant this defends is absolute in pipeline mode: ``pathways/WP0001/WP0001.gpml``
+        belongs on submission branches and nowhere else, because it is a slot every submitter
+        writes to rather than anybody's pathway. Once a copy is sitting on the base branch, every
+        later branch inherits it. Submission survives that now (it writes over the placeholder
+        instead of creating it), but each pull request would then read as an edit of whichever
+        pathway was merged by mistake, which is not something a curator should have to decode.
+
+        Deliberately narrow: the path is a constant, not an argument, so the widest thing this
+        can do is delete one known file that should not exist. Best-effort by design — where the
+        base branch is protected the delete is refused, and the correct outcome there is a log
+        line and a working app, not a webhook that 500s at GitHub.
+        """
+        if self._github is None:
+            return False
+        try:
+            sha = self._github.get_file_sha(
+                self._repo, self._default_branch, PLACEHOLDER_GPML_PATH
+            )
+            if sha is None:
+                return False
+            self._github.delete_file(
+                self._repo,
+                self._default_branch,
+                PLACEHOLDER_GPML_PATH,
+                f"Remove the {PLACEHOLDER_WPID_STR} submission placeholder left by merging #"
+                f"{pr_number}\n\n"
+                "A pipeline pull request is closed rather than merged once its pathway is "
+                "published. Merging one commits the placeholder to the default branch, where "
+                "it is the path every later submission is written to.",
+                sha=sha,
+            )
+        except (GitHubError, httpx.HTTPError):
+            logger.warning(
+                "could not remove the %s placeholder from %s after #%s was merged; "
+                "submissions still work but their diffs will read as edits of it",
+                PLACEHOLDER_GPML_PATH,
+                self._default_branch,
+                pr_number,
+                exc_info=True,
+            )
+            return False
+        logger.warning(
+            "#%s was merged rather than closed; removed the stray %s from %s",
+            pr_number,
+            PLACEHOLDER_GPML_PATH,
+            self._default_branch,
+        )
+        return True
 
     def _settle_publication(self, pr_number: int) -> Review | None:
         """Decide what an approved-then-closed PR actually means, and record it.

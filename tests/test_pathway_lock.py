@@ -116,7 +116,11 @@ def test_the_app_refuses_an_update_when_a_raw_pr_already_touches_the_pathway(tmp
     )
     # Somebody's raw pull request, opened outside the portal, editing the same pathway.
     raw = fake.open_pull_request(repo, head="egonw-patch", base="main", title="fix", body="")
-    fake.put_file(repo, "egonw-patch", "pathways/WP554/WP554.gpml", "<Pathway/>", "by hand")
+    # An edit of a file that is already on the base branch, so it carries the blob's sha —
+    # without one GitHub answers 422, and the fake says so too.
+    fake.put_file(
+        repo, "egonw-patch", "pathways/WP554/WP554.gpml", "<Pathway/>", "by hand", sha="oldsha"
+    )
     assert fake.find_open_pr_touching(repo, "pathways/WP554/") == raw.number
 
     settings = Settings(

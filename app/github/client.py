@@ -107,6 +107,15 @@ class GitHubClient(ABC):
         """
 
     @abstractmethod
+    def delete_file(self, repo: str, branch: str, path: str, message: str, *, sha: str) -> None:
+        """Remove ``path`` from ``branch``. ``sha`` is the blob SHA being deleted.
+
+        Exists for exactly one caller: taking the submission placeholder back off the base
+        branch after somebody merged a pipeline pull request. Nothing else in the app removes
+        content from the content repository.
+        """
+
+    @abstractmethod
     def find_open_pr(self, repo: str, head_branch: str) -> PullRequest | None:
         """Return the open PR whose head is ``head_branch``, or None."""
 
@@ -293,6 +302,9 @@ class FakeGitHubClient(GitHubClient):
         self.label_log: list[tuple[str, int, str, str]] = []
         # {(repo, workflow_file): [WorkflowRun, ...]}, newest last.
         self.workflow_runs: dict[tuple[str, str], list[WorkflowRun]] = {}
+        # [(repo, branch, path, message)] — every delete_file, so a test can assert the repair
+        # touched exactly the placeholder and nothing else.
+        self.deleted: list[tuple[str, str, str, str]] = []
         self.fail_on = fail_on or set()
         self._next_pr = 1
         self._next_run = 1000
@@ -343,9 +355,26 @@ class FakeGitHubClient(GitHubClient):
         author_email: str | None = None,
     ) -> None:
         self._maybe_fail("put_file")
+        # GitHub answers 422 ("sha" wasn't supplied) when the contents API is asked to *create*
+        # a file that is already there. Modelling that here is what stops a caller from
+        # assuming a path is free: the placeholder path is shared by every new submission, so
+        # one stray copy of it on the base branch would otherwise break the front door.
+        if sha is None and self.get_file_sha(repo, branch, path) is not None:
+            raise GitHubError(f'put_file({path}) failed: 422 "sha" wasn\'t supplied')
         # A new blob sha after the write (deterministic, for assertions).
         new_sha = f"sha-{branch}-{path}-{len(content)}"
         self.files[(repo, branch, path)] = (content, message, new_sha)
+
+    def delete_file(self, repo: str, branch: str, path: str, message: str, *, sha: str) -> None:
+        """Drops the file from both the branch map and the base — the app only ever deletes on
+        the base branch, so modelling a branch-local tombstone would be fiction nothing uses."""
+        self._maybe_fail("delete_file")
+        if self.get_file_sha(repo, branch, path) is None:
+            raise GitHubError(f"delete_file({path}) failed: 404 not found")
+        self.files.pop((repo, branch, path), None)
+        self.existing_files.pop((repo, path), None)
+        self.existing_contents.pop((repo, path), None)
+        self.deleted.append((repo, branch, path, message))
 
     def find_open_pr(self, repo: str, head_branch: str) -> PullRequest | None:
         self._maybe_fail("find_open_pr")
@@ -638,6 +667,16 @@ class HttpGitHubClient(GitHubClient):
             payload["author"] = {"name": author_name, "email": author_email}
         resp = self._client.put(f"/repos/{repo}/contents/{path}", json=payload)
         self._raise_for(resp, f"put_file({path})")
+
+    def delete_file(self, repo: str, branch: str, path: str, message: str, *, sha: str) -> None:
+        resp = self._client.request(
+            "DELETE",
+            f"/repos/{repo}/contents/{path}",
+            # DELETE with a body: the contents API takes the sha and branch that way, and httpx
+            # needs the explicit request() call because .delete() has no json= parameter.
+            json={"message": message, "sha": sha, "branch": branch},
+        )
+        self._raise_for(resp, f"delete_file({path})")
 
     def find_open_pr(self, repo: str, head_branch: str) -> PullRequest | None:
         owner = repo.split("/", 1)[0]

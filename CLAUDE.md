@@ -232,6 +232,15 @@ here:
   correct. Approve was applied as a label directly rather than through the dashboard, because
   PR #5's checklist legitimately fails — a pass that *starts* at the Approve button is still
   outstanding.
+- **Never merge a pipeline pull request** (2026-07-30, PR #11 on the fork). Merging commits
+  `pathways/WP0001/WP0001.gpml` to `main`, and that is the placeholder slot every new submission
+  writes to — the app created rather than updated it, so every submission by anyone then failed
+  with `422 "sha" wasn't supplied` until the file was deleted by hand. Fixed in four layers
+  (submission overwrites; the mirror comment says not to merge; the webhook deletes a stray
+  placeholder off the base branch via `CurationService._repair_stray_placeholder`; a merged
+  pipeline PR still settles from the publish marker rather than falling through to `MERGED`).
+  `docs/sandbox-pipeline.md` §6 defect 12 has the full account. The general lesson is broader
+  than this path: a **shared fixed path is never safe to create**, only to upsert.
 - **Never put a GitHub expression in a `run:`-block comment.** A `run:` block is one string value
   and the runner substitutes into its *text* before bash exists, so `#` protects nothing; an
   expression that does not parse fails the **whole workflow at startup**, naming the `run:` line

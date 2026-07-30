@@ -58,6 +58,24 @@ def test_file_lands_at_the_placeholder_path():
     assert (REPO, result.branch, "pathways/WP0001/WP0001.gpml") in gh.files
 
 
+def test_a_placeholder_left_on_the_base_branch_does_not_block_the_next_submission():
+    """The placeholder path is shared by everyone, so it is not reliably free.
+
+    On a healthy target it never survives on `main` — publication moves it aside and closes the
+    pull request unmerged. But merging a pipeline pull request by hand (which happened live on
+    2026-07-30, after the publish workflow's own close step lost a race with a manual merge)
+    commits the placeholder to `main`, and from that moment a create-only write answers
+    422 `"sha" wasn't supplied` for *every* submitter. Overwrite instead of refusing.
+    """
+    gh = _fake_github(existing_files={f"{REPO}#pathways/WP0001/WP0001.gpml": "staleblob"})
+
+    result = _service(gh).submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
+
+    assert result.path == "pathways/WP0001/WP0001.gpml"
+    content = gh.files[(REPO, result.branch, result.path)][0]
+    assert "Mitophagy" in content
+
+
 def test_placeholder_basename_is_not_an_edit_upstream():
     # The whole reason the placeholder is WP0001 and not WP1.
     assert not UPSTREAM_EDIT_RE.match("WP0001.gpml")

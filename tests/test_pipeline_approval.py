@@ -38,8 +38,8 @@ def _service(session_factory, gh, **kw) -> CurationService:
     )
 
 
-def _fake() -> FakeGitHubClient:
-    return FakeGitHubClient(default_branches={f"{REPO}#main": "basesha"})
+def _fake(**kw) -> FakeGitHubClient:
+    return FakeGitHubClient(default_branches={f"{REPO}#main": "basesha"}, **kw)
 
 
 def _register(svc, gh, *, kind="new", wpid=None) -> int:
@@ -705,3 +705,143 @@ def test_a_published_marker_wins_over_a_later_failure_report(session_factory):
 
     assert review.status == ReviewStatus.PUBLISHED
     assert review.wpid == 5678
+
+
+# -- a hand-merged pipeline pull request ----------------------------------------------------
+#
+# Merging is never the success path here, but the button is right there and somebody pressed it
+# on 2026-07-30 (PR #11 on marvinm2/sandbox-wp-db, while the publish workflow was mid-run — its
+# own Close PR step then failed with "already merged"). That merge committed the WP0001
+# placeholder to main, and because the app created rather than overwrote that path, every
+# subsequent submission died on 422 `"sha" wasn't supplied` until it was deleted by hand.
+
+PLACEHOLDER = "pathways/WP0001/WP0001.gpml"
+
+
+def _merged_after_publishing(gh, pr: int, *, wpid: int | None = 5424) -> None:
+    """What a hand-merge looks like from the app's side: the placeholder lands on main, the
+    workflow's announcement is (usually) already there, and the PR reports itself merged."""
+    if wpid is not None:
+        gh.create_issue_comment(
+            REPO, pr,
+            f'<!-- wikipathways-publish {{"pr":{pr},"wpid":{wpid},"status":"published"}} -->\n'
+            f"Published as WP{wpid}.",
+        )
+    gh.existing_files[(REPO, PLACEHOLDER)] = "strayblob"
+    gh.merged.add(pr)
+
+
+def test_a_hand_merged_submission_takes_the_placeholder_back_off_main(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    _merged_after_publishing(gh, pr)
+
+    svc.handle_pr_closed(pr, merged=True)
+
+    assert gh.get_file_sha(REPO, "main", PLACEHOLDER) is None
+    assert [(path, branch) for _, branch, path, _ in gh.deleted] == [(PLACEHOLDER, "main")]
+
+
+def test_the_repair_touches_nothing_when_the_placeholder_is_not_on_main(session_factory):
+    """The ordinary case, and the second delivery of a duplicated webhook."""
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    _merged_after_publishing(gh, pr)
+    gh.existing_files.pop((REPO, PLACEHOLDER))
+
+    svc.handle_pr_closed(pr, merged=True)
+
+    assert gh.deleted == []
+
+
+def test_a_hand_merge_still_records_the_wpid_the_repository_published(session_factory):
+    """The publication really happened; only the closing did not. Recording MERGED — a state
+    this mode otherwise never reaches — would lose the id the repository assigned."""
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    _merged_after_publishing(gh, pr, wpid=5424)
+
+    review = svc.handle_pr_closed(pr, merged=True)
+
+    assert review.status == ReviewStatus.PUBLISHED
+    assert review.wpid == 5424
+
+
+def test_a_refused_repair_does_not_fail_the_webhook(session_factory):
+    """Where the base branch is protected the delete is rejected. A working app and a log line
+    beat a webhook that 500s at GitHub — submission survives the stray placeholder regardless."""
+    gh = _fake(fail_on={"delete_file"})
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    _merged_after_publishing(gh, pr)
+
+    review = svc.handle_pr_closed(pr, merged=True)
+
+    assert review.status == ReviewStatus.PUBLISHED
+    assert gh.get_file_sha(REPO, "main", PLACEHOLDER) == "strayblob"
+
+
+def test_an_update_merged_by_hand_leaves_the_placeholder_alone(session_factory):
+    """An update never writes the placeholder, so a stray one is not its doing and removing it
+    would be this app deleting a file on main for a reason it cannot actually attribute."""
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh, kind="update", wpid=5636)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    _merged_after_publishing(gh, pr, wpid=5636)
+
+    svc.handle_pr_closed(pr, merged=True)
+
+    assert gh.deleted == []
+
+
+def test_the_mirror_comment_warns_against_merging_while_the_pr_is_open(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+
+    body = gh.comments[(REPO, pr)][MIRROR_MARKER]
+    assert "Do not merge this pull request" in body
+    assert "WP0001" in body
+
+
+def test_the_merge_warning_is_dropped_once_the_pathway_is_published(session_factory):
+    gh = _fake()
+    svc = _service(session_factory, gh)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    gh.simulate_3a(REPO, pr, wpid=5678)
+    svc.handle_pr_closed(pr, merged=False)
+
+    body = gh.comments[(REPO, pr)][MIRROR_MARKER]
+    assert "Do not merge" not in body
+
+
+def test_direct_mode_never_warns_against_merging(session_factory):
+    """Merging is exactly how a direct-mode review ends — approve_and_merge does it."""
+    gh = _fake()
+    svc = CurationService(
+        session_factory, gh, repo=REPO, curators=ConfigCurators([CURATOR]),
+        publish_mode="direct",
+    )
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.assign(pr, CURATOR)
+
+    body = gh.comments[(REPO, pr)][MIRROR_MARKER]
+    assert "Do not merge" not in body

@@ -405,6 +405,41 @@ tenth defect that no amount of YAML review had caught, because nothing had ever 
 | 11 | 3a, "Rename and Move Files" (original **and** repaired) | The draft page is `mv`'d to `_pathways/WP<new>.md` and its **contents are never touched**, so the published page still calls the pathway by its draft slug. That is not cosmetic: `wpid:` in the frontmatter is what the pathway layout builds the title, the diagram URL, all four download links, the data-node and bibliography links and the discussion links from — so every asset on a published page pointed into a `draft_assets/` directory the same step had just emptied. `redirect_from:` and the schema.org `@id` carried the slug too, so the pathway advertised a canonical identifier that was never its own. Observed on WP5423, the first publication: 5 stale references | Yes: `sed -i "s/${OLD_PREFIX}/${WPID}/g"` on the moved page, **before** the copy to the content repo so that repo gets the corrected file rather than the draft one. This is the same class as the open question about the GPML's `Version` attribute below — 3a renames, it does not rewrite |
 | 10 | The **repaired** 3a, `push_jekyll` | A `# FIX:` comment inside the `run:` block quoted the old commit message, and that quotation contained a GitHub expression. A `run:` block is a single string value: the runner substitutes expressions into its **text** before bash ever sees it, so a leading `#` protects nothing. The expression did not parse, and an unparseable expression fails the **whole workflow at startup** — `gh workflow run` returns `HTTP 422: failed to parse workflow: (Line: 224, Col: 14): Unexpected symbol: '...wpid'`, and the line it names is the `run:`, not the comment. GitHub also files a zero-job `failure` run named by *path* rather than by workflow name when the file lands, which is the only warning you get | Yes. Note this is the **same mechanism** as defect 1: `${{ }}` is text substitution, not shell expansion. That is worth internalising once rather than meeting twice |
 
+A twelfth arrived the same way — not from reading YAML, but from a curator pressing a button the
+pipeline never expected anyone to press.
+
+| # | Where | What happens | Fixed |
+|---|---|---|---|
+| 12 | 3a, "Close PR" — and, more seriously, the app | A pipeline pull request is *closed*, not merged; merging one commits `pathways/WP0001/WP0001.gpml` to `main`. That path is the placeholder slot **every** new submission is written to, and the app created rather than updated it, so from that moment every submission by anyone died on `422 "sha" wasn't supplied`. Observed 2026-07-30: PR #11 was merged by hand at 11:08:41 while 3a was mid-run; the pathway published fine as WP5424, but `gh pr close` then exited non-zero with "already merged", which also mislabelled the successful publication as `publish failed`. The front door stayed shut until the file was deleted by hand | Yes, in four places — see below |
+
+The repair is layered, because each layer covers a different failure of the one above it:
+
+1. **Submission survives it.** `_submit_pipeline` reads the existing blob SHA and passes it, so
+   writing the placeholder is an overwrite rather than a create. Overwriting is right: the
+   placeholder is a slot, not a pathway, and the repo still classifies the submission as new from
+   the basename. `FakeGitHubClient.put_file` now refuses a create-over-existing-file the way
+   GitHub does — that omission is why 287 tests had nothing to say about this.
+2. **The mirror comment says not to merge**, for as long as the pull request is open, in pipeline
+   mode only. It is the one mistake a GitHub-native reviewer can make here that harms everybody
+   else rather than only themselves.
+3. **The webhook notices and repairs.** A merged pipeline pull request is by definition an
+   anomaly, so `CurationService._repair_stray_placeholder` deletes the placeholder off the base
+   branch. The path is a constant rather than an argument, so the widest thing it can do is
+   remove one known file that should not exist, and it is best-effort: where the base branch is
+   protected the delete is refused and the app logs it instead of returning 500 to GitHub.
+4. **The merge no longer loses the WPID.** The publication usually *has* happened by then, so a
+   merged pipeline PR still settles from the marker comment instead of falling through to
+   `MERGED`, a state this mode otherwise never reaches.
+
+3a's own "Close PR" now treats "already merged" as success with a warning annotation, since by
+that point all three pushes have landed and reporting failure only teaches curators that the
+label means nothing. Note the fork runs its own copies of these workflows, so this one reaches it
+only when `sandbox-workflows/` is pushed there.
+
+Branch protection on `main` would prevent the merge outright, and was rejected: 3a publishes *by
+pushing to `main`*, so protecting it means maintaining a bypass list for the workflow's own
+credential, and getting that wrong breaks publication instead of a diff.
+
 ### 6.1 Redacted: an unfixed security defect, reported privately
 
 There is one security defect in workflow 1 — not a bug, a defect that lets a submitted file

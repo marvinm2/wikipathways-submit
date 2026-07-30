@@ -346,8 +346,25 @@ jobs:
         id: close_pr
         # Publication happens by pushing to main, not by merging, so the PR is closed
         # rather than merged.
+        #
+        # FIX: a pull request somebody merged by hand cannot be closed - `gh pr close` exits
+        # non-zero with "already merged" - and on 2026-07-30 that turned a publication where
+        # all three pushes had landed into a `publish failed` label. Merging is the wrong
+        # thing to do here and stays worth saying out loud, but by this point the pathway is
+        # out; reporting failure only teaches curators that the label means nothing.
         run: |
-          gh pr close "$PR_NUMBER" --repo "$GITHUB_REPOSITORY"
+          set -uo pipefail
+          if gh pr close "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" 2>close.err; then
+            exit 0
+          fi
+          cat close.err
+          if grep -q "already merged" close.err; then
+            echo "::warning::PR #${PR_NUMBER} was merged by hand rather than left to close." \
+              "The pathway is published; the WP0001 placeholder is now on the default branch" \
+              "and has to come off it."
+            exit 0
+          fi
+          exit 1
 
       - name: Report publish failure
         # Counterpart of the success marker: a failed publish must be visible on the PR
