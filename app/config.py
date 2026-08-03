@@ -51,7 +51,21 @@ class Settings(BaseSettings):
     label_author_feedback: str = "author feedback required"
 
     # How long to wait after labelling `accepted` before calling the publish failed.
-    publish_timeout_minutes: int = 30
+    #
+    # Measured 2026-08-03 against the two publications that have actually succeeded on
+    # marvinm2/sandbox-wp-db (issue #23, which was filed when the number was still unknowable
+    # because the workflow had never succeeded once). Label applied -> pull request closed:
+    # **70 seconds** (PR 5) and **42 seconds** (PR 11); the runs themselves took 63s and 54s, with
+    # ~10s of queueing before each. So 30 minutes was 26-43x the real thing.
+    #
+    # Ten rather than the two-or-three those numbers alone would suggest, because the two failure
+    # directions are not symmetric. Declaring failure late costs a curator some waiting. Declaring
+    # it *early* puts "the repository never published this" on screen under a publication that is
+    # merely queued — and the documented way a curator responds to that is to re-apply the
+    # accepted label, which dispatches a **second** publish run. A false negative is a wait; a
+    # false positive risks publishing twice. The generous margin is for Actions queueing, which is
+    # the one part of the chain with no upper bound.
+    publish_timeout_minutes: int = 10
     # If the repo's rejection workflow never closes a rejected PR, close it ourselves after the
     # same window. Safe because rejection has no side effects worth waiting for.
     close_rejected_after_timeout: bool = True
@@ -68,8 +82,27 @@ class Settings(BaseSettings):
     reconcile_min_interval_seconds: int = 30
 
     # TTLs for the transactional registry (design §4.2/§4.3).
+    #
+    # Both were guesses until 2026-08-03, when the 53 closed pull requests on
+    # wikipathways/wikipathways-database were measured (issue #23). A lock and a reservation are
+    # each held for the life of the pull request, so that distribution is the thing they have to
+    # cover:
+    #
+    #   median 0.36 days | 75th 3.2 | 90th 6.8 | 95th 7.8 | max 109 (one PR)
+    #   longer than  3 days: 14 of 53  (26%)
+    #   longer than 14 days:  2 of 53   (4%)
+    #
+    # 14 days covers 96% of real reviews and is right for both. The old 3-day lock expired under
+    # **more than a quarter** of them, which does not hand the pathway to a second editor outright
+    # — a fresh check-out re-runs the open-PR scanner, which would see the live pull request — but
+    # it does downgrade the guarantee from a database constraint to a best-effort GitHub read that
+    # **fails open** on error. For a quarter of reviews, on the one invariant the lock exists for.
+    #
+    # Erring long is the cheaper mistake here: an over-held lock is visible and a curator can
+    # force-release it, whereas an expired one is silent and its failure mode is the unmergeable
+    # concurrent edit this whole app was built to prevent.
     wpid_reservation_ttl_days: int = 14
-    pathway_lock_ttl_days: int = 3
+    pathway_lock_ttl_days: int = 14
 
     # How many pull requests one logged-in account may open on the content repo in a window
     # (issue #21). The blast radius is somebody else's repository — branches, notifications to

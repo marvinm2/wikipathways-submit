@@ -16,14 +16,17 @@ acquisitions of the same pathway resolve to exactly one winner via the uniquenes
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import UTC, timedelta
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import PathwayLock, utcnow
+
+logger = logging.getLogger("wpsubmit.locks")
 
 #: Callable ``(wpid) -> bool``: True if an open GitHub PR already touches this pathway.
 OpenPrScanner = Callable[[int], bool]
@@ -51,17 +54,52 @@ class PathwayLockRegistry:
         self._open_pr_scanner = open_pr_scanner
 
     def expire_stale(self) -> int:
-        """Delete locks past their TTL. Returns the number released."""
+        """Delete locks past their TTL. Returns the number released.
+
+        Every expiry is logged with how long the lock was actually held, because the TTL is a
+        guess and this is the only evidence that would ever correct it (issue #23). An expiry is
+        not routine: it means a check-out outlived the window, so the pathway's protection fell
+        back to the open-PR scanner — which fails open. A run of these is the signal that the TTL
+        is too short for how people really work.
+        """
         now = utcnow()
         with self._session_factory() as s:
+            stale = list(
+                s.execute(
+                    select(PathwayLock).where(
+                        PathwayLock.expires_at.is_not(None),
+                        PathwayLock.expires_at < now,
+                    )
+                ).scalars()
+            )
+            for lock in stale:
+                held = _held_for(lock, now)
+                logger.info(
+                    "lock on WP%s expired after being held %s by %s (pr=%s, ttl=%s)",
+                    lock.wpid,
+                    held,
+                    lock.held_by,
+                    lock.pr_number,
+                    self._ttl,
+                )
+            if not stale:
+                return 0
             result = s.execute(
                 delete(PathwayLock).where(
-                    PathwayLock.expires_at.is_not(None),
-                    PathwayLock.expires_at < now,
+                    PathwayLock.wpid.in_([lock.wpid for lock in stale])
                 )
             )
             s.commit()
             return result.rowcount or 0
+
+    def age_of(self, wpid: int) -> timedelta | None:
+        """How long the lock on this pathway has been held, or None if it is not locked.
+
+        The other half of making the timer observable: an over-long lock is invisible to everyone
+        except the person it blocks, so the dashboard needs to be able to say how old one is.
+        """
+        lock = self.get(wpid)
+        return None if lock is None else _held_for(lock, utcnow())
 
     def get(self, wpid: int) -> PathwayLock | None:
         with self._session_factory() as s:
@@ -144,3 +182,18 @@ class PathwayLockRegistry:
             s.delete(lock)
             s.commit()
             return True
+
+
+def _held_for(lock: PathwayLock, now) -> timedelta:
+    """How long a lock has been held, tolerating a naive timestamp.
+
+    SQLite hands back naive datetimes where Postgres does not, and this is only ever used to
+    describe a duration in a log line or on a page — never to decide anything — so it coerces
+    rather than raising.
+    """
+    acquired = lock.acquired_at
+    if acquired is None:
+        return timedelta(0)
+    if acquired.tzinfo is None:
+        acquired = acquired.replace(tzinfo=UTC)
+    return now - acquired

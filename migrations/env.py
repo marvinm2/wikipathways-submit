@@ -15,7 +15,13 @@ from app.models import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False` is not alembic's default, and the default is wrong for any
+    # caller that runs alembic in-process: `fileConfig` would silently disable every logger not
+    # named in alembic.ini, which is all of `wpsubmit.*`. Production never noticed, because the
+    # entrypoint runs `alembic upgrade head` as its own process before uvicorn starts — but the
+    # test suite runs it in-process, and it switched off the app's logging for every test that
+    # happened to run afterwards.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

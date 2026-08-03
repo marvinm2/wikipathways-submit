@@ -22,15 +22,18 @@ network and the GitHub read strategy can evolve independently (see ``github_floo
 """
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import ReservationStatus, WpidReservation, utcnow
+
+logger = logging.getLogger("wpsubmit.wpid")
 
 _WPID_RE = re.compile(r"^WP(\d+)$")
 
@@ -73,14 +76,37 @@ class WpidAllocator:
 
         Merged reservations are never expired. Deletion (rather than a status flip) frees the
         primary key so the id can be re-allocated cleanly. Returns the number reclaimed.
+
+        Each reclaim is logged with how long the id was held (issue #23). The TTL is a guess, and
+        an expiry is the only evidence that would ever correct it: it says a submission held an
+        identifier for the whole window without landing.
         """
         now = utcnow()
         with self._session_factory() as s:
+            stale = list(
+                s.execute(
+                    select(WpidReservation).where(
+                        WpidReservation.status == ReservationStatus.RESERVED,
+                        WpidReservation.expires_at.is_not(None),
+                        WpidReservation.expires_at < now,
+                    )
+                ).scalars()
+            )
+            for row in stale:
+                logger.info(
+                    "WPID reservation WP%s returned to the pool after %s held by %s (pr=%s, "
+                    "ttl=%s)",
+                    row.wpid,
+                    _held_for(row, now),
+                    row.reserved_by,
+                    row.pr_number,
+                    self._ttl,
+                )
+            if not stale:
+                return 0
             result = s.execute(
                 delete(WpidReservation).where(
-                    WpidReservation.status == ReservationStatus.RESERVED,
-                    WpidReservation.expires_at.is_not(None),
-                    WpidReservation.expires_at < now,
+                    WpidReservation.wpid.in_([row.wpid for row in stale])
                 )
             )
             s.commit()
@@ -158,3 +184,14 @@ class WpidAllocator:
             s.delete(row)
             s.commit()
             return True
+
+
+def _held_for(row, now) -> timedelta:
+    """How long a reservation has been held. Coerces a naive timestamp (SQLite) rather than
+    raising — this only ever describes a duration in a log line."""
+    at = row.reserved_at
+    if at is None:
+        return timedelta(0)
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=UTC)
+    return now - at

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import timedelta
 
@@ -189,3 +190,39 @@ def test_the_apps_own_update_pr_does_not_trip_its_own_scanner(tmp_path):
         with app.state.session_factory() as s:
             assert s.get(Review, pr) is not None
         assert app.state.locks.get(554).pr_number == pr
+
+
+def test_an_expiry_says_how_long_the_lock_was_held(session_factory, caplog):
+    """Issue #23. The TTL is a guess, and an expiry is the only evidence that would ever correct
+    it — so it has to say what it observed, not just that it fired."""
+    reg = PathwayLockRegistry(session_factory, ttl=timedelta(seconds=-1))
+    reg.acquire(5636, "alice", pr_number=42)
+
+    with caplog.at_level(logging.INFO, logger="wpsubmit.locks"):
+        assert reg.expire_stale() == 1
+
+    assert len(caplog.records) == 1
+    message = caplog.records[0].getMessage()
+    assert "WP5636" in message
+    assert "alice" in message
+    assert "42" in message  # which pull request was left holding it
+
+
+def test_a_quiet_expire_pass_logs_nothing(session_factory, caplog):
+    # expire_stale() runs on every acquire and every is_locked, so the ordinary case must be
+    # silent or the signal is buried in its own noise.
+    reg = PathwayLockRegistry(session_factory)
+    reg.acquire(5636, "alice")
+    with caplog.at_level(logging.INFO, logger="wpsubmit.locks"):
+        assert reg.expire_stale() == 0
+    assert caplog.records == []
+
+
+def test_lock_age_is_available_for_the_dashboard(session_factory):
+    # An over-long lock is invisible to everyone except the person it blocks, so something has to
+    # be able to ask how old one is.
+    reg = PathwayLockRegistry(session_factory)
+    assert reg.age_of(5636) is None
+    reg.acquire(5636, "alice")
+    age = reg.age_of(5636)
+    assert age is not None and timedelta(0) <= age < timedelta(minutes=1)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from datetime import timedelta
 
 import pytest
 
@@ -118,3 +119,31 @@ def test_concurrent_allocation_no_collisions(session_factory):
     assert len(results) == n_threads
     assert len(set(results)) == n_threads, "duplicate WPID allocated — collision!"
     assert sorted(results) == list(range(floor + 1, floor + 1 + n_threads))
+
+
+def test_a_reclaimed_reservation_says_how_long_it_was_held(session_factory, caplog):
+    """Issue #23, the reservation half. An expiry means an identifier was held for the whole
+    window without landing, which is the evidence the TTL would ever be corrected from."""
+    import logging
+
+    alloc = WpidAllocator(session_factory, lambda: 0, ttl=timedelta(seconds=-1))
+    wpid = alloc.allocate("alice", pr_number=42)
+
+    with caplog.at_level(logging.INFO, logger="wpsubmit.wpid"):
+        assert alloc.expire_stale() == 1
+
+    assert len(caplog.records) == 1
+    message = caplog.records[0].getMessage()
+    assert f"WP{wpid}" in message
+    assert "alice" in message
+    assert "42" in message
+
+
+def test_a_quiet_reclaim_pass_logs_nothing(session_factory, caplog):
+    import logging
+
+    alloc = WpidAllocator(session_factory, lambda: 0)
+    alloc.allocate("alice")
+    with caplog.at_level(logging.INFO, logger="wpsubmit.wpid"):
+        assert alloc.expire_stale() == 0
+    assert caplog.records == []
