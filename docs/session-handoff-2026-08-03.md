@@ -12,7 +12,8 @@ from an audit rather than an incident, and all three are the kind that only bite
 is something other than a sandbox. 437 tests, ruff-clean. No migration; two new settings, both
 left at their defaults on the live service.
 
-**Deployed and verified live** at `sha256:45119303…` (built from `e7b7c8d`). The sweep took the
+**Deployed and verified live** at `sha256:45119303…` (built from `e7b7c8d`; superseded the same
+day by `sha256:376eeee0…` from `cfdd938`, which added the timer work below). The sweep took the
 live cache from 154K to 2.5K on the first dashboard load, and what it kept is the proof it works
 rather than merely runs:
 
@@ -65,15 +66,67 @@ and is how a submitter answers a change request. Not covered at all: `/api/valid
 login to key on and wants a blunt bound at Traefik if it ever needs one. `WPSUBMIT_SUBMIT_RATE_
 LIMIT=0` disables it; see `docs/deployment.md`.
 
-Still open after this round: **#22** (fork-per-submitter — needs a broader OAuth scope and a
-decision, blocking for a real rollout but not for a sandbox) and **#23** (TTL tuning — blocked on
-real submission data, which does not exist until the org install lands).
+## The timers, set from measurement (#23)
+
+#23 was filed saying its key number was unknowable "because it has never succeeded once". It has
+since, so all three timers now have evidence behind them. Live at `sha256:376eeee0…`, 442 tests.
+
+- **`publish_timeout_minutes` 30 → 10.** Label applied to pull request closed was **70s** (PR 5)
+  and **42s** (PR 11) on the two publications that actually worked, with ~10s of queueing. Ten
+  rather than two or three because the failure directions are not symmetric: declaring failure
+  late costs a curator some waiting, but declaring it early puts "never published" on screen under
+  a publication that is merely queued — and the documented response to that is re-applying the
+  `accepted` label, which dispatches a **second** publish run.
+- **`pathway_lock_ttl_days` 3 → 14.** A lock is held for the life of the pull request, so the
+  evidence is the 53 closed pull requests on `wikipathways/wikipathways-database`: median 0.36
+  days, 90th 6.8, 95th 7.8. The 3-day TTL expired under **26% of real reviews**. Being precise
+  about the cost: an expired lock does not hand the pathway over outright, because a fresh
+  check-out re-runs the open-PR scanner — but it downgrades the guarantee from a database
+  constraint to a best-effort GitHub read that **fails open**.
+- **`wpid_reservation_ttl_days` unchanged at 14**, which already covered 96%.
+
+The interim the issue asked for is built too, since these will want correcting again once real
+submitters arrive: every lock expiry and reclaimed reservation logs how long it was held, by whom
+and against which pull request, and `PathwayLockRegistry.age_of` gives the dashboard something to
+show. The quiet pass stays silent, because `expire_stale` runs on every acquire.
+
+> [!warning] Alembic's `fileConfig` disables every logger it does not name
+> Found because those tests passed alone and failed in a full run. `migrations/env.py` called
+> `fileConfig(...)` with alembic's default `disable_existing_loggers=True`, which switched off
+> every `wpsubmit.*` logger for the rest of the suite. Production never noticed — the entrypoint
+> runs `alembic upgrade head` as its own process before uvicorn starts — but the default is wrong
+> for any in-process caller, and it is now `False`. Worth knowing for any project that runs
+> migrations programmatically.
+
+## Where #22 (fork-per-submitter) actually stands
+
+Assessed, not built — it is a design decision. The full write-up is on the issue; the three things
+that change the picture:
+
+- **Fork pull requests are already the norm on the target.** 36 of the 53 closed pull requests on
+  `wikipathways-database` came from contributor forks, against 17 from the repo itself. So this is
+  not a new mode to introduce; the app's bot-pushes-a-branch model is the unusual one there.
+- **The OAuth scope cost is very likely not real.** The app already requests `public_repo`, which
+  GitHub defines as read/write to code on public repositories, and both targets are public. Worth
+  a five-minute empirical check before relying on it.
+- **The real blocker is not in the issue's list.** `find_open_pr` hard-wires
+  `head={base_owner}:{branch}`, so for a fork pull request GitHub returns nothing and **revise
+  breaks entirely** — a curator requesting changes would leave the submitter unable to answer.
+  Two more places treat a branch name as a globally unique identity for an edit, and branch names
+  are only unique within one repo.
+
+The decision underneath it: `WPSUBMIT_SUBMIT_IDENTITY=bot` exists because submitters cannot push
+to the target, and a bot installation token cannot push to a submitter's personal fork either — so
+fork mode forces the user token back into the write path, which is what `bot` mode was introduced
+to avoid.
+
+Still open after this round: **#22** only.
 
 ## Deployed right now
 
 **https://upload.wikipathways.org**, image
-`ghcr.io/marvinm2/wikipathways-submit@sha256:45119303cf3a66c0055199f180c7714c53de8c66e755e00cf6fbd145bb58f897`
-(built from `e7b7c8d`), running on **tgx1**. 437 tests, ruff-clean.
+`ghcr.io/marvinm2/wikipathways-submit@sha256:376eeee07392c889dd873dbba8b7bf3cd3e889efe4d7d4171b68804f29b300dc`
+(built from `cfdd938`), running on **tgx1**. 442 tests, ruff-clean.
 
 The previous digest was
 `sha256:8d8dda3e3e115aab0418245a05b358023222667253d167a0b887332b57a6e658` (from `0db9c1b`), which

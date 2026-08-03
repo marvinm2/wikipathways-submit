@@ -235,9 +235,15 @@ table so it survives a redeploy (#21). **#22** (fork-per-submitter) and **#23** 
 remain open — the first needs a decision and a broader OAuth scope, the second needs real
 submission data that does not exist yet.
 
-437 tests. Live at `sha256:45119303…` (from `e7b7c8d`), deployed and verified the same day: the
-sweep took the live cache from 154K to 2.5K and kept exactly the one render that belongs to a
-non-terminal review.
+Then **#23** closed too: the three timers are set from measurement rather than guesswork (the
+publish workflow has succeeded since the issue was filed, and 53 real pull requests on the content
+repo give the lock and reservation lifetimes), and every expiry now logs how long the thing was
+held so the numbers can be corrected again later. **#22** (fork-per-submitter) is assessed on the
+issue but not built — it is a design decision, and the blocker is not the one the issue names.
+
+442 tests. Live at `sha256:376eeee0…` (from `cfdd938`), deployed and verified the same day: the
+cache sweep took the live volume from 154K to 2.5K and kept exactly the one render that belongs to
+a non-terminal review.
 
 The 07-29 summary below is kept because its details still hold.
 
