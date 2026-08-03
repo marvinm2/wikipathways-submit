@@ -296,6 +296,25 @@ writes both; `content.datanode_annotation` fails on **21 of 30** and `content.re
 rollback target is `sha256:fcbcb8f3…` (from `1c73e4f`) — this round adds no migration, no secret
 and no env var, so a rollback in either direction is a plain digest change.
 
+**Proven on the live service, not only the demo — WP5426, PR #20.** `demo/pathway_revised.gpml`
+was chosen deliberately: it is one of the two repaired fixtures that had *never* been through a
+real pipeline run, so it tests the #26 fix rather than re-testing the file the issue already
+measured. Workflow 1 went green on **all ten jobs**, and the whole lifecycle ran from the
+dashboard: the disabled Approve button named what was outstanding; `references_valid` moved
+N/A → Fail → Pass with DOM and server agreeing at each step (not required / required+blocked with
+the button naming it / required+clear); Approve applied the `accepted` label; workflow 3A
+published; the pull request closed **unmerged**; and the app read WP5426 off the publish marker
+over the webhook. **This is the first approval that started at the dashboard button** — every
+earlier publication applied the label by hand, which is why the 07-29 handoff lists that as
+outstanding. The card afterwards says "No render on file", which is correct: #18 frees the render
+cache at every terminal transition.
+
+> A browser probe that clicks and reads back needs to **wait for the server's answer, not a fixed
+> delay**. A 700ms sleep is fine against localhost and races the live service, and the failure
+> mode is silent and very convincing — every reading is one step stale, so the sequence looks like
+> a real off-by-one bug in the app. Poll until the DOM matches what was clicked, then cross-check
+> against the API.
+
 **Verify a deploy against behaviour, not the digest.** The image carried no
 `org.opencontainers.image.revision` label, so the tag alone proved nothing about which commit it
 held; `docker run --rm --entrypoint python <digest> -c "…"` on the rule table answered it before
@@ -346,8 +365,8 @@ here:
   pull request closed unmerged, and the app moved itself to `published` by reading that marker
   over the webhook. The drafts are *moved* at publication, so a draft page 404ing afterwards is
   correct. Approve was applied as a label directly rather than through the dashboard, because
-  PR #5's checklist legitimately fails — a pass that *starts* at the Approve button is still
-  outstanding.
+  PR #5's checklist legitimately fails — a pass that *starts* at the Approve button was still
+  outstanding. **Closed 2026-08-03: WP5426, PR #20** (see below).
 - **Never merge a pipeline pull request** (2026-07-30, PR #11 on the fork). Merging commits
   `pathways/WP0001/WP0001.gpml` to `main`, and that is the placeholder slot every new submission
   writes to — the app created rather than updated it, so every submission by anyone then failed
