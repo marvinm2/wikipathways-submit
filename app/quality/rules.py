@@ -69,6 +69,14 @@ _GPML_NAMESPACE = "http://pathvisio.org/GPML"
 #: ``on-gpml-change_local.sh``.
 _EMPTY_BP_ID_RE = re.compile(r"<bp:ID\b[^>]*/>|<bp:ID\b[^>]*>\s*</bp:ID>")
 
+#: The root ``<Graphics BoardWidth= BoardHeight= />`` that gives a pathway its canvas. Every GPML
+#: PathVisio writes has one, and a hand-made file easily does not — the app's own renderer copes,
+#: so nothing used to notice.
+#:
+#: Matched on ``BoardWidth`` rather than by walking to the root's ``<Graphics>`` child, because a
+#: ``BoardWidth`` attribute appears nowhere else in the schema, and the cheap test is exact here.
+_BOARD_RE = re.compile(r"<Graphics\b[^>]*\bBoardWidth=")
+
 # ---- the target repository's thresholds ----------------------------------------------------
 #
 # Read out of `1_on_pull_request.yml`'s `testing` job. Named constants rather than inline numbers
@@ -264,6 +272,33 @@ def _check_citation_ids(s: Subject) -> tuple[str, str] | None:
     return (Severity.PASS.value, "No empty citation ids.")
 
 
+def _check_board(s: Subject) -> tuple[str, str] | None:
+    """No root ``<Graphics>`` board, and the repository's metadata step dies on the file.
+
+    Measured rather than reasoned, on 2026-08-03 against `marvinm2/sandbox-wp-db`. Two submissions
+    of the same pathway, differing only in this one element:
+
+    - without it, run 30798868327 — ``metadata`` failed with
+      ``ConverterException: NullPointerException`` out of ``GPML2013aReader.readPathway``;
+    - with it, run 30800359486 — ``metadata`` succeeded.
+
+    ``fail`` rather than ``warn`` because the consequence is total for the submitter: ``metadata``
+    is the job the whole downstream fan-out depends on, so they lose their identifier table, their
+    bibliography and their draft page, and the only trace is a Java stack trace several clicks into
+    the Actions tab. The portal's own renderer draws the file quite happily, which is exactly why
+    nothing caught this before.
+    """
+    if not _BOARD_RE.search(s.text):
+        return (
+            Severity.FAIL.value,
+            "The <Pathway> element has no <Graphics> board (BoardWidth / BoardHeight). The "
+            "repository's metadata step cannot read a pathway without one and fails outright, "
+            "which costs the identifier and reference tables and the draft page. PathVisio always "
+            "writes it; a hand-built GPML often does not.",
+        )
+    return (Severity.PASS.value, "The pathway declares a canvas.")
+
+
 def _check_drawable(s: Subject) -> tuple[str, str] | None:
     """Whether the app's own renderer could draw this file.
 
@@ -441,6 +476,7 @@ RULES: tuple[Rule, ...] = (
     Rule("gpml.name", "Title", _check_name),
     Rule("gpml.organism", "Organism", _check_organism),
     Rule("render.drawable", "Renderable", _check_drawable, needs_text=False),
+    Rule("gpml.board", "Pathway canvas", _check_board),
     Rule("gpml.author", "Authors", _check_author),
     Rule("gpml.citation_ids", "Empty citation IDs", _check_citation_ids),
     Rule("gpml.datanodes", "DataNodes in GPML", _check_datanodes_present, needs_text=False),

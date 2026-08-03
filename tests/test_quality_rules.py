@@ -19,6 +19,7 @@ from app.submit.gpml import InvalidGpml, validate_gpml
 GOOD = """<?xml version="1.0"?>
 <Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Insulin signalling in adipocytes"
          Organism="Homo sapiens" Author="[marvin]">
+  <Graphics BoardWidth="480.0" BoardHeight="440.0" />
   <Comment Source="WikiPathways-description">A reasonably long description of the insulin
   signalling cascade as it runs in adipose tissue, written out so that it clears the fifteen
   word threshold the repository asks every new pathway to meet.</Comment>
@@ -251,3 +252,26 @@ def test_quality_imports_no_app_package_at_module_scope():
                     if alias.name.startswith("app.") and not alias.name.startswith("app.quality"):
                         offenders.append(f"{path.name}: import {alias.name}")
     assert offenders == [], offenders
+
+
+def test_a_pathway_with_no_canvas_fails_because_the_repository_cannot_read_it():
+    """Measured, not reasoned: two runs of the same pathway differing only in this element.
+
+    Without it, run 30798868327's `metadata` job died with a NullPointerException out of
+    GPML2013aReader.readPathway; with it, run 30800359486 succeeded. The portal's own renderer
+    draws either one, which is why nothing caught it before.
+    """
+    finding = inspect_gpml(POOR).by_id("gpml.board")
+    assert finding.severity == Severity.FAIL.value
+    assert "BoardWidth" in finding.detail
+
+    with_board = POOR.replace(
+        'Organism="Homo sapiens">',
+        'Organism="Homo sapiens">\n  <Graphics BoardWidth="480.0" BoardHeight="440.0" />',
+    )
+    assert _severity(inspect_gpml(with_board), "gpml.board") == Severity.PASS.value
+
+
+def test_the_canvas_check_needs_the_document_so_metadata_alone_stays_quiet():
+    """Otherwise every checklist auto-check would report a missing board it never looked for."""
+    assert inspect_metadata(parse_curation_metadata(POOR)).by_id("gpml.board") is None
