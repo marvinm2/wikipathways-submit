@@ -329,13 +329,17 @@ def _check_line_thickness(s: Subject) -> tuple[str, str] | None:
     property either way, and a file in that shape is broken for a superset of these reasons.
     """
     offenders: list[str] = []
-    for match in _LINE_ELEMENT_RE.finditer(s.text):
+    for position, match in enumerate(_LINE_ELEMENT_RE.finditer(s.text), start=1):
         tag, attrs, body = match.group(1), match.group(2), match.group(3)
         graphics = _LINE_GRAPHICS_RE.search(body)
         if graphics is not None and "LineThickness" in graphics.group(1):
             continue
+        # Interactions carry no TextLabel, so a GraphId is the only name one can have — and a
+        # hand-built GPML, which is the kind that has this defect, often sets neither. Falling
+        # back to the position in document order beats repeating "an unnamed Interaction" once
+        # per offender, which is what it said first and told nobody which ones to fix.
         found = _GRAPH_ID_RE.search(attrs)
-        offenders.append(f"{tag} {found.group(1)}" if found else f"an unnamed {tag}")
+        offenders.append(f"{tag} {found.group(1)}" if found else f"{tag} #{position}")
     if offenders:
         n = len(offenders)
         return (
