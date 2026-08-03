@@ -1,9 +1,24 @@
 # sandbox-workflows
 
-Repaired copies of two GitHub Actions workflows belonging to
+Repaired copies of GitHub Actions workflows belonging to
 [`wikipathways/sandbox-wp-db`](https://github.com/wikipathways/sandbox-wp-db). They are
 staged here so they can be reviewed and then opened as a pull request against that
 repository.
+
+> [!important] `pr_label_dispatcher.yml` is the one that blocks fork mode
+> Unlike the others here, this one is **not** a nicety: without it, approving a submission that
+> came from a contributor's fork applies the label and then nothing happens. The dispatcher runs
+> on `pull_request`, and a pull request from a fork gets a **read-only** `GITHUB_TOKEN` whatever
+> the repository's default workflow permissions say — so `gh workflow run`, which needs
+> `actions: write`, cannot dispatch the publish workflow. Changing the trigger to
+> `pull_request_target` fixes it, and is safe here specifically because the job checks out nothing
+> and runs no code from the pull request; the "pwn request" hazard needs both.
+>
+> This has never been observed failing on `marvinm2/sandbox-wp-db` for a good reason: **no fork
+> pull request has ever been labelled there.** All 40 of the dispatcher's recent successes are
+> same-repo pull requests the portal opened itself, and the single failure in that window was also
+> same-repo. The note elsewhere that "the label dispatcher has recovered" was drawn from that
+> population and says nothing about the fork case.
 
 **These files ship into `sandbox-wp-db`, not into this app.** Nothing here runs as part of
 the submission app, and nothing here is imported by `app/`. The directory mirrors the
