@@ -38,6 +38,9 @@ class UpdateResult:
     path: str
     pr_number: int
     pr_url: str
+    #: ``owner/name`` the branch lives on, None meaning the content repo — see
+    #: ``SubmissionResult.head_repo``.
+    head_repo: str | None = None
 
 
 class UpdateService:
@@ -161,6 +164,7 @@ class UpdateService:
             path=path,
             pr_number=pr.number,
             pr_url=pr.html_url,
+            head_repo=pr.head_repo,
         )
 
 

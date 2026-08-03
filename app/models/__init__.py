@@ -109,6 +109,12 @@ class Review(Base):
     #: The PR's head branch. In pipeline mode the branch name carries a timestamp, so it can no
     #: longer be derived from the WPID — a revise has to look it up here.
     head_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: ``owner/name`` of the repository that branch lives on, when it is not the content repo.
+    #: NULL means the content repo, which is every row today — the app pushes the branch there
+    #: itself. It exists because a branch name is unique only within one repository, so the pair
+    #: is the identity of an edit, and storing ``owner:branch`` in ``head_branch`` instead would
+    #: poison the revise path silently (issue #22).
+    head_repo: Mapped[str | None] = mapped_column(String(255), nullable=True)
     #: What the submitter said they changed, and why — the checkbox selections and free text from
     #: the submit form, joined. Stored on the review rather than read back from the render cache
     #: (where ``PreviewService`` also keeps a copy) for two reasons: the cache is deleted at every

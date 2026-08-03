@@ -450,6 +450,7 @@ class CurationService:
         metadata=None,
         before_metadata=None,
         head_branch: str | None = None,
+        head_repo: str | None = None,
         submitter_note: str | None = None,
     ) -> Review:
         """Create the review row for a freshly opened submission PR (idempotent by PR number).
@@ -460,7 +461,9 @@ class CurationService:
 
         ``wpid`` is None for a new pathway in pipeline mode: the id does not exist until the
         target repo assigns one. ``head_branch`` is recorded because the branch name can then no
-        longer be derived from the id, and a revise has to find it again.
+        longer be derived from the id, and a revise has to find it again. ``head_repo`` is the
+        other half of that identity — None for a branch on the content repo, which is every
+        submission the app opens today (issue #22).
 
         ``submitter_note`` is what they said they changed. A blank one on a re-upload leaves the
         stored note alone: the field is optional, so blank means "nothing further to add" rather
@@ -475,6 +478,7 @@ class CurationService:
                     submitter=submitter,
                     kind=kind,
                     head_branch=head_branch,
+                    head_repo=head_repo,
                     submitter_note=(submitter_note or "").strip() or None,
                     checklist=build_checklist(
                         metadata=metadata,

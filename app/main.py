@@ -1027,6 +1027,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             kind="new",
             metadata=after_meta,  # pre-fills the checklist with auto-derived states
             head_branch=result.branch,
+            head_repo=result.head_repo,
             submitter_note=description,
         )
         _label_submission(settings, bot, result.pr_number, kind="new")
@@ -1118,6 +1119,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             metadata=after_meta,
             before_metadata=before_meta,
             head_branch=result.branch,
+            head_repo=result.head_repo,
             submitter_note=description,
         )
         _label_submission(settings, bot, result.pr_number, kind="update")
@@ -1182,6 +1184,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 submitter=submitter,
                 wpid=review.wpid,
                 branch=review.head_branch,
+                head_repo=review.head_repo,
                 author_email=_submitter_email(settings, submitter),
             )
         except InvalidGpml as exc:

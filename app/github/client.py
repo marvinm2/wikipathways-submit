@@ -15,11 +15,28 @@ import httpx
 _GITHUB_API = "https://api.github.com"
 
 
+def _head_repo_of(pull: dict, base_repo: str) -> str | None:
+    """``owner/name`` of a pull request's head, or None when it is the base repo itself.
+
+    GitHub nulls ``head.repo`` once the fork behind a pull request is deleted, which is why the
+    absent case is folded into "same as base" rather than raising: the only thing downstream does
+    with it is scope a branch lookup, and a deleted fork has no branch to look up either way.
+    """
+    head = (pull.get("head") or {}).get("repo") or {}
+    full_name = head.get("full_name")
+    return full_name if full_name and full_name != base_repo else None
+
+
 @dataclass(frozen=True)
 class PullRequest:
     number: int
     html_url: str
     head_branch: str
+    #: ``owner/name`` of the repository the head branch lives on, when that is *not* the base
+    #: repository. None means the head is on the base repo, which is every pull request this app
+    #: opens today. A branch name identifies an edit only within one repository, so anything that
+    #: reads a head branch back — revise above all — has to carry this alongside it (issue #22).
+    head_repo: str | None = None
 
 
 @dataclass(frozen=True)
@@ -116,8 +133,18 @@ class GitHubClient(ABC):
         """
 
     @abstractmethod
-    def find_open_pr(self, repo: str, head_branch: str) -> PullRequest | None:
-        """Return the open PR whose head is ``head_branch``, or None."""
+    def find_open_pr(
+        self, repo: str, head_branch: str, *, head_repo: str | None = None
+    ) -> PullRequest | None:
+        """Return the open PR on ``repo`` whose head is ``head_branch``, or None.
+
+        ``head_repo`` (``owner/name``) is where that branch lives. It defaults to ``repo``,
+        which is every pull request this app opens today. GitHub's ``head`` filter is
+        ``owner:branch``, so a cross-repository pull request — one from a contributor's fork,
+        and 36 of the last 53 on the content repository are exactly that — is invisible to a
+        query that assumes the base owner. Reading None there is not a harmless miss: revise
+        raises ``NoPendingSubmission`` and an update opens a *second* pull request (issue #22).
+        """
 
     @abstractmethod
     def find_open_pr_touching(
@@ -376,13 +403,20 @@ class FakeGitHubClient(GitHubClient):
         self.existing_contents.pop((repo, path), None)
         self.deleted.append((repo, branch, path, message))
 
-    def find_open_pr(self, repo: str, head_branch: str) -> PullRequest | None:
+    def find_open_pr(
+        self, repo: str, head_branch: str, *, head_repo: str | None = None
+    ) -> PullRequest | None:
         self._maybe_fail("find_open_pr")
         for pr in reversed(self.pulls):
             # "open" is part of the contract: the real client filters on state=open. Without
             # this a revise would happily commit onto a branch whose PR the target repo's
             # publish workflow already closed.
-            if pr.head_branch == head_branch and pr.number not in self.closed | self.merged:
+            if pr.number in self.closed | self.merged or pr.head_branch != head_branch:
+                continue
+            # The head repo is half the identity: `submit/WP0001` exists in every fork at once,
+            # so matching on the branch alone would hand a revise somebody else's pull request.
+            # Both sides normalise None to `repo`, so a same-repo caller is unaffected.
+            if (pr.head_repo or repo) == (head_repo or repo):
                 return pr
         return None
 
@@ -393,8 +427,16 @@ class FakeGitHubClient(GitHubClient):
         for pr in reversed(self.pulls[-limit:]):
             if pr.number in self.closed | self.merged:
                 continue
+            # A fork pull request's files live on the fork, and `GET /repos/{base}/pulls/{n}/
+            # files` lists them all the same — so scoping this to the base repo would make every
+            # cross-repository edit invisible to the lock, which is the one writer it most needs
+            # to see.
             for (r, branch, path) in self.files:
-                if r == repo and branch == pr.head_branch and path.startswith(path_prefix):
+                if (
+                    r == (pr.head_repo or repo)
+                    and branch == pr.head_branch
+                    and path.startswith(path_prefix)
+                ):
                     return pr.number
         return None
 
@@ -402,10 +444,15 @@ class FakeGitHubClient(GitHubClient):
         self, repo: str, head: str, base: str, title: str, body: str
     ) -> PullRequest:
         self._maybe_fail("open_pull_request")
+        # GitHub spells a cross-repository head `owner:branch`, naming only the owner — a fork
+        # keeps the base repository's name, which is how the real API resolves it too. Splitting
+        # it here is what lets a test build a fork pull request the way the app would open one.
+        head_owner, _, head_branch = head.rpartition(":")
         pr = PullRequest(
             number=self._next_pr,
             html_url=f"https://github.com/{repo}/pull/{self._next_pr}",
-            head_branch=head,
+            head_branch=head_branch,
+            head_repo=f"{head_owner}/{repo.split('/', 1)[1]}" if head_owner else None,
         )
         self.pull_meta[pr.number] = {"title": title, "body": body, "base": base, "head": head}
         self._next_pr += 1
@@ -678,8 +725,10 @@ class HttpGitHubClient(GitHubClient):
         )
         self._raise_for(resp, f"delete_file({path})")
 
-    def find_open_pr(self, repo: str, head_branch: str) -> PullRequest | None:
-        owner = repo.split("/", 1)[0]
+    def find_open_pr(
+        self, repo: str, head_branch: str, *, head_repo: str | None = None
+    ) -> PullRequest | None:
+        owner = (head_repo or repo).split("/", 1)[0]
         resp = self._client.get(
             f"/repos/{repo}/pulls",
             params={"state": "open", "head": f"{owner}:{head_branch}"},
@@ -690,7 +739,10 @@ class HttpGitHubClient(GitHubClient):
             return None
         data = items[0]
         return PullRequest(
-            number=data["number"], html_url=data["html_url"], head_branch=head_branch
+            number=data["number"],
+            html_url=data["html_url"],
+            head_branch=head_branch,
+            head_repo=_head_repo_of(data, repo),
         )
 
     def find_open_pr_touching(
@@ -706,11 +758,18 @@ class HttpGitHubClient(GitHubClient):
         # A pull request whose head branch is one of ours is one of ours. Skipping them first
         # keeps a submitter's own in-flight edit from reading as a foreign writer, and saves a
         # file listing per skipped pull request.
+        #
+        # "One of ours" requires the head to be on the base repo, because that is where this app
+        # pushes. A branch name is unique only within a repository, so without that condition a
+        # contributor's fork branch that happens to be called `update/WP123` would be skipped as
+        # ours and the lock handed out over their genuine concurrent edit — the exact divergence
+        # the lock exists to prevent (issue #22). Failing the other way merely costs a file
+        # listing and refuses a lock that could have been granted.
         wpid = path_prefix.rstrip("/").rsplit("/", 1)[-1]
         ours = (f"update/{wpid}", f"submit/{wpid}")
         for pull in pulls:
             head = str((pull.get("head") or {}).get("ref", ""))
-            if head.startswith(ours):
+            if head.startswith(ours) and _head_repo_of(pull, repo) is None:
                 continue
             files = self._client.get(
                 f"/repos/{repo}/pulls/{pull['number']}/files", params={"per_page": 100}

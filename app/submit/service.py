@@ -61,6 +61,10 @@ class SubmissionResult:
     path: str
     pr_number: int
     pr_url: str
+    #: ``owner/name`` the branch lives on, None meaning the content repo. Read back off the pull
+    #: request GitHub returned rather than assumed, so the day the app opens a cross-repository
+    #: pull request the review row records where the branch really is (issue #22).
+    head_repo: str | None = None
 
 
 def _utcnow() -> datetime:
@@ -185,6 +189,7 @@ class SubmissionService:
             path=path,
             pr_number=pr.number,
             pr_url=pr.html_url,
+            head_repo=pr.head_repo,
         )
 
     def _pipeline_branch(self, submitter: str, *, suffix: int = 1) -> str:
@@ -264,6 +269,7 @@ class SubmissionService:
             path=path,
             pr_number=pr.number,
             pr_url=pr.html_url,
+            head_repo=pr.head_repo,
         )
 
     def revise_new_pathway(
@@ -273,6 +279,7 @@ class SubmissionService:
         submitter: str,
         wpid: int | None = None,
         branch: str | None = None,
+        head_repo: str | None = None,
         author_email: str | None = None,
     ) -> SubmissionResult:
         """Commit a revised GPML onto an **already-open** new-pathway PR (design: the revise loop).
@@ -285,6 +292,13 @@ class SubmissionService:
         ``branch`` is required in pipeline mode and optional in direct mode: a pipeline branch
         carries a timestamp, so it cannot be derived from anything and has to be read off the
         review row. Passing it in either mode is fine and is what the routes do.
+
+        ``head_repo`` (``owner/name``) is the repository that branch lives on, None meaning the
+        content repository — which is every submission the app opens today, since it pushes the
+        branch there itself. Every branch-side read and write below is scoped to it rather than
+        to the base repo, so a pull request from a contributor's fork revises onto the fork where
+        its branch actually is (issue #22). The base repo is still what gets *queried* for the
+        pull request; only the head moves.
         """
         if branch is None:
             if wpid is None:
@@ -301,21 +315,22 @@ class SubmissionService:
 
         validate_gpml(gpml)
 
+        branch_repo = head_repo or self._repo
         try:
-            self._github.get_branch_sha(self._repo, branch)
+            self._github.get_branch_sha(branch_repo, branch)
         except GitHubError as exc:
             raise NoPendingSubmission(
                 f"no open submission branch for {wpid_str} to revise"
             ) from exc
-        pr = self._github.find_open_pr(self._repo, branch)
+        pr = self._github.find_open_pr(self._repo, branch, head_repo=head_repo)
         if pr is None:
             raise NoPendingSubmission(f"no open submission PR for {wpid_str} to revise")
 
         # Keep whatever id the submission already carries; a revise can't renumber.
         gpml_out = assign_wpid_str(gpml, wpid_str, author=submitter)
-        branch_file_sha = self._github.get_file_sha(self._repo, branch, path)
+        branch_file_sha = self._github.get_file_sha(branch_repo, branch, path)
         self._github.put_file(
-            self._repo,
+            branch_repo,
             branch,
             path,
             gpml_out,
@@ -331,6 +346,7 @@ class SubmissionService:
             path=path,
             pr_number=pr.number,
             pr_url=pr.html_url,
+            head_repo=pr.head_repo,
         )
 
 
