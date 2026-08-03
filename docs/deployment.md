@@ -183,6 +183,28 @@ docker service update \
 It is free text rather than something derived from `WPSUBMIT_PUBLISH_MODE`, because whether a
 target *can* publish depends on credentials held by other repositories that this app cannot see.
 
+### `WPSUBMIT_SUBMIT_RATE_LIMIT` — how many pull requests one account may open
+
+Ten per `WPSUBMIT_SUBMIT_RATE_WINDOW_MINUTES` (default 60) by default; `0` disables it. Both
+defaults are fine for a sandbox and neither needs setting to deploy.
+
+The bound exists because the cost of getting it wrong is paid by the content repository rather
+than by this app: branches, a notification to every watcher, and one run of a full generation
+pipeline per submission, all cleaned up by hand by its maintainers. It does not take malice — a
+retry loop in a script, or a submitter double-clicking through a slow response, produces the same
+thing more slowly.
+
+Counted out of the `review` table rather than an in-process bucket, so it survives a redeploy,
+and keyed on the GitHub login rather than the address, since these endpoints are authenticated
+and one person behind a shared address is not several submitters. Raise it if a real curation
+session ever hits it; ten an hour is far above the audit's observed rate of 51 pull requests in
+three months across everybody.
+
+Two things it deliberately does not cover. Re-uploading onto a pull request that already exists
+is exempt, because it opens nothing and is how a submitter answers a change request. And
+`/api/validate` has no login to key on, so it wants a blunt per-address bound at Traefik if it
+ever needs one — it does parse-and-render work without reaching GitHub at all.
+
 Verify from inside the overlay network, since nothing is routed yet:
 
 ```bash

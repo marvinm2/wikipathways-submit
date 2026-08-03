@@ -71,6 +71,14 @@ class Settings(BaseSettings):
     wpid_reservation_ttl_days: int = 14
     pathway_lock_ttl_days: int = 3
 
+    # How many pull requests one logged-in account may open on the content repo in a window
+    # (issue #21). The blast radius is somebody else's repository — branches, notifications to
+    # every watcher, and a full generation pipeline run per pull request — and cleaning up lands
+    # on its maintainers. Ten an hour is far above any real curation session and stops a retry
+    # loop or a double-click storm dead. Set the limit to 0 to disable.
+    submit_rate_limit: int = 10
+    submit_rate_window_minutes: int = 60
+
     # Curator whitelist (~20 people, design §4.5). Only these may approve-that-merges.
     # Preferred: resolve from a GitHub Team, WPSUBMIT_CURATOR_TEAM='org/team-slug' (issue #9) —
     # curator management then happens on GitHub, not in a redeploy (needs the App's org

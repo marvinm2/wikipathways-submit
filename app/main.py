@@ -47,6 +47,7 @@ from app.models import Base, ReviewStatus
 from app.pipeline import DraftsReader
 from app.preview import PreviewService
 from app.preview.metadata import parse_curation_metadata
+from app.ratelimit import RateLimited, SubmissionRateLimiter
 from app.review.service import (
     TESTING_RULE_IDS,
     ChecklistIncomplete,
@@ -395,6 +396,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             if settings.is_pipeline_mode and settings.drafts_repo
             else None
         )
+        # How many pull requests one account may open on the content repo in a window (issue
+        # #21). Counted out of the review table rather than an in-memory bucket, which would
+        # reset on every redeploy.
+        app.state.rate_limiter = SubmissionRateLimiter(
+            session_factory,
+            limit=settings.submit_rate_limit,
+            window=timedelta(minutes=settings.submit_rate_window_minutes),
+        )
         app.state.allocator = WpidAllocator(
             session_factory,
             _make_floor_provider(settings, bot_app),
@@ -475,6 +484,22 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             drafts=st.drafts,
             previews=st.preview,
         )
+
+    def _check_rate_limit(request: Request, submitter: str) -> None:
+        """Refuse a submitter who is opening pull requests faster than anyone means to (#21).
+
+        Called only where a *new* pull request would be created. Re-uploading to a pull request
+        that already exists is not the thing being bounded — it opens nothing, notifies nobody
+        new, and refusing it would punish the ordinary way a submitter answers a change request.
+        """
+        try:
+            request.app.state.rate_limiter.check(submitter)
+        except RateLimited as exc:
+            raise HTTPException(
+                status_code=429,
+                detail=str(exc),
+                headers={"Retry-After": str(exc.retry_after)},
+            ) from exc
 
     def _fetch_base_gpml(github: GitHubClient, path: str) -> bytes | None:
         """The current base-``main`` version of ``path``, or None (best-effort — used as the
@@ -959,6 +984,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         github: GitHubClient = Depends(get_github_client),
         bot: GitHubClient | None = Depends(get_bot_optional),
     ) -> SubmitResponse:
+        # Before the upload is read, let alone parsed or rendered: a refusal should cost this
+        # process as little as it costs the content repo.
+        _check_rate_limit(request, submitter)
         content = await _read_upload(file, settings.max_upload_bytes)
         service = SubmissionService(
             request.app.state.allocator,
@@ -1034,6 +1062,10 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                     f"(#{existing.pr_number}); wait for it to finish before editing again."
                 ),
             )
+        if existing is None:
+            # Only when this would open one. With a pull request already on the pathway the
+            # update re-uploads onto it, which is the answer-a-change-request path.
+            _check_rate_limit(request, submitter)
         content = await _read_upload(file, settings.max_upload_bytes)
         writer = _writer_client(settings, github, bot)
         service = UpdateService(
