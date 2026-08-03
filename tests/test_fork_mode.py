@@ -342,3 +342,38 @@ def test_revise_writes_with_whoever_can_reach_the_branch(identity, head_repo, ex
 
     chosen = _writer_client_for_revise(settings, user, bot, head_repo)
     assert (chosen is user) is expect_user
+
+
+# ---- logging ------------------------------------------------------------------------------
+
+
+def test_the_app_loggers_actually_have_somewhere_to_write(caplog):
+    """No application log line had ever reached production before 2026-08-03.
+
+    Uvicorn configures only its own loggers and nothing here called ``basicConfig``, so INFO
+    records were dropped entirely — including the lock/reservation hold times added in the
+    previous round specifically so the TTLs could be corrected against real behaviour, and now
+    the fork-mode fallback's explanation of why it fell back.
+    """
+    import logging as _logging
+
+    from app.main import _configure_logging
+
+    _configure_logging(Settings(session_secret="x" * 32))
+    logger = _logging.getLogger("wpsubmit.submit.targets")
+    assert logger.getEffectiveLevel() <= _logging.INFO
+    assert _logging.getLogger("wpsubmit").handlers, "no handler: INFO records go nowhere"
+
+
+def test_configuring_logging_twice_does_not_stack_handlers():
+    """Every test that builds an app calls this, and so does every worker reload."""
+    import logging as _logging
+
+    from app.main import _configure_logging
+
+    settings = Settings(session_secret="x" * 32)
+    _configure_logging(settings)
+    before = len(_logging.getLogger("wpsubmit").handlers)
+    _configure_logging(settings)
+    _configure_logging(settings)
+    assert len(_logging.getLogger("wpsubmit").handlers) == before

@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     # reconcile pass. Reviews waiting on the repo's pipeline accumulate, so this matters.
     reconcile_min_interval_seconds: int = 30
 
+    # Level for the `wpsubmit.*` loggers. INFO because the things logged at it are the ones that
+    # explain a quiet decision after the fact — how long an expired lock was held, why a
+    # submission fell back to the bot — and none of them fire per request.
+    log_level: str = "INFO"
+
     # TTLs for the transactional registry (design §4.2/§4.3).
     #
     # Both were guesses until 2026-08-03, when the 53 closed pull requests on

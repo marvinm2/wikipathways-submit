@@ -373,8 +373,39 @@ def _make_floor_provider(settings: Settings, bot_app: GitHubApp | None) -> Calla
     return lambda: settings.dev_wpid_floor
 
 
+def _configure_logging(settings: Settings) -> None:
+    """Give the ``wpsubmit`` loggers somewhere to write. Without this they write nowhere.
+
+    Found on 2026-08-03 by looking for one expected line after a deploy and finding that **no
+    application log line had ever appeared in production**. Uvicorn configures only its own
+    ``uvicorn*`` loggers, and nothing here ever called ``basicConfig``, so the root logger had no
+    handler at all. Python's ``lastResort`` fallback then emits ``WARNING`` and above — bare, with
+    no logger name or timestamp — and silently drops everything below it.
+
+    The cost was not the missing line that started this. ``expire_stale`` and the WPID reclaim log
+    how long a lock or reservation was actually held, at INFO, and that was built in the previous
+    round precisely so the TTLs chosen from other people's data could be corrected against this
+    deployment's own. It had been collecting nothing. Anything that decides quietly and logs why —
+    the fork-mode fallback is the newest — has the same dependency.
+
+    Attached to the ``wpsubmit`` parent rather than the root, so this says nothing about how
+    anyone else's libraries log, and guarded so repeated ``build_app`` calls (every test that
+    builds one) do not stack handlers.
+    """
+    logger = logging.getLogger("wpsubmit")
+    logger.setLevel(settings.log_level.upper())
+    if not any(getattr(h, "_wpsubmit", False) for h in logger.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)-8s %(name)s: %(message)s"))
+        handler._wpsubmit = True  # type: ignore[attr-defined]
+        logger.addHandler(handler)
+    # Uvicorn's access log already carries the request line; propagating would double every record.
+    logger.propagate = False
+
+
 def build_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
+    _configure_logging(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
