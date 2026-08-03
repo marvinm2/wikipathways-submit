@@ -29,6 +29,7 @@ from app.submit.gpml import (
     layout_paths,
     validate_gpml,
 )
+from app.submit.targets import WriteTarget, same_repo_target
 from app.wpid import WpidAllocator, format_wpid
 
 #: How many times to step past a WPID whose ``submit/WP<id>`` branch already exists.
@@ -81,14 +82,26 @@ class SubmissionService:
         base_branch: str = "main",
         mode: SubmissionMode = SubmissionMode.DIRECT,
         clock: Callable[[], datetime] = _utcnow,
+        target: WriteTarget | None = None,
     ) -> None:
         self._allocator = allocator
-        self._github = github
         self._repo = repo
         self._base_branch = base_branch
         self._mode = mode
         # Injected so the timestamped branch name is deterministic under test.
         self._clock = clock
+        # Where the branch goes. Defaulting to "the same repository the pull request is opened
+        # on" keeps every existing caller and test unchanged; fork mode is the only arrangement
+        # where the two differ (issue #22, ``app.submit.targets``).
+        self._target = target or same_repo_target(github, repo)
+        # Taken from the target rather than the argument, so there is exactly one answer to
+        # "who is writing" — passing a client and a target that disagreed would be silent.
+        self._github = self._target.client
+
+    @property
+    def _branch_repo(self) -> str:
+        """Where branches and file writes go — the fork in fork mode, otherwise the content repo."""
+        return self._target.branch_repo
 
     def submit_new_pathway(
         self,
@@ -141,8 +154,10 @@ class SubmissionService:
 
                 # 4. Branch off the latest base.
                 try:
+                    # Base from the content repo, branch on the branch repo — see the note in
+                    # ``_submit_pipeline`` for why those must not be the same read in fork mode.
                     base_sha = self._github.get_branch_sha(self._repo, self._base_branch)
-                    self._github.create_branch(self._repo, branch, base_sha)
+                    self._github.create_branch(self._branch_repo, branch, base_sha)
                 except BranchAlreadyExists:
                     collided.append(wpid)
                     if attempt == _BRANCH_COLLISION_RETRIES - 1:
@@ -156,7 +171,7 @@ class SubmissionService:
             try:
                 # 5. Commit the file, 6. open the PR.
                 self._github.put_file(
-                    self._repo,
+                    self._branch_repo,
                     branch,
                     path,
                     gpml_out,
@@ -166,7 +181,7 @@ class SubmissionService:
                 )
                 pr: PullRequest = self._github.open_pull_request(
                     self._repo,
-                    head=branch,
+                    head=self._target.head(branch),
                     base=self._base_branch,
                     title=f"New pathway {wpid_str}: {meta.name}",
                     body=_pr_body(wpid_str, meta.name, meta.organism, submitter, description),
@@ -227,11 +242,15 @@ class SubmissionService:
         gpml_out = assign_wpid_str(gpml, PLACEHOLDER_WPID_STR, author=submitter)
         path = PLACEHOLDER_GPML_PATH
 
+        # Read the base from the **content repo**, never from the branch repo. In fork mode those
+        # differ, and a submitter's fork can be a year stale — cutting from its default branch
+        # would silently revert everything merged upstream since. A fork shares its parent's
+        # object database, so a ref created there at the upstream head resolves fine.
         base_sha = self._github.get_branch_sha(self._repo, self._base_branch)
         for attempt in range(1, _BRANCH_COLLISION_RETRIES + 1):
             branch = self._pipeline_branch(submitter, suffix=attempt)
             try:
-                self._github.create_branch(self._repo, branch, base_sha)
+                self._github.create_branch(self._branch_repo, branch, base_sha)
                 break
             except BranchAlreadyExists:
                 # Same person, same second. Rare, and cheap to step past.
@@ -244,9 +263,9 @@ class SubmissionService:
         # a pipeline PR merged by hand leaves the placeholder sitting on `main`, and from then on
         # a create-only write 422s for everyone. Overwriting is the right resolution: the
         # placeholder is a slot, not a pathway, and the repo still reads "new" off the basename.
-        existing_sha = self._github.get_file_sha(self._repo, branch, path)
+        existing_sha = self._github.get_file_sha(self._branch_repo, branch, path)
         self._github.put_file(
-            self._repo,
+            self._branch_repo,
             branch,
             path,
             gpml_out,
@@ -257,7 +276,7 @@ class SubmissionService:
         )
         pr: PullRequest = self._github.open_pull_request(
             self._repo,
-            head=branch,
+            head=self._target.head(branch),
             base=self._base_branch,
             title=f"[NEW] {meta.name or 'Untitled pathway'} — submitted by @{submitter}",
             body=_pipeline_pr_body(meta.name, meta.organism, submitter, description),

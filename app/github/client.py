@@ -7,12 +7,20 @@ interface this small makes the fake trivial and keeps the real client honest.
 from __future__ import annotations
 
 import base64
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 import httpx
 
 _GITHUB_API = "https://api.github.com"
+
+#: How long ``ensure_fork`` waits for an asynchronously-created fork to answer. GitHub documents
+#: forking as taking up to five minutes; waiting that long inside a submission request would be
+#: worse than falling back to the bot, so this covers the ordinary case (a fork is usually ready
+#: in a second or two) and hands the slow tail to the fallback.
+_FORK_READY_ATTEMPTS = 15
+_FORK_READY_DELAY_SECONDS = 1.0
 
 
 def _head_repo_of(pull: dict, base_repo: str) -> str | None:
@@ -88,6 +96,26 @@ class BranchAlreadyExists(GitHubError):
 
 
 class GitHubClient(ABC):
+    @abstractmethod
+    def ensure_fork(self, repo: str) -> str:
+        """Return ``owner/name`` of the acting user's fork of ``repo``, creating it if absent.
+
+        This is how a submitter with no push access contributes: fork, push a branch there, and
+        open a cross-repository pull request (issue #22). It needs no scope the app does not
+        already hold — GitHub defines ``public_repo``, which the app requests today, as read/write
+        to code on public repositories, and that covers creating a fork of one and pushing to it.
+
+        Must be **idempotent**: called on every submission, and a submitter who has contributed
+        before already has the fork. Creation is asynchronous on GitHub's side, so an
+        implementation has to wait for the repository to become readable rather than assume the
+        response means ready.
+
+        Raises ``GitHubError`` if no fork can be had. That is a routine outcome, not an
+        exceptional one — an organisation can forbid forking, and a token can be revoked between
+        login and submission — so the caller falls back to the bot identity rather than failing
+        the submission (``app.submit.targets``).
+        """
+
     @abstractmethod
     def get_branch_sha(self, repo: str, branch: str) -> str:
         """Return the head commit SHA of ``branch`` in ``owner/repo``."""
@@ -286,7 +314,13 @@ class FakeGitHubClient(GitHubClient):
         fail_on: set[str] | None = None,
         team_members: dict[str, list[str]] | None = None,
         previews: dict[int, dict] | None = None,
+        login: str = "submitter",
     ) -> None:
+        #: Who this client is acting as, which is what ``ensure_fork`` names the fork after.
+        self.login = login
+        #: [(repo, fork)] in call order, so a test can prove the fork was ensured once per
+        #: submission and that a second submission reused it rather than asking again.
+        self.forks_created: list[tuple[str, str]] = []
         # {(repo, branch): sha}
         self.branches: dict[tuple[str, str], str] = {}
         for key, sha in (default_branches or {}).items():
@@ -339,6 +373,25 @@ class FakeGitHubClient(GitHubClient):
     def _maybe_fail(self, op: str) -> None:
         if op in self.fail_on:
             raise GitHubError(f"simulated failure in {op}")
+
+    def ensure_fork(self, repo: str) -> str:
+        self._maybe_fail("ensure_fork")
+        fork = f"{self.login}/{repo.split('/', 1)[1]}"
+        if (repo, fork) not in self.forks_created:
+            self.forks_created.append((repo, fork))
+        # A fork shares its parent's object database, so every commit reachable from the parent
+        # is reachable from the fork. Mirroring the base branch is what makes a branch cut from
+        # the *upstream* head resolvable here, which is the whole point of doing it that way.
+        for (r, branch), sha in list(self.branches.items()):
+            if r == repo:
+                self.branches.setdefault((fork, branch), sha)
+        for (r, path), sha in list(self.existing_files.items()):
+            if r == repo:
+                self.existing_files.setdefault((fork, path), sha)
+        for (r, path), content in list(self.existing_contents.items()):
+            if r == repo:
+                self.existing_contents.setdefault((fork, path), content)
+        return fork
 
     def get_branch_sha(self, repo: str, branch: str) -> str:
         self._maybe_fail("get_branch_sha")
@@ -658,6 +711,36 @@ class HttpGitHubClient(GitHubClient):
     def _raise_for(self, resp: httpx.Response, what: str) -> None:
         if resp.is_error:
             raise GitHubError(f"{what} failed: {resp.status_code} {resp.text}")
+
+    def ensure_fork(self, repo: str) -> str:
+        """POST the fork, then wait until it is actually readable.
+
+        ``POST /repos/{repo}/forks`` is idempotent in the way that matters here: where the fork
+        already exists GitHub returns it rather than erroring, so there is no separate "does it
+        exist" round trip and no race between checking and creating. The response carries
+        ``full_name``, which is read rather than assembled — a submitter who already has a
+        repository of that name gets a fork named something else, and guessing would send every
+        subsequent write to the wrong repository.
+
+        **202 means accepted, not ready.** Forking is asynchronous, and GitHub's own documentation
+        says to allow up to five minutes. Creating a branch in a repository that does not yet
+        answer is the failure this loop exists to prevent; it is also why the first submission by
+        a new contributor is slower than their second.
+        """
+        resp = self._client.post(f"/repos/{repo}/forks")
+        self._raise_for(resp, f"ensure_fork({repo})")
+        full_name = resp.json().get("full_name")
+        if not full_name:
+            raise GitHubError(f"ensure_fork({repo}) returned no full_name")
+        for _ in range(_FORK_READY_ATTEMPTS):
+            probe = self._client.get(f"/repos/{full_name}")
+            if probe.status_code == 200:
+                return full_name
+            time.sleep(_FORK_READY_DELAY_SECONDS)
+        raise GitHubError(
+            f"ensure_fork({repo}) created {full_name} but it did not become readable within "
+            f"{_FORK_READY_ATTEMPTS * _FORK_READY_DELAY_SECONDS:.0f}s"
+        )
 
     def get_branch_sha(self, repo: str, branch: str) -> str:
         resp = self._client.get(f"/repos/{repo}/git/ref/heads/{branch}")

@@ -73,6 +73,7 @@ from app.submit import (
 )
 from app.submit.gpml import PLACEHOLDER_GPML_PATH
 from app.submit.service import SubmissionMode
+from app.submit.targets import BotIdentityUnavailable, WriteTarget, resolve_write_target
 from app.update import PathwayNotFound, UpdateService
 from app.wpid import WpidAllocator
 from app.wpid.github_floor import github_wpid_floor
@@ -240,27 +241,54 @@ def get_bot_client(request: Request) -> GitHubClient:
     return client
 
 
-def _writer_client(
-    settings: Settings, user_client: GitHubClient, bot: GitHubClient | None
-) -> GitHubClient:
-    """Whose credentials push the branch and open the PR.
+def _write_target(
+    settings: Settings, user_client: GitHubClient, bot: GitHubClient | None, submitter: str
+) -> WriteTarget:
+    """Whose credentials push the branch, and to which repository.
 
-    On a shared target repo an ordinary submitter has no push access, so the bot has to do it;
-    authorship survives because the commit carries the submitter as its git author. Where the
-    submitter *can* push (a fork, the demo), their own token is better — the PR is then genuinely
-    theirs.
+    On a shared target repo an ordinary submitter has no push access, so either the bot pushes
+    for them (``bot``) or they push to their own fork and the pull request is cross-repository
+    (``fork``). Where the submitter can push to the content repo directly — their own fork as
+    the target, the demo — their own token against it is simplest.
+
+    ``fork`` resolves the fork here, before the submission starts, so a failure falls back to the
+    bot with nothing written. ``app.submit.targets`` has the reasoning for that boundary.
     """
-    if settings.submit_identity != "bot":
-        return user_client
-    if bot is None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "submit_identity=bot, but the GitHub App (bot) identity is not configured. "
-                "Submitters cannot push to the target repo without it."
-            ),
+    try:
+        return resolve_write_target(
+            identity=settings.submit_identity,
+            user_client=user_client,
+            bot_client=bot,
+            content_repo=settings.content_repo,
+            submitter=submitter,
         )
-    return bot
+    except BotIdentityUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _writer_client_for_revise(
+    settings: Settings,
+    user_client: GitHubClient,
+    bot: GitHubClient | None,
+    head_repo: str | None,
+) -> GitHubClient:
+    """Who writes onto a branch that already exists — decided by *where that branch is*.
+
+    Not by the configured identity, which is about opening submissions and can have changed since
+    this one was opened. The rule that matters: **a GitHub App installation token cannot push to a
+    submitter's personal fork**, because the App is not installed there. So a cross-repository
+    submission has to be revised with the submitter's own token, whatever `submit_identity` says
+    — including when it says `bot`, and including a submission that fell back to the bot and a
+    later one that did not.
+
+    With the branch on the content repo the old rule stands: the bot pushes wherever the
+    submitter cannot.
+    """
+    if head_repo is not None:
+        return user_client
+    if settings.submit_identity in ("bot", "fork") and bot is not None:
+        return bot
+    return user_client
 
 
 def _submitter_email(settings: Settings, submitter: str) -> str:
@@ -988,12 +1016,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         # process as little as it costs the content repo.
         _check_rate_limit(request, submitter)
         content = await _read_upload(file, settings.max_upload_bytes)
+        target = _write_target(settings, github, bot, submitter)
         service = SubmissionService(
             request.app.state.allocator,
-            _writer_client(settings, github, bot),
+            target.client,
             repo=settings.content_repo,
             base_branch=settings.default_branch,
             mode=SubmissionMode(settings.publish_mode),
+            target=target,
         )
         try:
             result = service.submit_new_pathway(
@@ -1068,12 +1098,14 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             # update re-uploads onto it, which is the answer-a-change-request path.
             _check_rate_limit(request, submitter)
         content = await _read_upload(file, settings.max_upload_bytes)
-        writer = _writer_client(settings, github, bot)
+        target = _write_target(settings, github, bot, submitter)
+        writer = target.client
         service = UpdateService(
             request.app.state.locks,
             writer,
             repo=settings.content_repo,
             base_branch=settings.default_branch,
+            target=target,
         )
         try:
             # Off the event loop. Checking out a pathway scans the target repo's open pull
@@ -1171,9 +1203,12 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=403, detail="only the submitter or a curator can revise this submission"
             )
+        # Revise writes onto a branch that already exists, wherever it is: the review row
+        # records that in `head_repo` and it is passed below. Re-resolving a fork here would be
+        # both redundant and wrong for a pull request opened under a different identity.
         service = SubmissionService(
             request.app.state.allocator,
-            _writer_client(settings, github, bot),
+            _writer_client_for_revise(settings, github, bot, review.head_repo),
             repo=settings.content_repo,
             base_branch=settings.default_branch,
             mode=SubmissionMode(settings.publish_mode),

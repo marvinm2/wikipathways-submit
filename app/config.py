@@ -70,10 +70,16 @@ class Settings(BaseSettings):
     # same window. Safe because rejection has no side effects worth waiting for.
     close_rejected_after_timeout: bool = True
 
-    # Who pushes the submission branch. "user" = the submitter's own OAuth token, which is the
-    # historical behaviour and only works where they have push access (a fork, the demo).
-    # "bot" = the GitHub App installation, with the submitter as git commit author — required on
-    # a shared repo like sandbox-wp-db, where an ordinary submitter has no push rights.
+    # Who pushes the submission branch, and where to. See ``app.submit.targets``.
+    #   "user" — the submitter's own OAuth token, straight at the content repo. Only works where
+    #            they have push access (their own fork, the demo). The historical default.
+    #   "bot"  — the GitHub App installation pushes, with the submitter as git commit author.
+    #            Works anywhere, but the *pull request* belongs to the bot: it is who GitHub
+    #            notifies, who can edit the description and who can close it, and every
+    #            submission then appears to come from one account.
+    #   "fork" — the submitter's own fork holds the branch and the pull request is
+    #            cross-repository, so it is genuinely theirs. Needs no scope the app does not
+    #            already request. Falls back to "bot" if the fork cannot be had (issue #22).
     submit_identity: str = "user"
     noreply_email_domain: str = "users.noreply.github.com"
 
@@ -221,11 +227,12 @@ class Settings(BaseSettings):
                     self.preview_workflow_file,
                 )
                 self.require_preview_check = False
-            if self.submit_identity != "bot":
+            if self.submit_identity not in ("bot", "fork"):
                 logging.getLogger("wpsubmit.config").warning(
                     "publish_mode=pipeline with submit_identity=%s: submissions are pushed with "
-                    "the submitter's own token, which only works where they have write access "
-                    "to %s. Set WPSUBMIT_SUBMIT_IDENTITY=bot on a shared repository.",
+                    "the submitter's own token straight at %s, which only works where they have "
+                    "write access to it. Set WPSUBMIT_SUBMIT_IDENTITY=fork (the pull request is "
+                    "then the submitter's own) or =bot on a shared repository.",
                     self.submit_identity,
                     self.content_repo,
                 )

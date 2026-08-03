@@ -205,6 +205,47 @@ is exempt, because it opens nothing and is how a submitter answers a change requ
 `/api/validate` has no login to key on, so it wants a blunt per-address bound at Traefik if it
 ever needs one — it does parse-and-render work without reaching GitHub at all.
 
+### `WPSUBMIT_SUBMIT_IDENTITY` — whose pull request it is
+
+Three values, differing in one thing: which repository holds the submission branch.
+
+| value | branch lives on | the pull request belongs to |
+|---|---|---|
+| `user` (default) | the content repo, pushed with the submitter's token | the submitter — but only works where they have push access |
+| `bot` | the content repo, pushed by the GitHub App | **the bot** |
+| `fork` | the submitter's own fork | the submitter |
+
+`bot` is what a shared content repository forced before fork mode existed: an ordinary
+contributor has no push access, so the App pushes for them. Authorship survives on the *commit*,
+but the pull request is the bot's — it is who GitHub notifies, who can edit the description, who
+can close it, and every submission then appears to come from one account. That is the
+contribution history the audit behind this project was partly trying to un-flatten.
+
+`fork` is the ordinary way to contribute to a repository you cannot write to, and on the content
+repo it is already the norm: 36 of the last 53 closed pull requests there came from contributor
+forks. **It needs no scope the app does not already request** — GitHub defines `public_repo`,
+which `OAUTH_SCOPE` has always included, as read/write to code on public repositories, and that
+covers creating a fork of one and pushing to it. Submitters see no new consent screen.
+
+Three behaviours worth knowing before turning it on:
+
+- **It falls back to `bot`, before writing anything.** Forking can fail for reasons that have
+  nothing to do with the submitter — an organisation that forbids it, a token revoked between
+  login and submission, GitHub being slow to create the repository. The fork is resolved before
+  the first write, so falling back costs nothing and the submission proceeds as it does today.
+  A failure *after* writing has begun is not retried against a different repository; see
+  `app/submit/targets.py` for why that boundary is where it is.
+- **The owner of the content repo never forks it.** GitHub refuses to fork a repository into the
+  account that owns it, and that account has push access anyway. This matters on the current
+  deployment, where the target is `marvinm2/sandbox-wp-db` and `marvinm2` is who tests it.
+- **A revise always uses the submitter's own token when the branch is on a fork**, whatever this
+  setting says, because a GitHub App installation token cannot push to a personal fork — the App
+  is not installed there.
+
+Switching between values is safe and needs no migration: `Review.head_repo` records where each
+submission's branch actually went, so pull requests opened under one setting keep working after
+a change to another.
+
 Verify from inside the overlay network, since nothing is routed yet:
 
 ```bash

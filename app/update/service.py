@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from app.github import BranchAlreadyExists, GitHubClient, PullRequest
 from app.locks import PathwayLockRegistry
 from app.submit.gpml import assign_wpid, layout_paths, validate_gpml
+from app.submit.targets import WriteTarget, same_repo_target
 from app.wpid import format_wpid
 
 #: How many leftover ``update/WP<id>-<n>`` branches to step past before giving up.
@@ -51,11 +52,24 @@ class UpdateService:
         *,
         repo: str,
         base_branch: str = "main",
+        target: WriteTarget | None = None,
     ) -> None:
         self._locks = locks
-        self._github = github
         self._repo = repo
         self._base_branch = base_branch
+        # See ``app.submit.targets``. In every mode but fork the branch repo *is* the content
+        # repo, so the two names below are the same string and nothing changes.
+        self._target = target or same_repo_target(github, repo)
+        self._github = self._target.client
+
+    @property
+    def _branch_repo(self) -> str:
+        return self._target.branch_repo
+
+    @property
+    def _head_repo(self) -> str | None:
+        """What ``find_open_pr`` must be told, so a fork branch is not searched for on the base."""
+        return self._target.head_repo
 
     def _fresh_branch(self, wpid_str: str, base_sha: str) -> str:
         """A new ``update/WP<id>-<n>`` cut from the current base, stepping past leftovers.
@@ -67,7 +81,7 @@ class UpdateService:
         for suffix in range(2, 2 + _STALE_BRANCH_RETRIES):
             candidate = f"update/{wpid_str}-{suffix}"
             try:
-                self._github.create_branch(self._repo, candidate, base_sha)
+                self._github.create_branch(self._branch_repo, candidate, base_sha)
                 return candidate
             except BranchAlreadyExists:
                 # Same rule as for the unsuffixed branch: if this one still has an open pull
@@ -75,7 +89,9 @@ class UpdateService:
                 # open a second concurrent PR for one pathway — the divergence the check-out
                 # lock exists to prevent, and which the lock cannot catch because the same
                 # person holds it.
-                if self._github.find_open_pr(self._repo, candidate) is not None:
+                if self._github.find_open_pr(
+                    self._repo, candidate, head_repo=self._head_repo
+                ) is not None:
                     return candidate
                 continue
         raise BranchAlreadyExists(
@@ -114,7 +130,7 @@ class UpdateService:
             branch = f"update/{wpid_str}"
             base_sha = self._github.get_branch_sha(self._repo, self._base_branch)
             try:
-                self._github.create_branch(self._repo, branch, base_sha)
+                self._github.create_branch(self._branch_repo, branch, base_sha)
             except BranchAlreadyExists:
                 # Re-uploading while still checked out: reuse the existing update branch/PR
                 # instead of opening a second PR for the same pathway.
@@ -125,13 +141,15 @@ class UpdateService:
                 # outlives every edit. Reusing it for the *next* edit would cut the diff against
                 # a base that could be months old — the opposite of the branch-off-latest
                 # guarantee this flow exists to provide, and of what the PR body claims.
-                if self._github.find_open_pr(self._repo, branch) is None:
+                if self._github.find_open_pr(
+                    self._repo, branch, head_repo=self._head_repo
+                ) is None:
                     branch = self._fresh_branch(wpid_str, base_sha)
 
             # SHA of the file as it currently is on the update branch (falls back to base).
-            branch_file_sha = self._github.get_file_sha(self._repo, branch, path)
+            branch_file_sha = self._github.get_file_sha(self._branch_repo, branch, path)
             self._github.put_file(
-                self._repo,
+                self._branch_repo,
                 branch,
                 path,
                 gpml_out,
@@ -140,11 +158,13 @@ class UpdateService:
                 author_name=submitter,
                 author_email=author_email,
             )
-            pr: PullRequest | None = self._github.find_open_pr(self._repo, branch)
+            pr: PullRequest | None = self._github.find_open_pr(
+                self._repo, branch, head_repo=self._head_repo
+            )
             if pr is None:
                 pr = self._github.open_pull_request(
                     self._repo,
-                    head=branch,
+                    head=self._target.head(branch),
                     base=self._base_branch,
                     title=f"Update {wpid_str}",
                     body=_pr_body(wpid_str, submitter, description),
