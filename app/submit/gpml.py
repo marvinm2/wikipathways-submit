@@ -49,6 +49,34 @@ def _as_text(content: bytes | str) -> str:
     return content
 
 
+#: The XML declaration, if the file opens with one.
+_XML_DECL_RE = re.compile(r"^\s*<\?xml\b[^>]*\?>")
+
+#: What every file this app commits must start with. See ``_with_utf8_declaration``.
+_XML_DECL = '<?xml version="1.0" encoding="UTF-8"?>'
+
+
+def _with_utf8_declaration(text: str) -> str:
+    """Give the file an ``encoding="UTF-8"`` XML declaration, replacing or inserting as needed.
+
+    Not cosmetic. ``gpml2pvjson`` — the converter behind the target repository's ``json-svg`` job
+    and behind ``pr-preview.yml``'s validity check — returns **zero bytes and exit status 0** for
+    a GPML whose declaration omits the encoding, or that has no declaration at all. The next step
+    in that job then dies in ``JSON.parse`` with ``Unexpected end of JSON input``, so a submitter
+    loses their diagram, thumbnail and pvjson to a Node stack trace several clicks into the
+    Actions tab. Verified against gpml2pvjson 4.1.8 on two real submissions, one from each side:
+    stripping the encoding off a file that converted made it emit nothing, and adding it to one
+    that failed made it convert.
+
+    Rewriting the declaration rather than warning about it is the honest move, because the app
+    already decodes every upload as UTF-8 and commits UTF-8 bytes. A file that arrived declaring
+    something else is *already* mislabelled by the time it is written; this makes the declaration
+    match the bytes instead of leaving it a lie.
+    """
+    stripped = _XML_DECL_RE.sub("", text, count=1).lstrip("\n")
+    return f"{_XML_DECL}\n{stripped}"
+
+
 def _pathway_tag(text: str) -> str:
     m = _PATHWAY_TAG_RE.search(text)
     if not m:
@@ -149,7 +177,7 @@ def assign_wpid_str(
         new_tag = tag.replace("<Pathway", f'<Pathway Version="{version_value}"', 1)
     if author and not _attr(new_tag, "Author"):
         new_tag = new_tag.replace("<Pathway", f'<Pathway Author="[{author}]"', 1)
-    return text[: m.start()] + new_tag + text[m.end() :]
+    return _with_utf8_declaration(text[: m.start()] + new_tag + text[m.end() :])
 
 
 def layout_paths(wpid: int) -> dict[str, str]:

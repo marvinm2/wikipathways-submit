@@ -107,3 +107,52 @@ def test_assign_wpid_on_junk_raises():
 
 def test_layout_paths():
     assert layout_paths(5637) == {"gpml": "pathways/WP5637/WP5637.gpml"}
+
+
+# -- The XML declaration is load-bearing ---------------------------------------------------
+#
+# `gpml2pvjson` — the converter behind the target repository's `json-svg` job and behind
+# `pr-preview.yml`'s validity check — returns zero bytes and **exit status 0** for a GPML whose
+# declaration omits `encoding`, or that has none. The job's next step then dies in `JSON.parse`
+# with "Unexpected end of JSON input", and the submitter loses their diagram, thumbnail and
+# pvjson to a Node stack trace several clicks into the Actions tab.
+#
+# Found on `marvinm2/sandbox-wp-db` run 30805539734, one of three consecutive new-pathway runs
+# that failed this way while updates went green. Reproduced against gpml2pvjson 4.1.8 from both
+# directions: stripping `encoding` off a file that converted made it emit nothing, and putting it
+# back on the file that failed made it convert. The app passed the declaration through verbatim,
+# so it was committing files its own renderer drew quite happily and the pipeline could not read.
+
+
+def test_assign_wpid_gives_the_file_a_utf8_declaration():
+    out = assign_wpid('<?xml version="1.0"?>\n' + GPML_NO_VERSION, 5642)
+    assert out.startswith('<?xml version="1.0" encoding="UTF-8"?>\n')
+    assert out.count("<?xml") == 1
+
+
+def test_assign_wpid_adds_a_declaration_to_a_file_with_none():
+    out = assign_wpid(GPML_NO_VERSION, 5642)
+    assert out.startswith('<?xml version="1.0" encoding="UTF-8"?>\n')
+    assert "<Pathway" in out
+
+
+def test_assign_wpid_leaves_a_correct_declaration_alone():
+    out = assign_wpid(GPML, 5642)
+    assert out.startswith('<?xml version="1.0" encoding="UTF-8"?>\n')
+    assert out.count("<?xml") == 1
+
+
+def test_a_declared_encoding_is_corrected_rather_than_kept():
+    # The app decodes every upload as UTF-8 and commits UTF-8 bytes, so a file that arrived
+    # declaring something else is already mislabelled by the time it is written. Rewriting the
+    # declaration makes it match the bytes instead of leaving it a lie.
+    out = assign_wpid('<?xml version="1.0" encoding="ISO-8859-1"?>\n' + GPML_NO_VERSION, 5642)
+    assert "ISO-8859-1" not in out
+    assert out.startswith('<?xml version="1.0" encoding="UTF-8"?>\n')
+
+
+def test_the_declaration_fix_does_not_disturb_the_pathway_body():
+    body = GPML.split("?>\n", 1)[1]
+    out = assign_wpid('<?xml version="1.0"?>\n' + body, 5642)
+    assert '<DataNode TextLabel="EIF2AK3"></DataNode>' in out
+    assert out.rstrip().endswith("</Pathway>")
