@@ -296,6 +296,33 @@ writes both; `content.datanode_annotation` fails on **21 of 30** and `content.re
 rollback target is `sha256:fcbcb8f3…` (from `1c73e4f`) — this round adds no migration, no secret
 and no env var, so a rollback in either direction is a plain digest change.
 
+**#22 is decided and built: fork-per-submitter, with the bot as fallback.** `submit_identity`
+gains `fork`; `app/submit/targets.py` owns the whole decision (which client writes, which
+repository the branch goes to, what the pull request declares as its head) and every other mode
+resolves to "the same repository", so the default is unchanged.
+
+> The issue framed this as *should the user's OAuth token go back into the write path*. That is
+> backwards, and checking rather than accepting it is what unblocked a decision that had been
+> parked for a week. `submit_identity` has **always defaulted to `user`**, and `_submit_client`'s
+> own docstring said the submitter's token is *better* where they can push — `bot` is a capability
+> workaround for having no write access, not a security position. The scope cost was not real
+> either: GitHub defines `public_repo`, which the app already requests, as read/write to code on
+> public repositories, and that covers forking one and pushing to it. So fork mode exercises
+> capability the app already holds rather than acquiring any, which is why it turned out to be a
+> smaller change than the issue implies.
+
+Four places a cross-repository submission differs, each a way to get it quietly wrong: the base
+commit is read from the **content repo**, never the fork, which can be a year stale; the head is
+`owner:branch`; `find_open_pr` must be told the head repo or an update opens a *second* pull
+request; and a revise writes with the **submitter's** token whatever the setting says, because an
+App installation token cannot push to a personal fork. The fallback to `bot` happens **before the
+first write** and nowhere else — a failure afterwards is not retried against a different
+repository, because reconciling half-written state across two repos is a worse bug than the case
+it would cover. And **the owner of the content repo never forks it**: GitHub refuses, and they
+have push access anyway. That is not hypothetical — it is the live deployment's own configuration,
+and without it every submission Marvin makes would take the fallback and none would exercise
+anything.
+
 **Proven on the live service, not only the demo — WP5426, PR #20.** `demo/pathway_revised.gpml`
 was chosen deliberately: it is one of the two repaired fixtures that had *never* been through a
 real pipeline run, so it tests the #26 fix rather than re-testing the file the issue already
