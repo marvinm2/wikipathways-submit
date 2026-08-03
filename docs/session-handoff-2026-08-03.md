@@ -5,6 +5,57 @@ account of the deployment, the fork's draft pipeline and the first publication; 
 what changed after it. `docs/session-handoff-2026-07-27.md` remains the origin story of the
 sandbox pipeline.
 
+## Second round, same day — the audit issues (#17, #18, #21)
+
+Three of the five open issues were closed after the quality-ruleset work below. All three came
+from an audit rather than an incident, and all three are the kind that only bite once the target
+is something other than a sandbox. **Not deployed** — the live digest is still the one named
+under "Deployed right now", which predates every commit in this section. 437 tests, ruff-clean.
+No migration; two new settings, both with defaults that need no action.
+
+**#18, the render cache, was half-built and leaking on the path that matters.** `PreviewService.
+discard` existed and was wired to every terminal transition a curator can reach through the
+dashboard — and to neither of the two that happen without them. `_settle_publication` is the one
+that counts: in pipeline mode it is *how a submission succeeds*, so the live deployment has been
+leaking a directory on every pathway it publishes. Rejecting with the repository's own label
+rather than the dashboard button leaked the other. Both are wired now, but the lesson is that a
+list of call sites drifts, so the real fix is `PreviewService.sweep`, keyed off the state itself
+and running off the dashboard reconcile on the set of non-terminal reviews that pass already has
+in hand. A cache younger than an hour is never taken — a render is written *before* its review
+row exists, so for that moment every new submission is indistinguishable from an orphan.
+
+> **There is a second cache in the same directory, and it had the same defect.** `preview-cache/
+> drafts` holds the `DraftsReader` entries; they expire by TTL and the file stays. The live
+> volume is carrying a whole scope's worth from before the drafts repo was repointed at the fork,
+> which nothing will ever read again. It has its own sweep now, on the same throttle. The render
+> sweep's "ignore anything not named after a pull request" guard turns out to be what was already
+> protecting that directory, which is less hypothetical than it looked when written.
+
+**#17, the queue, now pages at twenty.** A card is not a row — two preview frames, a hotspot
+sidecar per frame, the checklist, the data-node table, the quality panel, and a pipeline section
+that can cost three requests to the drafts site on a cache miss. Two things only visible once
+there is a second page: the order is tie-broken on the primary key (two submissions in the same
+tick order arbitrarily on `created_at` alone, which becomes a row on both pages or neither), and
+a page past the end lands on the last one rather than rendering empty.
+
+> **The pager links are relative, and that is load-bearing.** Nothing in the deployment tells
+> uvicorn to trust `X-Forwarded-Proto` — no `--proxy-headers`, and `forwarded_allow_ips` defaults
+> to localhost while Traefik reaches the container over the overlay network. So `request.url`
+> reports `http` on a site served over `https`, and an absolute link would point off the secure
+> origin. Anything else built from `request.url` has the same problem waiting in it.
+
+**#21, rate limiting, is ten pull requests an hour per account.** Counted out of the `review`
+table rather than a bucket in memory, because the app is a single replica whose only shared store
+is the database and an in-process counter resets on every redeploy. Keyed on the GitHub login,
+not the address. Exempt: re-uploading onto a pull request that already exists, which opens nothing
+and is how a submitter answers a change request. Not covered at all: `/api/validate`, which has no
+login to key on and wants a blunt bound at Traefik if it ever needs one. `WPSUBMIT_SUBMIT_RATE_
+LIMIT=0` disables it; see `docs/deployment.md`.
+
+Still open after this round: **#22** (fork-per-submitter — needs a broader OAuth scope and a
+decision, blocking for a real rollout but not for a sandbox) and **#23** (TTL tuning — blocked on
+real submission data, which does not exist until the org install lands).
+
 ## Deployed right now
 
 **https://upload.wikipathways.org**, image

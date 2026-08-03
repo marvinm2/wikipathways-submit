@@ -225,7 +225,18 @@ mirrored to the pull request; the app's checklist was aligned with the reviewer 
 target repository appends to every pull request; and the two systems can now read each other's
 verdicts over a marker comment, proven end to end on the fork. A missing root `<Graphics>` canvas
 was identified as a hard crasher for the repository's `metadata` job and is now a `fail` rule.
-Live at `sha256:8d8dda3e…`, 401 tests.
+
+Then, in a second round the same day, three of the five open audit issues were closed: the render
+cache is freed at every terminal transition and swept as a backstop (#18 — it had been leaking on
+`_settle_publication`, which in pipeline mode is *how a submission succeeds*, and a second
+unswept cache turned up beside it under `preview-cache/drafts`); the curation queue pages at
+twenty (#17); and one account may open ten pull requests an hour, counted out of the `review`
+table so it survives a redeploy (#21). **#22** (fork-per-submitter) and **#23** (TTL tuning)
+remain open — the first needs a decision and a broader OAuth scope, the second needs real
+submission data that does not exist yet.
+
+437 tests. **Live is still `sha256:8d8dda3e…`, which predates all three** — nothing from the
+second round is deployed.
 
 The 07-29 summary below is kept because its details still hold.
 
