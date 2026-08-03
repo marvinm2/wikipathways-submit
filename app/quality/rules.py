@@ -77,6 +77,16 @@ _EMPTY_BP_ID_RE = re.compile(r"<bp:ID\b[^>]*/>|<bp:ID\b[^>]*>\s*</bp:ID>")
 #: ``BoardWidth`` attribute appears nowhere else in the schema, and the cheap test is exact here.
 _BOARD_RE = re.compile(r"<Graphics\b[^>]*\bBoardWidth=")
 
+#: The line elements whose ``<Graphics>`` ``GPML2013aReader.readLineStyleProperty`` reads, and the
+#: opening ``<Graphics>`` tag inside one. ``readLineElement`` is shared by both element types, so
+#: both are checked — ``<Interaction>`` is the one measured (issue #26), ``<GraphicalLine>`` goes
+#: through the identical call and is included rather than waiting for someone to hit it.
+_LINE_ELEMENT_RE = re.compile(
+    r"<(Interaction|GraphicalLine)\b([^>]*)>(.*?)</\1\s*>", re.DOTALL
+)
+_LINE_GRAPHICS_RE = re.compile(r"<Graphics\b([^>]*)>")
+_GRAPH_ID_RE = re.compile(r'\bGraphId\s*=\s*"([^"]*)"')
+
 # ---- the target repository's thresholds ----------------------------------------------------
 #
 # Read out of `1_on_pull_request.yml`'s `testing` job. Named constants rather than inline numbers
@@ -299,6 +309,45 @@ def _check_board(s: Subject) -> tuple[str, str] | None:
     return (Severity.PASS.value, "The pathway declares a canvas.")
 
 
+def _check_line_thickness(s: Subject) -> tuple[str, str] | None:
+    """An interaction whose ``<Graphics>`` has no ``LineThickness`` kills the same metadata job.
+
+    Sibling of ``_check_board``, and measured the same way — one variable, two runs on
+    `marvinm2/sandbox-wp-db`, 2026-08-03:
+
+    - run 30827814897, `demo/pathway_new.gpml` as it stood — ``metadata`` failed with
+      ``ConverterException: NullPointerException`` out of ``GPML2013aReader.readLineStyleProperty``;
+    - run 30829825691, the same file with ``LineThickness="1.0"`` added to its two interaction
+      ``<Graphics>`` elements and nothing else changed — all ten jobs green.
+
+    ``fail`` for the reason ``gpml.board`` is: ``metadata`` is what the whole downstream fan-out
+    depends on, so the submitter loses the identifier table, the bibliography, the draft page and
+    the ``testing`` marker comment the portal reads its verdicts back from — and the only trace is
+    a Java stack trace several clicks into the Actions tab.
+
+    A line element with no ``<Graphics>`` child at all is counted too. The reader reaches the same
+    property either way, and a file in that shape is broken for a superset of these reasons.
+    """
+    offenders: list[str] = []
+    for match in _LINE_ELEMENT_RE.finditer(s.text):
+        tag, attrs, body = match.group(1), match.group(2), match.group(3)
+        graphics = _LINE_GRAPHICS_RE.search(body)
+        if graphics is not None and "LineThickness" in graphics.group(1):
+            continue
+        found = _GRAPH_ID_RE.search(attrs)
+        offenders.append(f"{tag} {found.group(1)}" if found else f"an unnamed {tag}")
+    if offenders:
+        n = len(offenders)
+        return (
+            Severity.FAIL.value,
+            f"{n} line element{'' if n == 1 else 's'} have a <Graphics> with no LineThickness "
+            f"({_named(offenders)}). The repository's metadata step dereferences that attribute "
+            "and fails outright without it, which costs the identifier and reference tables and "
+            "the draft page. PathVisio always writes it; a hand-built GPML often does not.",
+        )
+    return (Severity.PASS.value, "Every interaction declares a line thickness.")
+
+
 def _check_drawable(s: Subject) -> tuple[str, str] | None:
     """Whether the app's own renderer could draw this file.
 
@@ -488,6 +537,7 @@ RULES: tuple[Rule, ...] = (
     Rule("gpml.organism", "Organism", _check_organism),
     Rule("render.drawable", "Renderable", _check_drawable, needs_text=False),
     Rule("gpml.board", "Pathway canvas", _check_board),
+    Rule("gpml.line_thickness", "Interaction line thickness", _check_line_thickness),
     Rule("gpml.author", "Authors", _check_author),
     Rule("gpml.citation_ids", "Empty citation IDs", _check_citation_ids),
     Rule("gpml.datanodes", "DataNodes in GPML", _check_datanodes_present, needs_text=False),

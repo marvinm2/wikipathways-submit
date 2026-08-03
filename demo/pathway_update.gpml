@@ -29,28 +29,28 @@
   </DataNode>
 
   <Interaction>
-    <Graphics>
+    <Graphics LineThickness="1.0">
       <Point X="240.0" Y="97.0" />
       <Point X="240.0" Y="183.0" ArrowHead="Arrow" />
     </Graphics>
   </Interaction>
 
   <Interaction>
-    <Graphics>
+    <Graphics LineThickness="1.0">
       <Point X="240.0" Y="217.0" />
       <Point X="240.0" Y="303.0" ArrowHead="Arrow" />
     </Graphics>
   </Interaction>
 
   <Interaction>
-    <Graphics>
+    <Graphics LineThickness="1.0">
       <Point X="240.0" Y="337.0" />
       <Point X="240.0" Y="423.0" ArrowHead="Arrow" />
     </Graphics>
   </Interaction>
 
   <Interaction>
-    <Graphics>
+    <Graphics LineThickness="1.0">
       <Point X="300.0" Y="440.0" />
       <Point X="380.0" Y="440.0" ArrowHead="mim-catalysis" />
     </Graphics>

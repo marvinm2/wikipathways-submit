@@ -281,3 +281,52 @@ def test_a_pathway_with_no_canvas_fails_because_the_repository_cannot_read_it():
 def test_the_canvas_check_needs_the_document_so_metadata_alone_stays_quiet():
     """Otherwise every checklist auto-check would report a missing board it never looked for."""
     assert inspect_metadata(parse_curation_metadata(POOR)).by_id("gpml.board") is None
+
+
+# ---- issue #26: interactions with no LineThickness -------------------------------------------
+
+_INTERACTIONS = """<?xml version="1.0" encoding="UTF-8"?>
+<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Lines" Organism="Homo sapiens">
+  <Graphics BoardWidth="480.0" BoardHeight="440.0" />
+  <Interaction GraphId="i1">
+    <Graphics{thickness}>
+      <Point X="240.0" Y="97.0" /><Point X="240.0" Y="183.0" ArrowHead="Arrow" />
+    </Graphics>
+  </Interaction>
+</Pathway>
+"""
+
+
+def test_an_interaction_with_no_line_thickness_fails():
+    """Measured the same way as the canvas rule: runs 30827814897 (absent, `metadata` died in
+    readLineStyleProperty) and 30829825691 (present, all ten jobs green), one variable apart."""
+    finding = inspect_gpml(_INTERACTIONS.format(thickness="")).by_id("gpml.line_thickness")
+    assert finding.severity == Severity.FAIL.value
+    assert "LineThickness" in finding.detail
+    assert "Interaction i1" in finding.detail  # names the offender, not just a count
+
+    good = _INTERACTIONS.format(thickness=' LineThickness="1.0"')
+    assert _severity(inspect_gpml(good), "gpml.line_thickness") == Severity.PASS.value
+
+
+def test_a_graphical_line_is_checked_too():
+    """`readLineElement` is shared, so the same missing attribute reaches the same crash."""
+    text = _INTERACTIONS.format(thickness="").replace("Interaction", "GraphicalLine")
+    finding = inspect_gpml(text).by_id("gpml.line_thickness")
+    assert finding.severity == Severity.FAIL.value
+    assert "GraphicalLine i1" in finding.detail
+
+
+def test_a_pathway_with_no_interactions_at_all_passes_the_line_check():
+    """`na` would be defensible, but the rollup ranks it below pass and this is genuinely fine."""
+    assert _severity(inspect_gpml(GOOD), "gpml.line_thickness") == Severity.PASS.value
+
+
+def test_the_demo_fixtures_would_survive_the_repositorys_metadata_job():
+    """The three walkthrough files all carried this defect (issue #26), and the walkthrough is
+    the thing most likely to be run against a real pipeline by someone learning the portal."""
+    demo = Path(__file__).resolve().parents[1] / "demo"
+    for name in ("pathway_new.gpml", "pathway_revised.gpml", "pathway_update.gpml"):
+        report = inspect_gpml((demo / name).read_text(encoding="utf-8"))
+        assert _severity(report, "gpml.line_thickness") == Severity.PASS.value, name
+        assert _severity(report, "gpml.board") == Severity.PASS.value, name
