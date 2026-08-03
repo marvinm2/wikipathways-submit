@@ -238,12 +238,26 @@ submission data that does not exist yet.
 Then **#23** closed too: the three timers are set from measurement rather than guesswork (the
 publish workflow has succeeded since the issue was filed, and 53 real pull requests on the content
 repo give the lock and reservation lifetimes), and every expiry now logs how long the thing was
-held so the numbers can be corrected again later. **#22** (fork-per-submitter) is assessed on the
-issue but not built — it is a design decision, and the blocker is not the one the issue names.
+held so the numbers can be corrected again later.
 
-442 tests. Live at `sha256:376eeee0…` (from `cfdd938`), deployed and verified the same day: the
-cache sweep took the live volume from 154K to 2.5K and kept exactly the one render that belongs to
-a non-terminal review.
+In a third round the same day, two things:
+
+- **A GPML with no declared encoding converts to nothing.** `gpml2pvjson` returns **zero bytes and
+  exit status 0** for a file whose XML declaration omits `encoding="UTF-8"`, or that has none, so
+  the target repo's `json-svg` job dies one step later in `JSON.parse`. It had killed the last
+  three new-pathway runs on the fork while updates went green. The app was passing the declaration
+  through verbatim; `assign_wpid_str` now writes it, which is the one choke point all three write
+  paths share. **Third instance of the house failure mode**: the app's own renderer draws such a
+  file happily, so only the real pipeline objects — see also the missing root `<Graphics>` canvas.
+- **Step 3 of #22 is built** (`find_open_pr` takes a head repo; the lock scanner only treats a
+  same-repo head as "one of ours"; `Review.head_repo`; revise scopes its branch-side writes to the
+  head repo). These were latent correctness bugs for any cross-repository pull request today, and
+  they turn **no fork mode on**. **#22** itself stays open: it is a design decision about whether
+  the user OAuth token goes back into the write path, and its remaining steps need a person.
+
+459 tests. Live at `sha256:fcbcb8f3…` (from `1c73e4f`), deployed and verified the same day;
+migration `f6a2c3e4d5b7` applied on the way up. The previous digest `sha256:376eeee0…` (from
+`cfdd938`) is the rollback target — the added column is nullable, so an older image ignores it.
 
 The 07-29 summary below is kept because its details still hold.
 

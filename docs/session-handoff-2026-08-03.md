@@ -98,6 +98,41 @@ show. The quiet pass stays silent, because `expire_stale` runs on every acquire.
 > for any in-process caller, and it is now `False`. Worth knowing for any project that runs
 > migrations programmatically.
 
+## A GPML with no declared encoding converts to nothing
+
+Third round, same day. Found by looking at why workflow 1 was red on the fork: the last three
+**new-pathway** runs (`30805539734`, `30800359486`, `30798868327`) all failed while the update
+between them went green. The failing job is `json-svg`, and the error is a Node stack trace —
+`SyntaxError: Unexpected end of JSON input` out of `add_identifiers`.
+
+**`gpml2pvjson` returns zero bytes and exit status 0** for a GPML whose XML declaration omits
+`encoding`, or that has none at all. Exit 0 is what makes it nasty: `set -e` cannot catch it, so
+the failure surfaces one step later in something that looks unrelated.
+
+Reproduced locally against gpml2pvjson 4.1.8 from both directions, which is what makes it a
+finding rather than a guess — and it is independent of pathway content:
+
+| file | bytes out |
+|---|---|
+| PR 15's GPML as committed (`<?xml version="1.0"?>`) | **0** |
+| the same file with `encoding="UTF-8"` added | 1915 |
+| a submission that converted fine, untouched | 3780 |
+| that same file with `encoding` stripped | **0** |
+| that same file with the declaration removed entirely | **0** |
+
+The app was passing the declaration through verbatim, so it was committing files **its own
+renderer draws quite happily** and the pipeline cannot read — the third instance of that pattern
+after the missing root `<Graphics>` canvas, and worth treating as the house failure mode by now.
+
+Fixed in `app/submit/gpml.py`: `assign_wpid_str` now writes `<?xml version="1.0"
+encoding="UTF-8"?>`, replacing or inserting as needed. It is the one choke point all three write
+paths go through. Rewriting rather than warning is the honest move — the app already decodes
+every upload as UTF-8 and commits UTF-8 bytes, so a file that arrived declaring something else is
+mislabelled by the time it is written either way; this makes the declaration match the bytes.
+
+> No quality rule was added for it. The ruleset predicts what the target pipeline will do, and
+> after this change the answer is "it converts" — a rule warning otherwise would be wrong.
+
 ## Where #22 (fork-per-submitter) actually stands
 
 Assessed, not built — it is a design decision. The full write-up is on the issue; the three things
@@ -119,6 +154,40 @@ The decision underneath it: `WPSUBMIT_SUBMIT_IDENTITY=bot` exists because submit
 to the target, and a bot installation token cannot push to a submitter's personal fork either — so
 fork mode forces the user token back into the write path, which is what `bot` mode was introduced
 to avoid.
+
+### Step 3 of that order is now built, and it turns no fork mode on
+
+The issue's suggested order marks step 3 "worth doing regardless", because those are latent
+correctness bugs the moment anything cross-repository appears — including a raw fork pull request
+opened by a power user today, which is how most work already reaches that repository. Built:
+
+- **`find_open_pr` takes the head repo.** It defaults to the base repo, so every existing caller
+  is unchanged. `PullRequest` now carries `head_repo` too, read off GitHub's answer rather than
+  assumed, so the day the app opens a cross-repository pull request the review row records the
+  truth on its own with no further change.
+- **The lock's open-PR scanner only treats a same-repo head as "one of ours".** It was skipping
+  any ref starting `submit/WP<id>` or `update/WP<id>` *before* the file check, so a fork branch of
+  that name would be skipped and the check-out granted over somebody's genuine concurrent edit.
+  Narrowing it fails the safe way: at worst one file listing and a lock refused that could have
+  been granted.
+- **`Review.head_repo`**, nullable, NULL meaning the content repo — which is every row so far, so
+  no backfill. Migration `f6a2c3e4d5b7`. Storing `owner:branch` in `head_branch` instead would
+  have poisoned revise silently, which is why it is a separate column.
+- **Revise scopes its branch-side reads and writes to the head repo**, so a fork pull request
+  revises onto the fork where its branch actually is. The base repo is still what gets queried
+  for the pull request; only the head moves.
+
+Twelve tests in `tests/test_cross_repo_head.py`, half against the real client through
+`httpx.MockTransport` (the head filter GitHub actually receives, the `head.repo.full_name` parse,
+the deleted-fork null) and half against the fake.
+
+**Still not decided, and still the real question:** whether the user OAuth token goes back into
+the write path. Steps 1 and 2 both need a person — a second GitHub account to prove `public_repo`
+really forks and pushes, and a fork pull request published end to end on the sandbox.
+
+One thing that did change in step 2's favour: **the label dispatcher has recovered.** The issue
+records it failing 5 of its last 6 runs on fork pull requests; every `PR Label Dispatcher` run in
+the current window is green. Whatever was wrong there is not wrong now.
 
 Still open after this round: **#22** only.
 
