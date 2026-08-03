@@ -10,6 +10,107 @@
   {% endif %}
 {% endmacro %}
 
+{# What the machines said, in one place.
+
+   These signals used to sit in four separate blocks a screen apart: a warning banner when the
+   repository's run failed, the draft-page link, the "what the repository generated" panel, and
+   the checklist's auto-derived notes. Nothing answered "is this submission in good shape" in one
+   look, which is the first question a curator has.
+
+   The severities are app.quality's. `predicts_repo` findings are the three the target repository
+   also tests for itself; where its own workflow has reported back, both answers are shown, because
+   a disagreement means the app's copy of its thresholds has fallen behind and that is worth
+   seeing rather than silently trusting. #}
+{% set QUALITY_WORD = {'block': 'Blocked', 'fail': 'Problem', 'warn': 'Worth a look', 'pass': 'Fine', 'na': 'Nothing to check'} %}
+{% set QUALITY_LOUD = ['block', 'fail', 'warn'] %}
+
+{% macro quality_finding(f, repo_verdict) %}
+<li class="quality__item quality__item--{{ f.severity }}">
+  <span class="quality__pill quality__pill--{{ f.severity }}">{{ QUALITY_WORD.get(f.severity, f.severity) }}</span>
+  <span class="quality__title">{{ f.title }}</span>
+  <span class="quality__detail">{{ f.detail }}</span>
+  {% if repo_verdict %}
+  <span class="quality__echo{% if repo_verdict == 'review' %} quality__echo--review{% endif %}">
+    {{ repo }} said: {{ 'review required' if repo_verdict == 'review' else 'pass' }}
+  </span>
+  {% endif %}
+</li>
+{% endmacro %}
+
+{% macro quality_panel(r, expanded) %}
+{% set q = r.quality %}
+{% set verdicts = (r.pipeline.testing if r.pipeline else {}) or {} %}
+{% set loud = (q.findings | selectattr('severity', 'in', QUALITY_LOUD) | list) if q else [] %}
+{% set quiet = (q.findings | rejectattr('severity', 'in', QUALITY_LOUD) | list) if q else [] %}
+{% set publish_failed = r.pipeline and r.pipeline.publish_run and r.pipeline.publish_run.conclusion not in (None, 'success') %}
+{% if q or (r.pipeline and r.pipeline.run_failed) or publish_failed %}
+<section class="quality{% if loud %} quality--{{ q.status }}{% endif %}">
+  <h3 class="quality__heading">Automated checks</h3>
+
+  {# The repository ran its own processing and could not finish. In practice that means it could
+     not read the GPML, and the cost lands on the submitter: no identifier table, no reference
+     list, no draft page. Without this the only trace is a job several clicks into Actions. #}
+  {% if r.pipeline and r.pipeline.run_failed %}
+  <p class="quality__pipeline">
+    <strong>{{ repo }} could not process this pathway.</strong>
+    Its pipeline failed{% if r.pipeline.run_conclusion != 'failure' %} ({{ r.pipeline.run_conclusion }}){% endif %}, so the identifier and reference tables and the draft page were never generated. The most common cause is a GPML the repository's reader cannot parse. The diagram below is drawn by this portal and is unaffected.
+    {% if r.pipeline.run_url %}<a href="{{ r.pipeline.run_url }}" target="_blank" rel="noopener">See the failing run</a>.{% endif %}
+  </p>
+  {% endif %}
+
+  {# A publication that is waiting, with the repository's latest publish run beside it. Worth its
+     own line because of the one failure nothing else here can see: when that workflow fails to
+     *start*, it posts no marker and applies no label, and the review sits approved until the
+     timeout with no trace at all. Hedged on purpose — the run is dispatched by label and carries
+     no pull-request reference, so it cannot be tied to this pathway. #}
+  {% if r.pipeline and r.pipeline.publish_run and r.pipeline.publish_run.conclusion not in (None, 'success') %}
+  <p class="quality__pipeline">
+    <strong>The last publish run in {{ repo }} did not succeed.</strong>
+    It finished as {{ r.pipeline.publish_run.conclusion }}. That workflow is started by a label and
+    carries no reference to a pull request, so this may belong to another pathway — but if this one
+    has been waiting with nothing posted back, this is where to look.
+    {% if r.pipeline.publish_run.url %}<a href="{{ r.pipeline.publish_run.url }}" target="_blank" rel="noopener">Open that run</a>.{% endif %}
+  </p>
+  {% endif %}
+
+  {% if q %}
+    {% if not loud %}
+    <p class="quality__clean">Nothing to flag. Every automated check on the uploaded file passed.</p>
+    {% elif expanded %}
+    <ul class="quality__list">
+      {% for f in loud %}{{ quality_finding(f, verdicts.get(f.id)) }}{% endfor %}
+    </ul>
+    {% else %}
+    {# On the queue this is triage: how many, how bad, and is it worth opening. Spelling every
+       finding out here cost about a third of a screen per card and pushed the controls further
+       down than they were before this panel existed, which is the opposite of the point. #}
+    {% set problems = loud | selectattr('severity', 'in', ['block', 'fail']) | list | length %}
+    {% set looks = loud | length - problems %}
+    <details class="quality__rest">
+      <summary>
+        {%- if problems %}{{ problems }} {{ 'problem' if problems == 1 else 'problems' }}{% endif -%}
+        {%- if problems and looks %}, {% endif -%}
+        {%- if looks %}{{ looks }} worth a look{% endif %}
+      </summary>
+      <ul class="quality__list">
+        {% for f in loud %}{{ quality_finding(f, verdicts.get(f.id)) }}{% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+    {# The passes are worth having and not worth the vertical space on a queue of twenty. #}
+    {% if quiet and expanded %}
+    <details class="quality__rest" open>
+      <summary>{{ quiet | length }} more {{ 'check' if quiet | length == 1 else 'checks' }} that found nothing</summary>
+      <ul class="quality__list">
+        {% for f in quiet %}{{ quality_finding(f, verdicts.get(f.id)) }}{% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+  {% endif %}
+</section>
+{% endif %}
+{% endmacro %}
+
 {% macro zoomable(url, alt) %}
 <div class="zoom" data-zoom>
   {# Focusable and arrow-key pannable: at 8x the pointer is otherwise the only way to reach the
@@ -83,9 +184,14 @@
       <span class="badge badge--{{ r.status }}">{{ r.status_label }}</span>
       <a class="review-card__pr" href="{{ r.pr_url }}" target="_blank" rel="noopener">PR #{{ r.pr_number }}</a>
     </div>
+    {# Carries its label rather than being a bare glyph. This is the route to the page where the
+       metadata panels open, the revision upload lives and the diagram is full size — the busiest
+       link on the queue — and an unlabelled arrow in the corner read as decoration. #}
     {% if not expanded %}
-    <a class="review-card__expand" href="/dashboard/{{ r.pr_number }}" aria-label="Open full review for {{ r.wpid_str }}">
+    <a class="review-card__expand" href="/dashboard/{{ r.pr_number }}">
+      <span>Open full review</span>
       <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3h7v7M13 3L3 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="visually-hidden">for {{ r.wpid_str }}</span>
     </a>
     {% endif %}
   </div>
@@ -128,16 +234,7 @@
   </p>
   {% endif %}
 
-  {# The repository ran its own processing and could not finish. In practice that means it could
-     not read the GPML, and the cost lands on the submitter: no identifier table, no reference
-     list, no draft page. Without this the only trace is a job several clicks into Actions. #}
-  {% if r.pipeline and r.pipeline.run_failed %}
-  <p class="notice notice--warn">
-    <strong>{{ repo }} could not process this pathway.</strong>
-    Its pipeline failed{% if r.pipeline.run_conclusion != 'failure' %} ({{ r.pipeline.run_conclusion }}){% endif %}, so the identifier and reference tables and the draft page were never generated. The most common cause is a GPML the repository's reader cannot parse. The diagram below is drawn by this portal and is unaffected.
-    {% if r.pipeline.run_url %}<a href="{{ r.pipeline.run_url }}" target="_blank" rel="noopener">See the failing run</a>.{% endif %}
-  </p>
-  {% endif %}
+  {{ quality_panel(r, expanded) }}
 
   {# What changed, before the pictures (issue #24). Two renders side by side made the change
      visible and left spotting it to the eye, across two images that can be a hundred nodes each.
@@ -216,10 +313,14 @@
   </p>
   {% endif %}
 
+  {# "Open the pull request" used to sit here too, duplicating the PR chip in the card head a
+     screen above. Two links to one destination read as two destinations, so the chip — which is
+     visible without scrolling and sits with the badges describing the same pull request — keeps
+     it, and this row carries only what it alone offers.
+
+     Not "Data nodes" and "Validation report": the Files-changed tab holds one thing, the GPML
+     this app committed, and /checks is the Actions tab. The tables are in the panel below. #}
   <p class="review-card__links">
-    <a href="{{ r.pr_url }}" target="_blank" rel="noopener">Open the pull request</a>
-    {# Not "Data nodes" and "Validation report": the Files-changed tab holds one thing, the GPML
-       this app committed, and /checks is the Actions tab. The tables are in the panel below. #}
     <a href="{{ r.pr_url }}/files" target="_blank" rel="noopener">Files changed on GitHub</a>
   </p>
 

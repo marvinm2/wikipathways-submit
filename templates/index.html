@@ -64,6 +64,11 @@
              aria-label="Pathway GPML file" aria-describedby="new-file-hint">
     </div>
     <span id="new-file-hint" class="visually-hidden">Accepts .gpml or .xml pathway files</span>
+    {# Filled the moment a file is chosen, from /api/validate. Directly under the picker because
+       it is about the file that was just picked, and above the note field because a submitter who
+       is going to change their mind should do it before writing the note. Polite rather than
+       assertive: choosing a file is not an error, and the findings never block the button. #}
+    <div class="preflight" id="preflight" role="status" aria-live="polite" hidden></div>
     <label class="note-field">
       <span class="note-field__label">Note for reviewers <span class="muted">(optional)</span></span>
       <textarea id="submit-description" rows="3"

@@ -80,6 +80,10 @@ class PreviewService:
         self._write_diff(out, drawn_nodes)
         self._write_metadata(out, after_gpml, submitter_note)
         drawn = rendered["before"] or rendered["after"]
+        # The one moment the renderer's verdict is in hand for free. ``app.quality`` will not run
+        # the renderer itself — that would break the offline-and-cheap rule its rules work under —
+        # so this is the only caller that can answer the "is it drawable" rule at all.
+        self._write_quality(out, after_gpml, before_gpml=before_gpml, drawable=drawn)
         # Record the outcome so a re-upload that now renders clears a previous failure, and a
         # GPML we cannot draw reads as 'failed' rather than 'pending' forever.
         marker = out / _FAILED_MARKER
@@ -147,6 +151,54 @@ class PreviewService:
             return None
         try:
             return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    # -- quality report sidecar (app.quality) ----------------------------------------------
+    @staticmethod
+    def _write_quality(
+        out: Path, after_gpml: bytes, *, before_gpml: bytes | None, drawable: bool
+    ) -> None:
+        """Cache the graded quality report next to the render (best-effort).
+
+        Cached rather than persisted on the review row, deliberately. Every finding is a pure
+        function of (GPML, metadata, base metadata), and the part that has to survive is already
+        on ``Review.checklist`` — the states and the notes a curator worked from. A second stored
+        copy would be a second thing to keep in step with the first, and staleness on that row is
+        not hypothetical: ``set_checklist_item``'s no-op guard exists precisely because writing
+        re-derived values back re-posted the mirror comment on every page load.
+
+        The cost is that a terminal review loses the panel when its cache is swept (issue #18).
+        That is the right trade: the checklist is the record, and this is the aid.
+        """
+        from app.quality import inspect_gpml
+
+        try:
+            before = parse_curation_metadata(before_gpml) if before_gpml else None
+            report = inspect_gpml(
+                after_gpml,
+                before=before,
+                kind="update" if before_gpml else "new",
+                drawable=drawable,
+            )
+            (out / "quality.json").write_text(json.dumps(report.as_dict()), encoding="utf-8")
+        except (OSError, ValueError):
+            pass  # the panel is an aid; never fail a render on it
+
+    def quality(self, pr_number: int):
+        """The cached quality report for a PR, or None.
+
+        None covers three ordinary cases and is not an error in any of them: nothing rendered yet,
+        a cache swept at a terminal transition, and a render cached before this existed — the same
+        forgiveness ``diff`` already extends to a pre-issue-#24 sidecar.
+        """
+        from app.quality import QualityReport
+
+        path = self._cache_dir / str(pr_number) / "quality.json"
+        if not path.is_file():
+            return None
+        try:
+            return QualityReport.from_dict(json.loads(path.read_text(encoding="utf-8")))
         except (OSError, ValueError):
             return None
 

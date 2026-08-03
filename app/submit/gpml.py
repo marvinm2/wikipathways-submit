@@ -37,6 +37,10 @@ class PathwayMeta:
     organism: str | None
     version: str | None
     wpid: str | None  # parsed from Version, if present
+    #: The GPML2013a ``Author="[name]"`` attribute. Read because meta-data-action dereferences it
+    #: unconditionally and crashes on a file that has none — the failure mode ``assign_wpid``
+    #: already repairs on the way out, and ``app.quality`` warns about at upload time.
+    author: str | None = None
 
 
 def _as_text(content: bytes | str) -> str:
@@ -70,6 +74,7 @@ def parse_pathway_meta(content: bytes | str) -> PathwayMeta:
         organism=_attr(tag, "Organism"),
         version=version,
         wpid=wpid,
+        author=_attr(tag, "Author"),
     )
 
 
@@ -78,22 +83,23 @@ def validate_gpml(content: bytes | str) -> PathwayMeta:
 
     Checks the minimum the downstream pipeline needs: a ``<Pathway>`` root, a Name, and an
     Organism (meta-data-action and the render both key off Organism).
+
+    The four reasons are no longer written here. They are the ``block``-severity subset of the one
+    graded ruleset in ``app.quality``, which grades a dozen further things this gate deliberately
+    does not refuse. Two lists of rules — one deciding the 422, one shown to the submitter — is how
+    a portal ends up rejecting a file for a reason its own pre-flight report called fine.
+
+    Imported inside the function: ``app.quality`` is reached from ``app.review.checklist``, which
+    ``app.models`` imports, which ``app.submit`` reaches through the allocator. See the note in
+    ``app.quality.rules``.
     """
+    from app.quality import blocking_reasons
+
     text = _as_text(content)
-    reasons: list[str] = []
-    try:
-        meta = parse_pathway_meta(text)
-    except InvalidGpml as exc:
-        raise InvalidGpml(exc.reasons) from exc
-    if "http://pathvisio.org/GPML" not in text:
-        reasons.append("missing GPML namespace (not a PathVisio/WikiPathways GPML file)")
-    if not meta.name:
-        reasons.append("root <Pathway> has no Name")
-    if not meta.organism:
-        reasons.append("root <Pathway> has no Organism (required for metadata + render)")
+    reasons = blocking_reasons(text)
     if reasons:
         raise InvalidGpml(reasons)
-    return meta
+    return parse_pathway_meta(text)
 
 
 def _now_revision() -> str:

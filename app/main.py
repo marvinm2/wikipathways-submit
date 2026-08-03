@@ -33,7 +33,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -48,6 +48,7 @@ from app.pipeline import DraftsReader
 from app.preview import PreviewService
 from app.preview.metadata import parse_curation_metadata
 from app.review.service import (
+    TESTING_RULE_IDS,
     ChecklistIncomplete,
     CurationService,
     NotACurator,
@@ -415,6 +416,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             publish_mode=settings.publish_mode,
             default_branch=settings.default_branch,
             pipeline_workflow_file=settings.pipeline_workflow_file,
+            publish_workflow_file=settings.publish_workflow_file,
             label_accepted=settings.label_accepted,
             label_rejected=settings.label_rejected,
             label_author_feedback=settings.label_author_feedback,
@@ -577,6 +579,10 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "labels": r.github_labels or [],
             "decision_note": r.decision_note,
             "pipeline": _pipeline_view(request, r),
+            # The app's own graded verdicts, cached beside the render. None where nothing was
+            # rendered or the cache has been swept — the card falls back to saying nothing rather
+            # than to an empty panel that reads as "no problems found".
+            "quality": request.app.state.preview.quality(r.pr_number),
         }
 
     def _pipeline_view(request: Request, r) -> dict | None:
@@ -617,6 +623,19 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             "run_status": run.get("status"),
             "run_conclusion": conclusion,
             "run_url": run.get("url"),
+            # The repository's own three verdicts, when its workflow has posted them, keyed by the
+            # app rule that predicts each one so the card can show the pair without knowing the
+            # mapping itself. Empty until that workflow change is proposed and merged.
+            "testing": {
+                rule_id: (run.get("testing") or {})[key]
+                for rule_id, key in TESTING_RULE_IDS.items()
+                if key in (run.get("testing") or {})
+            },
+            # The repository's most recent publish run, shown only while this review is waiting on
+            # one. Not tied to this pull request — the publish workflow is dispatched by label and
+            # carries no reference to one — so the card says whose run it might be, and does not
+            # claim it is this pathway's.
+            "publish_run": run.get("publish") or {},
             # The case worth naming: the repository ran and could not finish. Almost always it
             # could not read the GPML, which costs the submitter their metadata and preview and
             # is otherwise only visible several clicks into the Actions tab.
@@ -854,7 +873,13 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             meta = validate_gpml(content)
         except InvalidGpml as exc:
             raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc
+        # The graded rules, run here rather than only at submit time: this is the last moment the
+        # fix is free. Past this the file is on a branch, the pull request is open, and a warning
+        # costs the submitter a re-upload.
+        from app.quality import inspect_gpml
+
         return ValidateResponse(
+            quality=inspect_gpml(content).as_dict(),
             name=meta.name,
             organism=meta.organism,
             embedded_wpid=meta.wpid,
@@ -896,6 +921,19 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         after_meta = parse_curation_metadata(content)
+        # Rendered before the review is registered, not after. ``register`` posts the mirror
+        # comment, and the mirror carries the quality report out of this cache — so registering
+        # first published a comment with the table missing and only filled it in whenever a
+        # curator next touched the review. Nothing in the render reads the review row, so the
+        # order is free.
+        _render_preview(
+            request,
+            pr_number=result.pr_number,
+            wpid=result.wpid,
+            after_gpml=content,
+            before_gpml=None,  # new pathway has no base version
+            submitter_note=description,
+        )
         _curation(request, bot).register(
             pr_number=result.pr_number,
             wpid=result.wpid,
@@ -906,14 +944,6 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             submitter_note=description,
         )
         _label_submission(settings, bot, result.pr_number, kind="new")
-        _render_preview(
-            request,
-            pr_number=result.pr_number,
-            wpid=result.wpid,
-            after_gpml=content,
-            before_gpml=None,  # new pathway has no base version
-            submitter_note=description,
-        )
         return SubmitResponse(
             wpid=result.wpid_str,
             pr_number=result.pr_number,
@@ -981,6 +1011,15 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         before_gpml = _fetch_base_gpml(writer, result.path)
         after_meta = parse_curation_metadata(content)
         before_meta = parse_curation_metadata(before_gpml) if before_gpml else None
+        # Before registering, so the mirror comment register posts carries the quality report.
+        _render_preview(
+            request,
+            pr_number=result.pr_number,
+            wpid=result.wpid,
+            after_gpml=content,
+            before_gpml=before_gpml,
+            submitter_note=description,
+        )
         _curation(request, bot).register(
             pr_number=result.pr_number,
             wpid=result.wpid,
@@ -992,14 +1031,6 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             submitter_note=description,
         )
         _label_submission(settings, bot, result.pr_number, kind="update")
-        _render_preview(
-            request,
-            pr_number=result.pr_number,
-            wpid=result.wpid,
-            after_gpml=content,
-            before_gpml=before_gpml,
-            submitter_note=description,
-        )
         return SubmitResponse(
             wpid=result.wpid_str,
             pr_number=result.pr_number,
@@ -1069,18 +1100,20 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        # Re-open the review and rebuild its checklist from the revised content.
-        curation.revise(
-            result.pr_number,
-            metadata=parse_curation_metadata(content),
-            submitter_note=description,
-        )
+        # Re-rendered before the review is re-opened, so the mirror comment ``revise`` posts
+        # describes the file that was just uploaded rather than the one it replaced.
         _render_preview(
             request,
             pr_number=result.pr_number,
             wpid=result.wpid,
             after_gpml=content,
             before_gpml=None,
+            submitter_note=description,
+        )
+        # Re-open the review and rebuild its checklist from the revised content.
+        curation.revise(
+            result.pr_number,
+            metadata=parse_curation_metadata(content),
             submitter_note=description,
         )
         return SubmitResponse(
@@ -1346,6 +1379,9 @@ class ValidateResponse(BaseModel):
     organism: str | None
     embedded_wpid: str | None
     will_layout_to: str
+    #: The graded pre-flight report (``app.quality``). Everything in here is advisory — a file
+    #: that reaches this response has already cleared the blocking rules, which 422 instead.
+    quality: dict = Field(default_factory=dict)
 
 
 class SubmitResponse(BaseModel):

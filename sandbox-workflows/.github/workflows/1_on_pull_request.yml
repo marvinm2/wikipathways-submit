@@ -922,7 +922,14 @@ jobs:
               matching_added_node=$(echo "$added_or_modified_nodes" | grep "GraphId=\"$graph_id\"" || true)
               
               if [ -n "$matching_added_node" ]; then
-                modified_nodes="$modified_nodes\n$deleted_node"
+                # A real newline, not the two characters `\` and `n`. Inside double quotes bash
+                # does not interpret `\n`, so this list used to be one long line with literal
+                # backslash-n separators, and all three counts below were wrong because of it:
+                # `wc -l` reported 1 however many nodes were modified, and both `grep -vF`
+                # filters matched nothing, so modified nodes were also counted as added and as
+                # deleted. Nothing gated on the numbers before, so it was left alone; the portal
+                # now reads this job's verdict, so it does.
+                modified_nodes="${modified_nodes}${deleted_node}"$'\n'
               fi
             fi
           done <<< "$deleted_nodes"
@@ -974,11 +981,14 @@ jobs:
           fi
         fi
 
-        
-        # Store the deleted, modified, and added nodes as environment variables for later use
-        echo "deleted_nodes=${deleted_nodes}" >> $GITHUB_ENV
-        echo "modified_nodes=${modified_nodes}" >> $GITHUB_ENV
-        echo "added_nodes=${added_or_modified_nodes}" >> $GITHUB_ENV                 
+
+        # The three node lists used to be written to $GITHUB_ENV here "for later use". Nothing in
+        # this workflow ever read them, and all three are multi-line, so the writes were malformed
+        # anyway: without a heredoc delimiter every line after the first is parsed as its own
+        # NAME=VALUE assignment. It was harmless only because `modified_nodes` was accidentally
+        # single-line; now that it holds real newlines, keeping these would turn a dead write into
+        # a failing one. Removed rather than converted to heredocs, because there is no reader to
+        # convert them for.                 
 
     - name: Report on testing
       id: report
@@ -1032,6 +1042,50 @@ jobs:
           echo "pr-desc<<$EOF" >> $GITHUB_OUTPUT
           echo "$NEW_DESCRIPTION" >> $GITHUB_OUTPUT
           echo "$EOF" >> $GITHUB_OUTPUT
+
+    # The same three verdicts as the table above, in a form a machine can read.
+    #
+    # They already exist and already reach nobody: the table goes into the pull request
+    # description, and the `update-pr-desc` job rewrites that description wholesale on every run,
+    # so anything that wanted to read them would be racing a rewrite. The publish workflow solved
+    # the identical problem by announcing itself in a comment, and this is that device applied to
+    # this job. Comments are not touched by any of the description rewrites.
+    #
+    # One comment per pull request, edited in place, so a resubmission does not stack up a new one
+    # each time. `continue-on-error` because this is a convenience for a downstream reader and
+    # never a reason to fail a run that has already done its real work.
+    - name: Announce the test results for machines
+      continue-on-error: true
+      env:
+        PR_NUMBER: ${{ needs.get-pr.outputs.pr-number }}
+      run: |
+        marker='<!-- wikipathways-testing '
+
+        # "PASS" / "REVIEW REQUIRED" as the two words a reader has to branch on.
+        verdict() {
+          if [ "$1" = "PASS" ]; then echo "pass"; else echo "review"; fi
+        }
+
+        body=$(jq -nc \
+          --argjson pr "$PR_NUMBER" \
+          --arg title "$(verdict "$status_test_title")" \
+          --arg description "$(verdict "$status_test_desc")" \
+          --arg nodes "$(verdict "$status_test_nodes")" \
+          '{pr: $pr, title: $title, description: $description, nodes: $nodes}')
+
+        comment="${marker}${body} -->
+
+        The automated tests above, in machine-readable form. Written for the curation portal;
+        the table in the pull request description is the one meant for people."
+
+        existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
+          --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n 1)
+
+        if [ -n "$existing" ]; then
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -f body="$comment"
+        else
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -f body="$comment"
+        fi
 
   commit-outputs:
     needs: [get-pr,get-gpml,metadata,authors,pubmed,frontmatter,json-svg,testing]

@@ -12,8 +12,9 @@ target layout (`.github/workflows/...`) so the files can be copied across verbat
 The three files:
 
 - `.github/workflows/1_on_pull_request.yml` — the PR processor. Two one-line fixes on the
-  new-contributor path, plus two on the data-node test; see "Workflow 1: the
-  first-contributor path" and "Workflow 1: the node test dies without saying so" below.
+  new-contributor path, two on the data-node test, a fix for the data-node counts, and one
+  added step announcing the test results in a form a machine can read. See the four
+  "Workflow 1" sections below.
 - `.github/workflows/3a_approved_pull_request.yml` — the publish workflow. Renames the
   draft files produced by workflow 1 to their final WPID, pushes them to `sandbox-wp-db`,
   `sandbox-wp.gh.io` and `sandbox-wp-assets`, announces the WPID on the PR, and closes it.
@@ -82,12 +83,56 @@ their drafts and their PR-body report, and nothing anywhere says why.
 Observed on `marvinm2/sandbox-wp-db` run `30442228975` (an edit to WP100) and reproduced offline
 against that pull request's diff, where the loop dies on the fifth deleted node, `GraphId="a57"`.
 
-One thing deliberately **not** changed: the counts these variables feed are wrong for a separate
-reason. `modified_nodes` is accumulated as `"$modified_nodes\n$deleted_node"`, and neither bash's
-double quotes nor its `echo` turns that `\n` into a newline, so `grep -vF` is handed a single
-pattern line that matches nothing and every deleted node is counted as deleted. Nothing gates on
-those numbers — they render as coloured text in a report — so rewriting the logic in someone
-else's workflow would enlarge the pull request for no gain.
+## Workflow 1: the node counts are wrong, and now something reads them
+
+This was deliberately left alone before, on the grounds that nothing gated on the numbers — they
+rendered as coloured text in a report. That stopped being true the moment the curation portal
+began reading this job's verdicts (next section), so it is fixed here.
+
+`modified_nodes` was accumulated as `"$modified_nodes\n$deleted_node"`. Inside double quotes bash
+does not interpret `\n`, so the list was one long line with literal backslash-n separators, and
+all three counts were wrong because of it:
+
+- `wc -l` reported **1** however many nodes were modified;
+- `grep -vF "$modified_nodes"` matched nothing, so modified nodes were counted as **added** too;
+- `grep -vF "$safe_modified_nodes"` likewise, so they were counted as **deleted** as well.
+
+```bash
+modified_nodes="$modified_nodes\n$deleted_node"          # literal backslash-n
+modified_nodes="${modified_nodes}${deleted_node}"$'\n'   # fixed
+```
+
+The three `echo "…=${…}" >> $GITHUB_ENV` lines at the end of that step are **removed** rather than
+repaired. Nothing in the workflow ever read them, and all three values are multi-line, so the
+writes were already malformed — without a heredoc delimiter every line after the first is parsed
+as its own `NAME=VALUE` assignment. That was harmless only while `modified_nodes` was accidentally
+single-line; with real newlines in it, keeping them would turn a dead write into a failing one.
+
+## Workflow 1: announcing the test results where something can read them
+
+The `testing` job's three verdicts — title length, description length, data-node changes — have
+always existed and have always reached nobody outside GitHub. They are written into the pull
+request **description**, and `update-pr-desc` rewrites that description wholesale on every run, so
+anything trying to read them would be racing a rewrite. That is the same problem the publish
+workflow already solved by announcing itself in a comment (`<!-- wikipathways-publish … -->`),
+which the portal parses today.
+
+So the `testing` job gains one step, `Announce the test results for machines`, printing the same
+device:
+
+```
+<!-- wikipathways-testing {"pr":54,"title":"pass","description":"review","nodes":"review"} -->
+```
+
+One comment per pull request, edited in place via `gh api`, so a resubmission does not stack them
+up. `continue-on-error: true`: it is a convenience for a downstream reader and never a reason to
+fail a run that has already done its real work. Comments are untouched by the description
+rewrites, which is the whole point.
+
+The portal predicts all three offline as well, from the uploaded GPML, so a submitter sees them
+before the pull request exists (`app/quality/`). Showing both answers side by side is deliberate:
+where they disagree, the portal's copy of these thresholds has fallen behind the real ones, and
+that becomes visible instead of silently wrong.
 
 ## What is known, and what is not
 

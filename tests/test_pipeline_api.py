@@ -557,3 +557,77 @@ def test_a_published_review_with_no_wpid_offers_no_page_link(tmp_path):
 
     assert "WPNone" not in page
     assert "See the published pathway page" not in page
+
+
+def test_a_publish_workflow_that_never_started_is_visible_on_the_card(tmp_path):
+    """The one publication failure nothing else in the app can see.
+
+    When the publish workflow fails *while running* it posts its own marker comment and the review
+    settles from that. When it fails to **start** — a malformed expression fails the whole workflow
+    at parse time, which happened on 2026-07-30 — nothing is posted, nothing is labelled, and the
+    review sits approved until the timeout with no trace anywhere the portal looks. Its runs carry
+    no pull-request reference (the label dispatcher starts them with `workflow_dispatch`), so the
+    most recent run in the repository is the only thing there is to show, and the card says so.
+    """
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        fake = app.state._fake
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+        _pass_every_required_item(client, pr)
+        client.post(f"/api/reviews/{pr}/approve")
+        # Approved, and the repository's publish workflow died without announcing anything.
+        fake.record_workflow_run(REPO, "3a_approved_pull_request.yml", conclusion="failure")
+        page = client.get(f"/dashboard/{pr}").text
+
+    assert "The last publish run in" in page
+    assert "may belong to another pathway" in page  # hedged, because it cannot be tied to this PR
+
+
+def test_a_successful_publish_run_is_not_reported_as_a_problem(tmp_path):
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        fake = app.state._fake
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+        _pass_every_required_item(client, pr)
+        client.post(f"/api/reviews/{pr}/approve")
+        fake.record_workflow_run(REPO, "3a_approved_pull_request.yml", conclusion="success")
+        page = client.get(f"/dashboard/{pr}").text
+
+    assert "The last publish run in" not in page
+
+
+def test_the_repositorys_own_verdict_is_shown_beside_the_apps_prediction(tmp_path):
+    """The point of porting its three tests: two answers to the same question, side by side.
+
+    The app answers before the pull request exists, from the uploaded GPML. The repository answers
+    after its run, from its own diff. Where they disagree the ported thresholds have fallen behind,
+    and showing both is the only way that is visible rather than silently wrong.
+    """
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        fake = app.state._fake
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+        # What workflow 1's `testing` job posts once the staged marker step is merged.
+        fake.issue_comments.setdefault((REPO, pr), []).append(
+            f'<!-- wikipathways-testing {{"pr": {pr}, "title": "review",'
+            ' "description": "review", "nodes": "review"} -->'
+        )
+        fake.record_workflow_run(REPO, "1_on_pull_request.yml", conclusion="success")
+        page = client.get(f"/dashboard/{pr}").text
+
+    assert f"{REPO} said: review required" in page
+
+
+def test_no_marker_means_the_card_shows_only_what_the_app_measured(tmp_path):
+    """The ordinary case today — that workflow change is staged, not proposed."""
+    app = _pipeline_app(tmp_path, curators=["marvinm2"])
+    with TestClient(app) as client:
+        pr = _submit(client)["pr_number"]
+        _login(client, "marvinm2")
+        page = client.get(f"/dashboard/{pr}").text
+
+    assert "said: review required" not in page
+    assert "Automated checks" in page  # the app's own findings are there regardless

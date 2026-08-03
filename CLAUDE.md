@@ -80,6 +80,35 @@ repos.
   overlay colours each hotspot and the panel strikes the previous value through. The overlay is
   also **one tab stop, not one per node** (issue #19): a roving tabindex under a toolbar role,
   arrow keys in reading order, selection following focus into a polite live region.
+  **Quality control is one graded ruleset** (`app/quality/`, 2026-08-03). Before it there were
+  five, in four vocabularies, and the richest of them never ran: `mvp1/validate_pathway.py`
+  grades thirteen checks but ships inside `pr-preview.yml`, which the live target repository has
+  never had. `app/quality/rules.py` holds the union — the four reasons `validate_gpml` refuses a
+  file for (kept **word for word**: they reach a submitter through `describeError`), the GPML-side
+  checks from `mvp1`, and the target repo's own `testing` job (title >= 10 chars, description
+  >= 15 words or an edit changing it by <= 3 words / 10 chars, data-node changes) ported rule for
+  rule and flagged `predicts_repo`. Severities are `na < pass < warn < fail < block`; `na` ranks
+  *below* pass so "nothing to check" cannot win a rollup. **The package must import nothing from
+  `app.*` at module scope** — `app.models` imports `app.review.checklist`, which imports this —
+  so metadata is duck-typed and the one call into `app.submit.gpml` is function-local; an AST test
+  pins it. `validate_gpml` is now defined as the `block` subset, so the portal cannot refuse a
+  file for a reason its own report called fine. The report is **cached in the render sidecar**
+  (`quality.json`), never persisted: it is a pure function of the GPML and the checklist is
+  already the record. Surfaces: `/api/validate` (**which nothing called before** — the submit form
+  now posts to it on file choice, so a submitter sees warnings before the pull request exists),
+  one "Automated checks" block on the review card that absorbed the old free-floating
+  pipeline-failure notice, and a table in the mirror comment. `_render_preview` therefore runs
+  **before** `register`, or the first mirror comment has the table missing.
+  **The checklist is aligned with the repository's own reviewer checklist** — added
+  `interactions_connected`, gave `description_ok` an auto_check. That one can never return `pass`:
+  `refresh_pipeline_checks` only writes items still `pending`, so anything the app puts there
+  pre-empts the repo's own description check, which is strictly better (it quotes what its
+  extractor pulled out, the text that reaches the published page).
+  **The repo's `testing` verdicts are read back** off a `<!-- wikipathways-testing … -->` marker
+  comment (`parse_testing_marker`), the same device 3a's publish marker already uses, and shown
+  beside the app's predictions — a disagreement means the ported thresholds have drifted. The
+  workflow step that posts it is staged in `sandbox-workflows/`, **not proposed**, so the field is
+  empty on the live target until it is.
   Everything is verified against `FakeGitHubClient` (tests override `get_github_client`,
   `get_bot_client`/`get_bot_optional`, `get_current_user`); the OAuth + App token flows are
   tested via injected `httpx.MockTransport`.

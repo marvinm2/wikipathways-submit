@@ -36,6 +36,36 @@ MIRROR_MARKER = "<!-- wikipathways-submit:mirror -->"
 PUBLISH_MARKER = "<!-- wikipathways-publish "
 _PUBLISH_MARKER_RE = re.compile(re.escape(PUBLISH_MARKER) + r"(\{.*?\})\s*-->", re.DOTALL)
 
+#: The same device for the repository's `testing` job, which checks the title length, the
+#: description length and whether any data nodes changed. Those verdicts have always existed and
+#: have never reached anyone using the portal: the job writes them into the pull request
+#: *description*, and workflow 1 rewrites that description wholesale on every run. So they are
+#: read from a comment, exactly as the publish announcement is, and for the same reason.
+#:
+#: The app also *predicts* all three offline (``app.quality``), which is what a submitter sees
+#: before the pull request exists. These are the repository's own answers, and the two being shown
+#: side by side is deliberate: a disagreement means the ported thresholds have fallen behind, and
+#: this is the only way that becomes visible instead of silently wrong.
+TESTING_MARKER = "<!-- wikipathways-testing "
+_TESTING_MARKER_RE = re.compile(re.escape(TESTING_MARKER) + r"(\{.*?\})\s*-->", re.DOTALL)
+
+#: What the repository's three tests are called, and the order they are reported in. The keys are
+#: the marker's; the values are what a curator reads.
+TESTING_CHECKS = {
+    "title": "Title length",
+    "description": "Description length",
+    "nodes": "Data nodes",
+}
+
+#: Which ``app.quality`` rule predicts which of those three. The pairing is the whole point of
+#: porting them: the app answers before the pull request exists, the repository answers after its
+#: run, and where the two disagree the ported threshold has fallen behind the real one.
+TESTING_RULE_IDS = {
+    "content.title_length": "title",
+    "content.description": "description",
+    "content.datanode_changes": "nodes",
+}
+
 #: Review states and checklist states, in words rather than the stored enum values.
 _PLAIN_STATUS = {
     "open": "waiting on review",
@@ -81,7 +111,12 @@ _TERMINAL_FOR_MIRROR = (
 
 
 def render_mirror_comment(
-    review: Review, repo: str, *, base_url: str = "", pipeline_mode: bool = False
+    review: Review,
+    repo: str,
+    *,
+    base_url: str = "",
+    pipeline_mode: bool = False,
+    quality=None,
 ) -> str:
     """Render the read-only PR mirror comment (design §4.5): checklist + approval state.
 
@@ -90,6 +125,12 @@ def render_mirror_comment(
 
     ``base_url`` is the app's public URL. When set, the comment links to the review page — the
     only place the before/after render exists, since CI publishes tables and pvjson but no image.
+
+    ``quality`` is the graded report from ``app.quality``, appended as its own table when there is
+    one. It is what makes this comment answer the question a GitHub-native reviewer actually has —
+    the checklist above says what a curator has decided, and this says what was measured. None is
+    the ordinary case for a review whose render cache has been swept, and the comment then reads
+    exactly as it always did.
     """
     # Carries its own article: "An edit", not "A edit".
     subject = "A new pathway" if review.kind == "new" else "An edit"
@@ -124,6 +165,8 @@ def render_mirror_comment(
         state = _PLAIN_STATE.get(item.get("state", "pending"), item.get("state", "pending"))
         note = item.get("note") or ""
         lines.append(f"| {item['label']}{req} | {state} | {f'_{note}_' if note else ''} |")
+    if quality is not None and quality.findings:
+        lines += ["", quality.to_markdown(heading="What the portal measured")]
     # ``approved_by`` records who approved it, and is deliberately not cleared when an approval
     # is taken back — so it cannot be the test for whether the approval still stands. Reading it
     # that way put "Approved and merged by @X" on rejected and changes-requested pull requests.
@@ -237,6 +280,28 @@ def parse_publish_marker(body: str) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def parse_testing_marker(body: str) -> dict | None:
+    """Extract the repository's ``testing`` verdicts from one comment body, if present.
+
+    Structured for the same reason the publish marker is: the alternative is grepping a coloured
+    markdown table that the repository is free to reword, and that repository rewrites text fields
+    freely. Only the three known keys are kept, so an added field cannot reach a template.
+    """
+    match = _TESTING_MARKER_RE.search(body or "")
+    if match is None:
+        return None
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    verdicts = {
+        key: str(payload[key]) for key in TESTING_CHECKS if isinstance(payload.get(key), str)
+    }
+    return verdicts or None
+
+
 class CurationService:
     def __init__(
         self,
@@ -254,6 +319,7 @@ class CurationService:
         publish_mode: str = "direct",
         default_branch: str = "main",
         pipeline_workflow_file: str = "",
+        publish_workflow_file: str = "",
         label_accepted: str = "accepted",
         label_rejected: str = "rejected",
         label_author_feedback: str = "author feedback required",
@@ -278,6 +344,7 @@ class CurationService:
         self._publish_mode = publish_mode
         self._default_branch = default_branch
         self._pipeline_workflow_file = pipeline_workflow_file
+        self._publish_workflow_file = publish_workflow_file
         self._label_accepted = label_accepted
         self._label_rejected = label_rejected
         self._label_author_feedback = label_author_feedback
@@ -320,6 +387,14 @@ class CurationService:
         """
         if self._github is None:
             return
+        # None whenever there is no preview cache on this service, or nothing cached for this pull
+        # request. Both are ordinary, and both render the comment this method always rendered.
+        quality = None
+        if self._previews is not None:
+            try:
+                quality = self._previews.quality(review.pr_number)
+            except Exception:  # noqa: BLE001 - an aid must never cost the comment
+                quality = None
         try:
             self._github.upsert_issue_comment(
                 self._repo,
@@ -329,6 +404,7 @@ class CurationService:
                     self._repo,
                     base_url=self._app_base_url,
                     pipeline_mode=self.is_pipeline_mode,
+                    quality=quality,
                 ),
                 marker=MIRROR_MARKER,
             )
@@ -1228,6 +1304,58 @@ class CurationService:
             return None
         return {"status": run.status, "conclusion": run.conclusion, "url": run.html_url}
 
+    def _publish_run_state(self) -> dict | None:
+        """The repository's most recent publish run, for a review that is waiting on one.
+
+        Deliberately *not* tied to this pull request, and the template says so. The publish
+        workflow is started by ``workflow_dispatch`` from the label dispatcher, so its runs carry
+        the default branch's SHA and no reference to any pull request —
+        ``latest_workflow_run_for_pr`` cannot see them at all, by construction rather than by
+        oversight.
+
+        It is worth showing anyway because of the one failure this app is otherwise blind to. When
+        the publish workflow fails *while running*, its own ``if: failure()`` step posts a marker
+        comment and the review settles from that. When it fails to **start** — a malformed
+        expression fails the whole workflow at parse time, which happened on 2026-07-30 — nothing
+        is posted, nothing is labelled, and the review sits approved until the timeout with no
+        trace anywhere the portal looks. A recent run in that state is the only visible symptom.
+        """
+        if not self.is_pipeline_mode or not self._publish_workflow_file:
+            return None
+        try:
+            runs = self._github.recent_workflow_runs(
+                self._repo, self._publish_workflow_file, limit=1
+            )
+        except (GitHubError, httpx.HTTPError):
+            return None
+        if not runs:
+            return None
+        run = runs[0]
+        return {"status": run.status, "conclusion": run.conclusion, "url": run.html_url}
+
+    def _pipeline_testing_state(self, pr_number: int) -> dict | None:
+        """The repository's own ``testing`` verdicts for this pull request, newest wins.
+
+        Newest rather than first, unlike the publish marker: a revision re-runs workflow 1 and its
+        verdicts are about the file that is there now. The publish marker has the opposite rule
+        because an announced WPID is a fact that a later failure does not undo.
+
+        Best-effort. Most pull requests carry no such comment at all — the marker is a change to
+        that repository's workflow that has been staged and not yet proposed — and the panel simply
+        shows the app's own predictions when there is nothing to compare them against.
+        """
+        if not self.is_pipeline_mode or self._github is None:
+            return None
+        try:
+            bodies = self._github.list_issue_comments(self._repo, pr_number)
+        except (GitHubError, httpx.HTTPError):
+            return None
+        for body in reversed(bodies):
+            verdicts = parse_testing_marker(body)
+            if verdicts:
+                return verdicts
+        return None
+
     def _reconcile_one(self, pr_number: int) -> bool:
         """Bring one review in line with GitHub. Returns True if its status changed."""
         try:
@@ -1235,7 +1363,39 @@ class CurationService:
         except (GitHubError, httpx.HTTPError):
             return False  # transient — leave it; try again next load
 
-        pipeline_run = self._pipeline_run_state(pr_number) if detail is not None else None
+        # Read before the remaining network calls rather than inside the session below, so that
+        # deciding *which* calls to make does not hold a session open across any of them.
+        with self._session_factory() as s:
+            existing = s.get(Review, pr_number)
+            was_status = existing.status if existing is not None else None
+            known = dict(existing.pipeline_run or {}) if existing is not None else {}
+
+        # Layered onto what was already known rather than replacing it. Each of the three lookups
+        # below can come back empty on its own — a workflow that has not run, a marker comment
+        # that repository does not post yet, a publication nobody is waiting on — and a poll that
+        # learns nothing new must leave the last thing it did learn alone.
+        pipeline_run: dict | None = None
+        if detail is not None:
+            merged = dict(known)
+            run = self._pipeline_run_state(pr_number)
+            if run is not None:
+                merged.update(run)
+            # Carried inside the same JSON column rather than in one of its own: these verdicts
+            # are output of the very workflow run recorded beside them, and a separate column
+            # would need a migration to say something this one already has room for.
+            testing = self._pipeline_testing_state(pr_number)
+            if testing is not None:
+                merged["testing"] = testing
+            # Only while a review is waiting on a publication. At any other time the repository's
+            # most recent publish run belongs to somebody else's pathway and says nothing here.
+            # Deliberately not conditional on workflow 1 having run: the failure this exists to
+            # surface is a publish workflow that never started, and on a submission whose earlier
+            # processing also never ran there would be no run to hang it off.
+            if was_status in _AWAITING_WPID:
+                publish = self._publish_run_state()
+                if publish is not None:
+                    merged["publish"] = publish
+            pipeline_run = merged or None
 
         with self._session_factory() as s:
             review = s.get(Review, pr_number)

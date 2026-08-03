@@ -33,9 +33,14 @@ def test_auto_checks_prefill_states():
     assert _item(cl, "datanodes_mapped")["auto"] is True
     assert _item(cl, "naming_ok")["state"] == "pass"
     assert _item(cl, "ontology_tags")["state"] == "pass"
-    # "Title and description are meaningful" is a human judgement — no auto state.
+    # "Meaningful" stays a human judgement, so the auto-check can never reach pass — but it does
+    # run, and its note says how the description measures against what the repository asks for.
     assert _item(cl, "description_ok")["state"] == "pending"
-    assert _item(cl, "description_ok")["auto"] is False
+    assert _item(cl, "description_ok")["auto"] is True
+    # "Interactions are connected" is on the repository's reviewer checklist and cannot be
+    # answered from parsed annotation, so it stays a blank human judgement.
+    assert _item(cl, "interactions_connected")["state"] == "pending"
+    assert _item(cl, "interactions_connected")["auto"] is False
     refs = _item(cl, "references_valid")
     assert refs["state"] == "na"  # no references
     assert refs["required"] is False  # auto-N/A must not block approval
@@ -46,9 +51,9 @@ def test_auto_checks_prefill_states():
 
 def test_well_annotated_submission_only_needs_human_checks():
     cl = build_checklist(metadata=parse_curation_metadata(MAPPED), kind="new")
-    assert is_complete(cl) is False  # render_ok + description_ok still pending
-    # The structural checks auto-pass; only the two human judgements remain.
-    for key in ("render_ok", "description_ok"):
+    assert is_complete(cl) is False  # the human judgements are still pending
+    # The structural checks auto-pass; only the human judgements remain.
+    for key in ("render_ok", "description_ok", "interactions_connected"):
         assert _item(cl, key)["state"] == "pending"
         _item(cl, key)["state"] = "pass"
     assert is_complete(cl) is True
@@ -77,10 +82,10 @@ def test_update_scopes_unchanged_checks_to_na():
     assert "Not relevant" in dn["note"]
     # A check with no relevance rule (render) is always kept.
     assert _item(cl, "render_ok")["required"] is True
-    # With every changeable subject unchanged and render marked pass, approval isn't blocked by
-    # the scoped-out items.
+    # With every changeable subject unchanged and the always-kept human checks marked pass,
+    # approval isn't blocked by the scoped-out items.
     for i in cl:
-        if i["key"] == "render_ok":
+        if i["key"] in ("render_ok", "interactions_connected"):
             i["state"] = "pass"
     assert is_complete(cl) is True
 

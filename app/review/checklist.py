@@ -61,35 +61,42 @@ class ChecklistItemDef:
 
 
 # ---- auto-check implementations (offline, cheap) -----------------------------------------
+#
+# Three of the four are adapters over ``app.quality``, which holds the same rules the submit form
+# and the mirror comment run. Before that, the review card's "3 of 12 data nodes have no
+# identifier" and the pull request's "Datanode annotation | WARN" were two separately-maintained
+# descriptions of one problem, and only ever one of them got updated.
 
 
-def _auto_datanodes(m) -> AutoResult:
-    nodes = m.data_nodes
-    if not nodes:
-        return AutoResult(ChecklistState.NA.value, "No data nodes in this pathway.")
-    unmapped = [n.label or "(unlabeled)" for n in nodes if not n.identifier]
-    if unmapped:
-        shown = ", ".join(unmapped[:6]) + ("…" if len(unmapped) > 6 else "")
-        return AutoResult(
-            ChecklistState.FAIL.value,
-            f"{len(unmapped)} of {len(nodes)} data nodes have no identifier: {shown}",
-        )
-    return AutoResult(
-        ChecklistState.PASS.value, f"All {len(nodes)} data nodes carry an identifier."
-    )
+def _auto_from(key: str) -> MetaFn:
+    """Turn the quality rule bound to ``key`` into a checklist auto-check.
+
+    The threshold, the severity and the wording all live in ``app.quality``; this only translates
+    the vocabulary, and the translation itself is declared on the rule so an item whose honest
+    ceiling is "pending" says so once rather than in every caller.
+
+    Imported inside the closure: ``app.models`` imports this module, so an eager import of
+    ``app.quality`` would be reached from ``app.models`` and close a cycle through ``app.submit``.
+    """
+
+    def auto_check(m) -> AutoResult:
+        from app.quality import checklist_result
+
+        result = checklist_result(key, m)
+        if result is None:
+            return AutoResult(ChecklistState.PENDING.value, "")
+        return AutoResult(*result)
+
+    return auto_check
 
 
-def _auto_references(m) -> AutoResult:
-    if not m.references:
-        return AutoResult(ChecklistState.NA.value, "No literature references to resolve.")
-    # Resolvability needs the network; the References panel lists each one as a clickable link, so
-    # point the curator there rather than guessing pass/fail.
-    n = len(m.references)
-    return AutoResult(
-        ChecklistState.PENDING.value,
-        f"Open the {n} reference{'' if n == 1 else 's'} listed above and check "
-        f"{'it resolves' if n == 1 else 'they resolve'}.",
-    )
+_auto_datanodes = _auto_from("datanodes_mapped")
+_auto_references = _auto_from("references_valid")
+_auto_ontology = _auto_from("ontology_tags")
+#: New. "Meaningful" stays a human judgement — this can never return ``pass`` (see the binding in
+#: ``app.quality.rules``) — but a missing description, or one below the length the repository asks
+#: for, is a fact the app can state instead of leaving the curator to notice.
+_auto_description = _auto_from("description_ok")
 
 
 def _auto_naming(m) -> AutoResult:
@@ -106,13 +113,6 @@ _PIPELINE_NAMING = AutoResult(
     "The repository files this pathway and assigns its WPID at publication. Its own record of "
     "the filename fills this in once its pipeline has run.",
 )
-
-
-def _auto_ontology(m) -> AutoResult:
-    if m.ontology_tags:
-        n = len(m.ontology_tags)
-        return AutoResult(ChecklistState.PASS.value, f"{n} ontology tag{'' if n == 1 else 's'}.")
-    return AutoResult(ChecklistState.NA.value, "No ontology tags (optional).")
 
 
 # ---- update-relevance implementations ----------------------------------------------------
@@ -147,6 +147,26 @@ def _rel_ontology(before, after) -> bool:
 
 
 # Ordered; keys are stable identifiers used by the API to update a single item.
+#
+# Deliberately aligned with the reviewer checklist the target repository appends to every pull
+# request description (``1_on_pull_request.yml``, the ``Report on testing`` step). That list and
+# this one used to overlap on four items and diverge on the rest, so a curator working in the
+# portal and a curator working on the pull request were answering two different lists about one
+# pathway. The mapping now:
+#
+#   repository says                                    | here
+#   ---------------------------------------------------|--------------------------
+#   Datanodes are annotated with database references    | datanodes_mapped
+#   A description, 2-3 sentence overview of processes   | description_ok
+#   At least one literature reference is provided       | references_valid
+#   At least one pathway ontology term is included      | ontology_tags
+#   Interactions are connected                          | interactions_connected
+#   Pathway title conforms to the guidelines            | description_ok's note
+#   ---------------------------------------------------|--------------------------
+#   (not on the repository's list)                      | render_ok, naming_ok
+#
+# The last two stay because they are the portal's own business: the repository never sees the
+# render, and in pipeline mode it owns the naming outright.
 CURATION_CHECKLIST: list[ChecklistItemDef] = [
     # A human still eyeballs the rendered diagram — no auto_check.
     ChecklistItemDef("render_ok", "Rendered pathway displays correctly", required=True),
@@ -167,13 +187,21 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
     ChecklistItemDef(
         "naming_ok", "WPID and file layout are correct", required=True, auto_check=_auto_naming
     ),
-    # "Meaningful" is a human judgement — no auto_check. Still scoped out of updates that leave
-    # the title and description unchanged.
+    # "Meaningful" is still a human judgement, and the auto-check cannot reach ``pass`` — but it
+    # can say a description is missing or shorter than the repository will accept, which is a fact
+    # rather than a judgement. Still scoped out of updates that leave both fields alone.
     ChecklistItemDef(
         "description_ok",
         "Title and description are meaningful",
         required=True,
+        auto_check=_auto_description,
         relevant_for_update=_rel_description,
+    ),
+    # No auto_check, and there cannot be one: whether an interaction is *connected* is about the
+    # graph the diagram draws, not about the annotation the parser reads. It is here because the
+    # repository asks every reviewer for it and the portal was the only place not asking.
+    ChecklistItemDef(
+        "interactions_connected", "Interactions are connected", required=True
     ),
     ChecklistItemDef(
         "ontology_tags",

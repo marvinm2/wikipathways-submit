@@ -112,6 +112,95 @@
   });
 
 
+  // ---------- pre-flight on file choice ----------
+  // /api/validate has existed since MVP-2 and nothing ever called it: the form posted straight to
+  // /api/submit, so the first thing a submitter heard about their file was either a pull request
+  // or a 422. Everything the database's own pipeline will complain about — a short title, a thin
+  // description, unannotated nodes, an empty citation id that kills its metadata step — was
+  // knowable here, at the one moment the fix is still free.
+  //
+  // Advisory throughout. The four blocking reasons still 422 on submit; nothing below stops
+  // anyone, and the submit button is never disabled by it.
+  var PREFLIGHT_WORD = {
+    block: 'Blocked', fail: 'Problem', warn: 'Worth a look', pass: 'Fine', na: 'Nothing to check'
+  };
+
+  function span(cls, text) {
+    var el = document.createElement('span');
+    el.className = cls;
+    el.textContent = text;
+    return el;
+  }
+
+  function renderPreflight(findings) {
+    var host = document.getElementById('preflight');
+    if (!host) { return; }
+    host.innerHTML = '';
+    var loud = (findings || []).filter(function (f) {
+      return f.severity === 'warn' || f.severity === 'fail' || f.severity === 'block';
+    });
+    if (!loud.length) {
+      host.className = 'preflight preflight--clean';
+      host.appendChild(span('preflight__lede', 'Checked. Nothing to flag before this is submitted.'));
+      host.hidden = false;
+      return;
+    }
+    var worst = loud.some(function (f) { return f.severity !== 'warn'; }) ? 'fail' : 'warn';
+    host.className = 'preflight preflight--' + worst;
+    host.appendChild(span(
+      'preflight__lede',
+      'Checked before submitting. None of this stops you — it is what the database is likely ' +
+      'to raise.'
+    ));
+    var list = document.createElement('ul');
+    list.className = 'preflight__list';
+    loud.forEach(function (f) {
+      var li = document.createElement('li');
+      li.className = 'preflight__item preflight__item--' + f.severity;
+      // Built as nodes with textContent rather than an HTML string. A finding's detail quotes
+      // data-node labels straight out of the uploaded file, so it is attacker-controlled text on
+      // a page the attacker is already authenticated to — the one place in this form where
+      // innerHTML would be a real hole rather than a theoretical one.
+      li.appendChild(span(
+        'preflight__pill preflight__pill--' + f.severity,
+        PREFLIGHT_WORD[f.severity] || f.severity
+      ));
+      li.appendChild(span('preflight__title', f.title || ''));
+      li.appendChild(span('preflight__detail', f.detail || ''));
+      list.appendChild(li);
+    });
+    host.appendChild(list);
+    host.hidden = false;
+  }
+
+  var newFile = document.getElementById('new-file');
+  if (newFile) {
+    newFile.addEventListener('change', function () {
+      var host = document.getElementById('preflight');
+      var file = newFile.files[0];
+      if (host) { host.hidden = true; host.innerHTML = ''; }
+      if (!file) { return; }
+      var fd = new FormData();
+      fd.append('file', file);
+      fetch('/api/validate', { method: 'POST', body: fd })
+        .then(function (r) {
+          return r.json().catch(function () { return {}; })
+            .then(function (j) { return { ok: r.ok, status: r.status, body: j }; });
+        })
+        .then(function (res) {
+          // A 422 here is the file being refused outright, and submit will say the same thing in
+          // the same words. Reported now so nobody uploads twice to hear it.
+          if (!res.ok) { showError('result-card', describeError(res.status, res.body)); return; }
+          renderPreflight((res.body.quality || {}).findings);
+        })
+        .catch(function () {
+          // The pre-flight is a courtesy; a submitter who cannot reach it can still submit, and
+          // that request will report its own failure. Saying nothing beats a scary red box about
+          // a check nobody asked for.
+        });
+    });
+  }
+
   // ---------- new-pathway submit (single action — validate + open PR together) ----------
   var submitForm = document.getElementById('submit-form');
   if (submitForm) {

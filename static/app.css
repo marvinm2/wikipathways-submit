@@ -710,12 +710,18 @@ main { flex: 1; }
 .review-card__expand {
   margin-left: auto;
   display: inline-flex;
-  color: var(--ink-faint);
-  padding: 0.3rem;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--moss);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 0.3rem 0.5rem;
   border-radius: var(--radius-s);
+  white-space: nowrap;
 }
-.review-card__expand:hover { color: var(--moss); background: var(--moss-tint); }
-.review-card__expand svg { width: 1.1rem; height: 1.1rem; }
+.review-card__expand:hover { color: var(--moss-strong); background: var(--moss-tint); }
+.review-card__expand svg { width: 0.85rem; height: 0.85rem; flex: none; }
 
 .review-card__submitter { overflow-wrap: anywhere;
   color: var(--ink-muted);
@@ -763,6 +769,20 @@ main { flex: 1; }
   box-sizing: border-box;
 }
 .review-card--expanded .zoom__viewport { height: 30rem; }
+
+/* ---------- queue density ----------
+   The card macro is used at two densities from one definition, and the queue's job is triage: a
+   curator scanning twenty submissions needs the state, the shape of the diagram and the controls
+   in one screen. At full size the diagram alone pushed the checklist and every decision button —
+   Approve, Reject, Request changes, Assign — below the fold on every card, so the queue was a
+   list you could read but not act on. The detail page keeps the full-size treatment. */
+.review-card:not(.review-card--expanded) .zoom__viewport { height: 13rem; }
+.review-card:not(.review-card--expanded) .preview__frame > img { height: 13rem; }
+/* Everything this panel says is either repeated by the automated-checks block above (a failed
+   run) or is detail for a curator who has already committed to the review. */
+.review-card:not(.review-card--expanded) .pipeline-panel { display: none; }
+.review-card:not(.review-card--expanded) .checklist__item { padding: 0.35rem 0; }
+.review-card:not(.review-card--expanded) .checklist { margin-bottom: 0.8rem; }
 .zoom--zoomed .zoom__viewport { cursor: grab; touch-action: none; }
 .zoom--zoomed .zoom__viewport:active { cursor: grabbing; }
 /* Zoom and pan are applied to the stage, not the image, so the hotspot overlay moves with the
@@ -803,8 +823,8 @@ main { flex: 1; }
 .hotspot:hover,
 .hotspot:focus-visible,
 .hotspot--active {
-  background: color-mix(in srgb, var(--iris) 16%, transparent);
-  border-color: var(--iris);
+  background: color-mix(in srgb, var(--moss) 16%, transparent);
+  border-color: var(--moss);
   outline: none;
 }
 .zoom--interactive .zoom__viewport { cursor: default; }
@@ -842,7 +862,7 @@ main { flex: 1; }
   margin: 0 0 0.5rem;
   padding: 0.55rem 0.75rem;
   border: 1px solid var(--line);
-  border-left: 3px solid var(--iris);
+  border-left: 3px solid var(--moss);
   border-radius: var(--radius-s);
   background: var(--surface-2);
 }
@@ -968,7 +988,7 @@ main { flex: 1; }
 .meta-panel--lead { margin-bottom: 0.6rem; }
 .meta-panel__block { border: 1px solid var(--line); border-radius: var(--radius-s); padding: 0.6rem 0.75rem; background: var(--surface-2); }
 .meta-panel__block--note { background: var(--moss-tint); border-color: transparent; }
-.meta-panel__block h4 { margin: 0 0 0.3rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); }
+.meta-panel__block h3 { margin: 0 0 0.3rem; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); }
 .meta-panel__block p { margin: 0; font-size: 0.9rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .meta-panel__block > summary { cursor: pointer; font-size: 0.8rem; font-weight: 600; color: var(--ink); }
 .meta-panel__block[open] > summary { margin-bottom: 0.5rem; }
@@ -1314,6 +1334,104 @@ main { flex: 1; }
 .pipeline-panel__slug { font-family: var(--font-mono); font-size: 0.85em; color: var(--ink-muted); }
 .pipeline-panel__links { display: flex; flex-wrap: wrap; gap: 0.9rem; margin: 0 0 0.4rem; font-size: 0.88rem; }
 .pipeline-panel__hint { margin: 0; font-size: 0.83rem; color: var(--ink-muted); }
+
+/* ---------- pre-flight on the submit form ----------
+   The same findings the review card shows, at the moment the file is chosen. Deliberately not
+   styled as an error: nothing here blocks the button, and a red box on a file that will submit
+   fine teaches people to ignore it. */
+.preflight {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+  font-size: 0.88rem;
+}
+.preflight--warn { border-left-color: var(--amber); }
+.preflight--fail { border-left-color: var(--brick); }
+.preflight--clean { border-left-color: var(--wp-green); }
+.preflight__lede { display: block; color: var(--ink-muted); line-height: 1.5; }
+.preflight__list { list-style: none; margin: 0.6rem 0 0; padding: 0; display: grid; gap: 0.5rem; }
+.preflight__item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  align-items: baseline;
+}
+.preflight__pill {
+  grid-row: 1; grid-column: 1;
+  font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 0.15rem 0.45rem; border-radius: 999px; white-space: nowrap;
+  background: var(--amber-tint); color: var(--amber);
+}
+.preflight__pill--fail, .preflight__pill--block { background: var(--brick-tint); color: var(--brick); }
+.preflight__title { grid-row: 1; grid-column: 2; font-weight: 600; }
+.preflight__detail { grid-row: 2; grid-column: 2; color: var(--ink-muted); line-height: 1.5; }
+
+/* ---------- automated checks (app/quality) ----------
+   Sits above the checklist and is deliberately not styled like it: the checklist is what a curator
+   has decided, this is what was measured. Same card grammar as .pipeline-panel, with a left rule
+   that carries the rollup severity so the state is legible before any of the text is read. */
+.quality {
+  margin: 0 0 1.1rem;
+  padding: 0.8rem 0.95rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface-2);
+}
+.quality--warn { border-left-color: var(--amber); }
+.quality--fail, .quality--block { border-left-color: var(--brick); }
+.quality__heading {
+  font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--ink-muted); margin: 0 0 0.55rem;
+}
+.quality__pipeline {
+  margin: 0 0 0.7rem; padding: 0.6rem 0.75rem; border-radius: var(--radius-s);
+  background: var(--amber-tint); color: var(--amber); font-size: 0.86rem; line-height: 1.5;
+}
+.quality__pipeline strong { display: block; margin-bottom: 0.2rem; }
+.quality__pipeline a { color: inherit; }
+.quality__clean { margin: 0; font-size: 0.88rem; color: var(--ink-muted); }
+.quality__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.quality__item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  align-items: baseline;
+  font-size: 0.88rem;
+}
+.quality__pill {
+  grid-row: 1; grid-column: 1;
+  font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 0.15rem 0.45rem; border-radius: 999px; white-space: nowrap;
+  background: var(--slate-tint); color: var(--slate);
+}
+.quality__pill--warn { background: var(--amber-tint); color: var(--amber); }
+.quality__pill--fail, .quality__pill--block { background: var(--brick-tint); color: var(--brick); }
+.quality__pill--pass { background: var(--wp-green-tint); color: var(--wp-green-strong); }
+.quality__title { grid-row: 1; grid-column: 2; font-weight: 600; }
+.quality__detail { grid-row: 2; grid-column: 2; color: var(--ink-muted); line-height: 1.5; }
+/* The repository's own answer to the same test, when its workflow has reported one. Quiet by
+   design — it is corroboration, and only interesting when it disagrees. */
+.quality__echo {
+  grid-row: 3; grid-column: 2;
+  font-size: 0.78rem; color: var(--ink-faint);
+}
+.quality__echo--review { color: var(--amber); }
+.quality__rest { margin-top: 0.6rem; }
+.quality__rest > summary {
+  cursor: pointer; font-size: 0.82rem; color: var(--ink-muted);
+  padding: 0.15rem 0; list-style-position: outside;
+}
+.quality__rest > summary:hover { color: var(--moss-strong); }
+/* The queue's summary is the whole panel, not a footnote to it. */
+.review-card:not(.review-card--expanded) .quality__rest { margin-top: 0; }
+.review-card:not(.review-card--expanded) .quality__rest > summary {
+  font-size: 0.9rem; font-weight: 600; color: var(--ink);
+}
+.quality__rest[open] > summary { margin-bottom: 0.5rem; }
 
 /* ---------- terminal actions ---------- */
 .btn--danger { color: var(--brick); border-color: color-mix(in srgb, var(--brick) 45%, transparent); }
