@@ -292,9 +292,29 @@ and `gpml.board` fire on **none** of them, which is the evidence real PathVisio 
 writes both; `content.datanode_annotation` fails on **21 of 30** and `content.references` warns on
 **6 of 30**, so a rollup over real content is not a health score.
 
-475 tests. Live at `sha256:808acb0a…` (from `a23206d`), deployed and verified the same day. The
-rollback target is `sha256:fcbcb8f3…` (from `1c73e4f`) — this round adds no migration, no secret
-and no env var, so a rollback in either direction is a plain digest change.
+**Fork mode is live and the authorship problem is fixed, measurably.** Same repository, an hour
+apart: PR #20 under `bot` was authored by `app/wikipathways-submit-bot-dev`; PRs #21 and #22 under
+`fork` by **`marvinm2`**. Both took the *owner* branch rather than actually forking — the target is
+`marvinm2/sandbox-wp-db` and he owns it — so **the fork path itself is still unproven against live
+GitHub**. Its exit condition is one submission by anybody who is not Marvin, which exercises
+`ensure_fork`, the cross-repository pull request and the head-repo plumbing at once. #22 stays open
+until then, deliberately: this repo has been bitten four times by "the fake agreed and reality did
+not".
+
+> [!warning] **No application log line had ever reached production.** Uvicorn configures only its
+> own `uvicorn*` loggers and nothing here called `basicConfig`, so the root logger had no handler;
+> Python's `lastResort` emitted WARNING and above unattributed and dropped everything below. The
+> cost was not the line being looked for: `expire_stale` and the WPID reclaim log how long a lock
+> or reservation was *actually held*, at INFO — the observability built in the #23 round so those
+> TTLs could be corrected against real behaviour. It had been collecting nothing the whole time.
+> Now configured on the `wpsubmit` parent at app start (`WPSUBMIT_LOG_LEVEL`). Generalises to any
+> stdlib-logging service behind uvicorn: **the symptom is silence, which reads exactly like
+> "nothing happened".**
+
+494 tests. Live at `sha256:bed99bf7…` (from `e4bb0b9`), deployed and verified the same day. The
+rollback target is `sha256:fcbcb8f3…` (from `1c73e4f`) — no migration and no secret was added, so
+a rollback is a plain digest change; only `WPSUBMIT_SUBMIT_IDENTITY=fork` would want reverting to
+`bot` with it.
 
 **#22 is decided and built: fork-per-submitter, with the bot as fallback.** `submit_identity`
 gains `fork`; `app/submit/targets.py` owns the whole decision (which client writes, which
