@@ -292,10 +292,16 @@ and `gpml.board` fire on **none** of them, which is the evidence real PathVisio 
 writes both; `content.datanode_annotation` fails on **21 of 30** and `content.references` warns on
 **6 of 30**, so a rollup over real content is not a health score.
 
-466 tests. Live at `sha256:fcbcb8f3…` (from `1c73e4f`), deployed and verified the same day;
-migration `f6a2c3e4d5b7` applied on the way up. The previous digest `sha256:376eeee0…` (from
-`cfdd938`) is the rollback target — the added column is nullable, so an older image ignores it.
-**The live image predates this round**, so #26 and #27 are fixed in `main` and not yet deployed.
+475 tests. Live at `sha256:808acb0a…` (from `a23206d`), deployed and verified the same day. The
+rollback target is `sha256:fcbcb8f3…` (from `1c73e4f`) — this round adds no migration, no secret
+and no env var, so a rollback in either direction is a plain digest change.
+
+**Verify a deploy against behaviour, not the digest.** The image carried no
+`org.opencontainers.image.revision` label, so the tag alone proved nothing about which commit it
+held; `docker run --rm --entrypoint python <digest> -c "…"` on the rule table answered it before
+shipping. After the rollout, the same `POST /api/validate` probe that had shown both bugs *present
+in production* an hour earlier returned the new `fail` and the new wording — which is the only
+evidence that actually settles it.
 
 The 07-29 summary below is kept because its details still hold.
 
