@@ -37,7 +37,26 @@ It prints the mode, your login, and the target repo, then serves on `127.0.0.1:8
 
 Environment overrides: `WPSUBMIT_DEMO_TOKEN` (token, default `gh auth token`), `WPSUBMIT_DEMO_USER`
 (login, default `gh api user`), `WPSUBMIT_DEMO_REPO` (default `marvinm2/wikipathways-database`),
-`WPSUBMIT_DEMO_FAKE=1` (offline in-memory mode).
+`WPSUBMIT_DEMO_FAKE=1` (offline in-memory mode), `WPSUBMIT_DEMO_CURATOR=0` (below).
+
+### Seeing the portal as someone who is not a curator
+
+By default the demo puts you on the curator whitelist, so you only ever see the reviewer's half of
+the app. `WPSUBMIT_DEMO_CURATOR=0` puts a whitelist in place that you are *not* on:
+
+```bash
+WPSUBMIT_DEMO_CURATOR=0 WPSUBMIT_DEMO_FAKE=1 .venv/bin/python demo/serve_demo.py
+```
+
+The banner then prints `role : NOT a curator`. Submit a pathway and open its review: the automated
+checks, the diagram, the diff and the metadata tables all still render, the checklist is visible but
+has no Pass/Fail/N/A chips, and the assign, request-changes, reject and approve controls are gone —
+replaced by one sentence saying only curators can decide. The revision upload stays, because you are
+still the submitter. Combine it with `WPSUBMIT_DEMO_USER=someone-else` to be neither.
+
+Worth knowing when you use this: that explanatory sentence is only rendered while the review is
+still open or has changes requested. On a review that has been approved, rejected or published, a
+non-curator sees a card with no controls and no explanation of why.
 
 ## Walk the lifecycle
 

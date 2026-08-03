@@ -15,6 +15,7 @@ Environment overrides:
     WPSUBMIT_DEMO_TOKEN   GitHub token to use (default: `gh auth token`)
     WPSUBMIT_DEMO_USER    your login          (default: `gh api user --jq .login`)
     WPSUBMIT_DEMO_REPO    target repo         (default: marvinm2/wikipathways-database)
+    WPSUBMIT_DEMO_CURATOR 0 to sign in as a non-curator (default: you are a curator)
 
 Real mode makes real changes on the fork (branches, PRs, and — on approve — a merge into the
 fork's main). It is your fork, so that is fine; the README explains how to clean up afterwards.
@@ -117,7 +118,10 @@ def make_demo_app():
     fake_mode = os.environ.get("WPSUBMIT_DEMO_FAKE") == "1"
 
     if fake_mode:
-        user, repo, token = "demo-curator", "wikipathways/wikipathways-database", None
+        # WPSUBMIT_DEMO_USER is honoured here too, so that WPSUBMIT_DEMO_CURATOR=0 does not leave
+        # you signed in as someone called "demo-curator" who is not one.
+        user = os.environ.get("WPSUBMIT_DEMO_USER") or "demo-curator"
+        repo, token = "wikipathways/wikipathways-database", None
     else:
         token, user, repo = _real_config()
 
@@ -144,7 +148,10 @@ def make_demo_app():
         # In fake mode there is no repo to read, so use a static floor.
         github_token=token if not fake_mode else None,
         dev_wpid_floor=5636,
-        curators=[user],
+        # A whitelist that exists but does not contain you, rather than an empty one: an empty list
+        # also makes members() empty, which hides differences that only show up when there *is* a
+        # curator somewhere and you are simply not them.
+        curators=["another-curator"] if os.environ.get("WPSUBMIT_DEMO_CURATOR") == "0" else [user],
         preview_cache_dir=str(tmp / "preview-cache"),
         session_secret="demo-only-not-secret",
         github_oauth_client_id=oauth_id if real_login else None,
@@ -192,7 +199,13 @@ def make_demo_app():
         request.session.clear()
         return RedirectResponse("/", status_code=303)
 
-    app.state._demo = {"user": user, "repo": repo, "fake": fake_mode, "real_login": real_login}
+    app.state._demo = {
+        "user": user,
+        "repo": repo,
+        "fake": fake_mode,
+        "real_login": real_login,
+        "curator": settings.curators == [user],
+    }
     return app
 
 
@@ -205,6 +218,8 @@ if __name__ == "__main__":
     print("\n  wikipathways-submit demo")
     print(f"  mode  : {mode}")
     print(f"  repo  : {info['repo']}")
+    role = "curator" if info["curator"] else "NOT a curator (WPSUBMIT_DEMO_CURATOR=0)"
+    print(f"  role  : {role}")
     if info["real_login"]:
         print("  login : REAL GitHub OAuth — click 'Log in with GitHub'")
         print("  open  : http://localhost:8000")
