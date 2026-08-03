@@ -16,6 +16,7 @@ from app.review.service import (
     ReviewNotFound,
 )
 from app.wpid import WpidAllocator
+from tests.conftest import RecordingPreviews
 
 REPO = "wikipathways/wikipathways-database"
 CURATORS = {"curator", "alice"}
@@ -481,29 +482,48 @@ def test_approve_does_not_mutate_state_if_merge_fails(session_factory, allocator
         assert s.get(WpidReservation, wpid).status == ReservationStatus.RESERVED
 
 
-class _RecordingPreviews:
-    """Stands in for PreviewService: records which PRs were freed."""
-
-    def __init__(self) -> None:
-        self.discarded: list[int] = []
-
-    def discard(self, pr_number: int) -> bool:
-        self.discarded.append(pr_number)
-        return True
-
-
 def test_rejecting_frees_the_cached_render(session_factory):
     # Issue #18. Reject is the case worth pinning: it is the one terminal transition that does
     # not post a mirror comment, so hanging the cleanup off the mirror would have leaked exactly
     # the state a curator reaches most often.
     gh = FakeGitHubClient()
-    previews = _RecordingPreviews()
+    previews = RecordingPreviews()
     svc = _service(session_factory, github=gh, previews=previews)
     svc.register(pr_number=3, wpid=5637, submitter="bob", kind="new")
     assert previews.discarded == []
 
     svc.reject(3, "curator", note="not a pathway")
     assert previews.discarded == [3]
+
+
+def test_rejecting_by_label_on_github_frees_the_cached_render(session_factory):
+    # Same terminal state by a different door. Curators reach for the repository's own labels as
+    # readily as for the dashboard -- that is why the app mirrors them at all -- so a cleanup
+    # wired only to the dashboard button misses however many rejections happen on GitHub.
+    gh = FakeGitHubClient()
+    previews = RecordingPreviews()
+    svc = _service(session_factory, github=gh, previews=previews)
+    svc.register(pr_number=3, wpid=5637, submitter="bob", kind="new")
+
+    svc.handle_label_event(3, "rejected", added=True, actor="curator")
+
+    assert svc.get(3).status == ReviewStatus.REJECTED
+    assert previews.discarded == [3]
+
+
+def test_reconcile_sweeps_with_every_live_review_and_no_terminal_one(session_factory):
+    # The sweep's contract is that anything absent from `keep` is collectable, so passing a
+    # partial set would delete renders still in use. Pin that it is the whole live queue.
+    gh = FakeGitHubClient()
+    previews = RecordingPreviews()
+    svc = _service(session_factory, github=gh, previews=previews)
+    svc.register(pr_number=3, wpid=5637, submitter="bob", kind="new")
+    svc.register(pr_number=4, wpid=5638, submitter="carol", kind="new")
+    svc.reject(4, "curator", note="no")
+
+    svc.reconcile()
+
+    assert previews.swept == [{3}]
 
 
 def test_a_service_without_a_preview_cache_still_works(session_factory):
@@ -514,3 +534,4 @@ def test_a_service_without_a_preview_cache_still_works(session_factory):
     svc.register(pr_number=4, wpid=5638, submitter="bob", kind="new")
     svc.reject(4, "curator", note="no")
     assert svc.get(4).status.value == "rejected"
+    svc.reconcile()  # ...nor its dashboard loads

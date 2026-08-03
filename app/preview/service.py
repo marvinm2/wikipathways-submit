@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
+from collections.abc import Container, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +28,16 @@ from app.preview.render import RenderError, render_gpml_with_nodes
 _SIDES = ("before", "after")
 _FAILED_MARKER = "render-failed"
 
+#: How often the orphan sweep may run. It walks the cache directory and stats each entry, which
+#: is cheap but pointless to repeat: nothing it collects appears faster than reviews terminalise.
+_SWEEP_INTERVAL_SECONDS = 3600.0
+
+#: How long a cache with no live review must sit untouched before the sweep takes it. This is a
+#: race guard, not a retention policy: a render is written *before* the review row exists (see the
+#: ordering comment in ``app.main``'s submit path), so for a moment every new submission looks
+#: exactly like an orphan. An hour is far longer than that window and costs nothing.
+_SWEEP_MIN_AGE_SECONDS = 3600.0
+
 
 @dataclass(frozen=True)
 class PreviewState:
@@ -35,8 +47,20 @@ class PreviewState:
 
 
 class PreviewService:
-    def __init__(self, *, cache_dir: str | Path) -> None:
+    def __init__(
+        self,
+        *,
+        cache_dir: str | Path,
+        sweep_interval_seconds: float = _SWEEP_INTERVAL_SECONDS,
+        sweep_min_age_seconds: float = _SWEEP_MIN_AGE_SECONDS,
+    ) -> None:
         self._cache_dir = Path(cache_dir)
+        self._sweep_interval = sweep_interval_seconds
+        self._sweep_min_age = sweep_min_age_seconds
+        #: Monotonic stamp of the last sweep, so the throttle survives a clock adjustment. Held
+        #: here rather than on ``CurationService`` because this object is app state and that one
+        #: is rebuilt per request, which would reset the throttle on every single dashboard load.
+        self._last_sweep: float | None = None
 
     # -- render at PR-creation time (issue #11, 1a) ----------------------------------------
     def render_local(
@@ -230,6 +254,63 @@ class PreviewService:
         except OSError:
             return False
         return True
+
+    def cached_pull_requests(self) -> Iterator[int]:
+        """Every pull request number with a cached render on disk.
+
+        Anything not named after a pull request is skipped rather than reported, so a file or a
+        directory some other hand put in the cache is invisible to the sweep below and cannot be
+        deleted by it.
+        """
+        try:
+            entries = sorted(self._cache_dir.iterdir())
+        except OSError:
+            return
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+            try:
+                yield int(entry.name)
+            except ValueError:
+                continue
+
+    def sweep(self, keep: Container[int], *, force: bool = False) -> int:
+        """Delete cached renders for pull requests outside ``keep``. Returns how many went.
+
+        The backstop half of issue #18. Freeing at each terminal transition is the primary path,
+        but it is a list of call sites and a list of call sites drifts — this one is keyed off the
+        state itself, so a transition that forgets to free costs an hour of disk rather than
+        leaking forever. It also collects what no transition can: caches for reviews terminalised
+        before any of this existed, and orphans from a submission that died between rendering and
+        registering.
+
+        ``keep`` is the set of live pull requests, and everything else is fair game, so the caller
+        must pass a *complete* set — a partial one deletes renders still in use. Only the age
+        guard makes that safe for the youngest entries; see ``_SWEEP_MIN_AGE_SECONDS``.
+
+        Throttled to ``sweep_interval_seconds`` because the natural caller is the dashboard load.
+        """
+        now = time.monotonic()
+        if (
+            not force
+            and self._last_sweep is not None
+            and now - self._last_sweep < self._sweep_interval
+        ):
+            return 0
+        self._last_sweep = now
+        cutoff = time.time() - self._sweep_min_age
+        freed = 0
+        for pr_number in self.cached_pull_requests():
+            if pr_number in keep:
+                continue
+            try:
+                if (self._cache_dir / str(pr_number)).stat().st_mtime > cutoff:
+                    continue  # too young to be sure it is not a submission still being registered
+            except OSError:
+                continue
+            if self.discard(pr_number):
+                freed += 1
+        return freed
 
     def nodes(self, pr_number: int, side: str) -> list[dict] | None:
         """Clickable data-node hotspots for one side (issue #14), or None when there are none on

@@ -22,6 +22,7 @@ from app.review.service import (
     ReviewNotFound,
     parse_publish_marker,
 )
+from tests.conftest import RecordingPreviews
 
 REPO = "wikipathways/sandbox-wp-db"
 CURATOR = "marvinm2"
@@ -475,6 +476,69 @@ def test_a_late_publication_is_still_recorded(session_factory):
 
     assert svc.get(pr).status == ReviewStatus.PUBLISHED
     assert svc.get(pr).wpid == 5678
+
+
+def test_publishing_frees_the_cached_render(session_factory):
+    """Issue #18, on the path the live deployment actually takes.
+
+    Freeing was wired to every terminal transition a curator can reach through the dashboard, and
+    to none of the one the repository reaches on its own -- so in pipeline mode the cache leaked
+    on every pathway that published, which is the success case rather than an edge.
+    """
+    gh = _fake()
+    previews = RecordingPreviews()
+    svc = _service(session_factory, gh, previews=previews)
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    gh.simulate_3a(REPO, pr, wpid=5678)
+
+    svc.handle_pr_closed(pr, merged=False)
+
+    assert svc.get(pr).status == ReviewStatus.PUBLISHED
+    assert previews.discarded == [pr]
+
+
+def test_a_publication_that_failed_keeps_its_render(session_factory):
+    # PUBLISH_FAILED is not terminal: it is waiting on a person, and the person it is waiting on
+    # is the one who needs to look at the diagram.
+    gh = _fake()
+    previews = RecordingPreviews()
+    svc = _service(
+        session_factory, gh, previews=previews, reconcile_min_interval=timedelta(seconds=0)
+    )
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    gh.simulate_3a(REPO, pr, wpid=None)
+
+    svc.handle_pr_closed(pr, merged=False)
+
+    assert svc.get(pr).status == ReviewStatus.PUBLISH_FAILED
+    assert previews.discarded == []
+    # ...and it stays out of the sweep's reach too, since it is not terminal.
+    svc.reconcile()
+    assert previews.swept == [{pr}]
+
+
+def test_a_stuck_publication_is_not_freed_again_on_every_reconcile(session_factory):
+    """`_settle_publication` re-runs on every reconcile of a stuck review, and only the *changed*
+    branch acts -- the same guard that stops the mirror comment being re-posted forever."""
+    gh = _fake()
+    previews = RecordingPreviews()
+    svc = _service(
+        session_factory, gh, previews=previews, reconcile_min_interval=timedelta(seconds=0)
+    )
+    pr = _register(svc, gh)
+    _complete_checklist(svc, pr)
+    svc.approve(pr, CURATOR)
+    gh.simulate_3a(REPO, pr, wpid=5678)
+    svc.handle_pr_closed(pr, merged=False)
+    assert previews.discarded == [pr]
+
+    svc.reconcile()
+
+    assert previews.discarded == [pr]
 
 
 def test_an_announced_failure_is_read_as_a_failure(session_factory):

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Iterable
 from datetime import UTC, timedelta
 
 import httpx
@@ -377,6 +378,25 @@ class CurationService:
         try:
             self._previews.discard(pr_number)
         except Exception:  # noqa: BLE001 - freeing disk must never fail a curation action
+            pass
+
+    def _sweep_previews(self, live: Iterable[int]) -> None:
+        """Collect cached renders no live review claims (issue #18).
+
+        The call sites above are the primary path and this is the backstop, for the reason the
+        backstop was needed at all: two terminal transitions had been missed, and the ones that
+        get missed are by definition the ones nobody was thinking about. It also reaches what no
+        transition can — reviews terminalised before any of this existed, and a submission that
+        died between rendering and registering.
+
+        ``live`` must be every non-terminal review, since the sweep treats anything absent from it
+        as collectable.
+        """
+        if self._previews is None:
+            return
+        try:
+            self._previews.sweep(set(live))
+        except Exception:  # noqa: BLE001 - freeing disk must never fail a dashboard load
             pass
 
     def _maybe_mirror(self, review: Review) -> None:
@@ -1275,6 +1295,12 @@ class CurationService:
                     review.published_at = utcnow()
             s.commit()
             if not unchanged:
+                if status == ReviewStatus.PUBLISHED:
+                    # In pipeline mode this is *the* way a submission succeeds, so leaving it out
+                    # meant the live deployment leaked a cache on every pathway it published --
+                    # the ordinary path, not an edge. PUBLISH_FAILED keeps its render: it is not
+                    # terminal, and the curator who has to sort it out will want to see it.
+                    self._free_preview(pr_number)
                 self._maybe_mirror(review)
             return review
 
@@ -1489,17 +1515,25 @@ class CurationService:
         approved reviews stuck behind a broken publish workflow would turn every dashboard load
         into one GitHub request per stuck review, forever.
         """
-        if self._github is None:
-            return 0
         with self._session_factory() as s:
-            due = [
-                r.pr_number
+            live = [
+                (r.pr_number, r.status, _aware(r.last_checked_at))
                 for r in s.execute(
                     select(Review).where(Review.status.notin_(self._TERMINAL))
                 ).scalars()
-                if _aware(r.last_checked_at) is None
-                or _aware(r.last_checked_at) <= self._due_cutoff(r.status)
             ]
+        # Every non-terminal review is already in hand here, which is exactly the set the render
+        # sweep needs, so the backstop costs no query of its own. It runs before the GitHub guard
+        # below on purpose: disk fills up on a deployment with no client wired just the same.
+        self._sweep_previews(pr_number for pr_number, _, _ in live)
+
+        if self._github is None:
+            return 0
+        due = [
+            pr_number
+            for pr_number, status, last in live
+            if last is None or last <= self._due_cutoff(status)
+        ]
         return sum(1 for pr_number in due if self._reconcile_one(pr_number))
 
     #: Older name, kept so existing callers keep working.
@@ -1577,5 +1611,9 @@ class CurationService:
             if approved_at is not None:
                 review.approved_at = approved_at
             s.commit()
+            if status in self._TERMINAL:
+                # Reaches this way when a curator rejects with the label on GitHub rather than in
+                # the dashboard, which is the same terminal state by a different door.
+                self._free_preview(review.pr_number)
             self._maybe_mirror(review)
             return review

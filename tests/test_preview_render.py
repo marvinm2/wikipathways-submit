@@ -235,3 +235,76 @@ def test_discard_leaves_other_pull_requests_alone(tmp_path):
     svc.render_local(12, 5638, after_gpml=_GPML.encode())
     svc.discard(11)
     assert svc.status(12) == "ready"
+
+
+def _sweeper(tmp_path, *, min_age=0.0, interval=0.0) -> PreviewService:
+    """A PreviewService whose sweep is due immediately and takes everything collectable.
+
+    Both guards are timing, so a test that left them at their real values would have to wait an
+    hour to observe anything. Each is pinned by its own test below instead.
+    """
+    return PreviewService(
+        cache_dir=tmp_path / "cache",
+        sweep_interval_seconds=interval,
+        sweep_min_age_seconds=min_age,
+    )
+
+
+def test_sweep_collects_caches_no_live_review_claims(tmp_path):
+    # Issue #18's backstop. #11 is a live review, #12 terminalised (or never had a row at all --
+    # a submission that died between rendering and registering looks identical from here).
+    svc = _sweeper(tmp_path)
+    svc.render_local(11, 5637, after_gpml=_GPML.encode())
+    svc.render_local(12, 5638, after_gpml=_GPML.encode())
+
+    assert svc.sweep({11}) == 1
+    assert svc.status(11) == "ready"
+    assert svc.status(12) == "pending"
+
+
+def test_sweep_spares_a_cache_too_young_to_judge(tmp_path):
+    # The race the age guard exists for: a render is written before the review row, so for a
+    # moment every new submission is indistinguishable from an orphan. Sweeping it there would
+    # delete the preview of a pull request that is about to open.
+    svc = _sweeper(tmp_path, min_age=3600.0)
+    svc.render_local(11, 5637, after_gpml=_GPML.encode())
+
+    assert svc.sweep(set()) == 0
+    assert svc.status(11) == "ready"
+
+
+def test_sweep_is_throttled(tmp_path):
+    # The caller is the dashboard load, so without this it walks and stats the cache on every
+    # page view -- and collects nothing, because nothing terminalises that fast.
+    svc = _sweeper(tmp_path, interval=3600.0)
+    svc.render_local(11, 5637, after_gpml=_GPML.encode())
+    svc.render_local(12, 5638, after_gpml=_GPML.encode())
+
+    assert svc.sweep({11}) == 1  # first call runs
+    svc.render_local(13, 5639, after_gpml=_GPML.encode())
+    assert svc.sweep({11}) == 0  # second is inside the interval
+    assert svc.status(13) == "ready"
+    assert svc.sweep({11}, force=True) == 1  # ...and force overrides it
+    assert svc.status(13) == "pending"
+
+
+def test_sweep_leaves_directories_it_did_not_write(tmp_path):
+    # The cache lives on the volume every service on the cluster shares. A sweep that deleted
+    # whatever it found there would be a much worse bug than the leak it is fixing.
+    svc = _sweeper(tmp_path)
+    svc.render_local(11, 5637, after_gpml=_GPML.encode())
+    stranger = tmp_path / "cache" / "not-a-pull-request"
+    stranger.mkdir()
+    (stranger / "keep.txt").write_text("mine", encoding="utf-8")
+    loose = tmp_path / "cache" / "77"  # a file, not a directory
+    loose.write_text("", encoding="utf-8")
+
+    assert svc.sweep(set()) == 1
+    assert list(svc.cached_pull_requests()) == []
+    assert (stranger / "keep.txt").is_file()
+    assert loose.is_file()
+
+
+def test_sweep_on_an_absent_cache_directory_is_not_an_error(tmp_path):
+    # A deployment that has never rendered anything still loads the dashboard.
+    assert _sweeper(tmp_path).sweep({1}) == 0
