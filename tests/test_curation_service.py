@@ -6,7 +6,7 @@ import pytest
 from app.curators import ConfigCurators
 from app.github import FakeGitHubClient, GitHubError
 from app.locks import PathwayLockRegistry
-from app.models import ReservationStatus, ReviewStatus, WpidReservation
+from app.models import ReservationStatus, Review, ReviewStatus, WpidReservation
 from app.review.checklist import CURATION_CHECKLIST
 from app.review.service import (
     ChecklistIncomplete,
@@ -77,6 +77,53 @@ def test_register_is_idempotent_and_queue_lists_open(session_factory):
 def test_get_missing_raises(session_factory):
     with pytest.raises(ReviewNotFound):
         _service(session_factory).get(999)
+
+
+def test_the_queue_pages_and_the_pages_join_up(session_factory):
+    # Issue #17: the queue returned every review in a status, and the dashboard renders a full
+    # card per row.
+    svc = _service(session_factory)
+    for pr in range(1, 8):
+        svc.register(pr_number=pr, wpid=5636 + pr, submitter="bob", kind="new")
+
+    first = svc.list_queue(limit=3)
+    second = svc.list_queue(limit=3, offset=3)
+    last = svc.list_queue(limit=3, offset=6)
+
+    assert [r.pr_number for r in first] == [1, 2, 3]
+    assert [r.pr_number for r in second] == [4, 5, 6]
+    assert [r.pr_number for r in last] == [7]
+    # Past the end is empty, not an error -- a bookmarked page after the queue shrank.
+    assert svc.list_queue(limit=3, offset=99) == []
+
+
+def test_paging_is_stable_when_submissions_share_a_timestamp(session_factory):
+    """Two submissions in the same tick order arbitrarily on `created_at` alone, and that is
+    invisible on one page: it becomes a review appearing on both pages, or on neither."""
+    svc = _service(session_factory)
+    for pr in range(1, 7):
+        svc.register(pr_number=pr, wpid=5636 + pr, submitter="bob", kind="new")
+    with session_factory() as s:
+        stamp = s.get(Review, 1).created_at
+        for pr in range(1, 7):
+            s.get(Review, pr).created_at = stamp
+        s.commit()
+
+    seen = [r.pr_number for r in svc.list_queue(limit=2)]
+    seen += [r.pr_number for r in svc.list_queue(limit=2, offset=2)]
+    seen += [r.pr_number for r in svc.list_queue(limit=2, offset=4)]
+
+    assert seen == [1, 2, 3, 4, 5, 6]
+
+
+def test_an_unpaged_queue_is_still_the_whole_queue(session_factory):
+    # The API route and the pipeline's own callers want the lot, and a default cap there would be
+    # a silent truncation rather than a page.
+    svc = _service(session_factory)
+    for pr in range(1, 26):
+        svc.register(pr_number=pr, wpid=5636 + pr, submitter="bob", kind="new")
+
+    assert len(svc.list_queue()) == 25
 
 
 def test_state_click_keeps_the_existing_note(session_factory):

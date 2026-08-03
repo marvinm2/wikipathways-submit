@@ -126,6 +126,53 @@ async def _read_upload(file: UploadFile, limit: int) -> bytes:
 #: commits for a not-yet-published pathway silently addresses WP1, an unrelated real pathway.
 _WPID_RE = re.compile(r"^[1-9][0-9]{0,5}$")
 
+#: Reviews per page of the curation queue (issue #17). A card is not a row: it carries two
+#: preview frames, a hotspot sidecar fetched per frame, the checklist, the data-node table and the
+#: quality panel — and its pipeline section can cost three requests to the drafts site. The audit
+#: this project came from counted 51 pull requests in three months, so on the real content repo
+#: the Open tab is the ordinary working view rather than the tail.
+QUEUE_PAGE_SIZE = 20
+
+
+def _pager(request: Request, *, page: int, total: int) -> dict:
+    """Where the reader is in the queue, and how to get to the rest of it (issue #17).
+
+    Page numbers rather than a cursor: a curator works a queue, and wants to come back to the same
+    place after acting on something. A cursor cannot say "page 3 of 7", and infinite scroll cannot
+    be returned to at all.
+
+    Out-of-range pages land on the last one instead of an empty list. The way this is reached is
+    a bookmark or a back button after the queue shrank underneath it, and an empty page there
+    reads as "everything is gone".
+    """
+    pages = max(1, -(-total // QUEUE_PAGE_SIZE))  # ceiling division
+    page = min(max(page, 1), pages)
+    offset = (page - 1) * QUEUE_PAGE_SIZE
+    return {
+        "page": page,
+        "pages": pages,
+        "offset": offset,
+        "total": total,
+        # 1-based inclusive span of this page, for "21-40 of 63".
+        "first": offset + 1 if total else 0,
+        "last": min(offset + QUEUE_PAGE_SIZE, total),
+        # Built off the live query string so the status filter and ?mine=1 survive paging.
+        "prev_url": _page_url(request, page - 1) if page > 1 else None,
+        "next_url": _page_url(request, page + 1) if page < pages else None,
+    }
+
+
+def _page_url(request: Request, page: int) -> str:
+    """This page's URL with ``page`` swapped, as a path — never absolute.
+
+    Absolute would be wrong here rather than merely verbose. Nothing in the deployment tells
+    uvicorn to trust ``X-Forwarded-Proto``, and Traefik terminates TLS and forwards plain HTTP, so
+    ``request.url`` reports ``http`` on a site served over ``https`` and every pager link would
+    point off the secure origin. Every other link in these templates is already relative.
+    """
+    url = request.url.include_query_params(page=page)
+    return f"{url.path}?{url.query}" if url.query else url.path
+
 
 def parse_wpid(raw: str) -> int:
     digits = raw[2:] if raw[:2].upper() == "WP" else raw
@@ -676,6 +723,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         status: ReviewStatus | None = None,
         mine: bool = False,
+        page: int = 1,
         bot: GitHubClient | None = Depends(get_bot_optional),
     ):
         # Terminalise any review whose PR was closed/merged outside the app before rendering the
@@ -694,11 +742,20 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         elif status is None:
             status = ReviewStatus.OPEN
         curation = _curation(request)
+        counts = curation.status_counts(submitter=submitter)
+        # The page's own total, which is what the pager has to count against — the whole queue for
+        # Mine (every status at once), one tab's worth otherwise.
+        matching = sum(counts.values()) if status is None else counts.get(status.value, 0)
+        pager = _pager(request, page=page, total=matching)
         reviews = [
             _review_view(request, r)
-            for r in curation.list_queue(status=status, submitter=submitter)
+            for r in curation.list_queue(
+                status=status,
+                submitter=submitter,
+                limit=QUEUE_PAGE_SIZE,
+                offset=pager["offset"],
+            )
         ]
-        counts = curation.status_counts(submitter=submitter)
         # The tab strip links to the unfiltered queue, so its numbers have to describe the
         # unfiltered queue. Scoping them to the viewer made every tab read zero from the Mine
         # page for anyone who has never submitted anything — which is most curators.
@@ -717,6 +774,7 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 "total_count": sum(counts.values()),
                 "tabs": queue_tabs(counts=tab_counts, pipeline_mode=settings.is_pipeline_mode),
                 "empty": presentation(status.value) if status is not None else None,
+                "pager": pager,
             },
         )
 

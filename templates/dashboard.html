@@ -36,6 +36,24 @@
         {{ review_card(r, is_curator, curators) }}
       {% endfor %}
     </div>
+    {% if pager.pages > 1 %}
+    <nav class="pager" aria-label="Queue pages">
+      {% if pager.prev_url %}
+        <a class="pager__step" href="{{ pager.prev_url }}" rel="prev">Previous</a>
+      {% else %}
+        <span class="pager__step" aria-disabled="true">Previous</span>
+      {% endif %}
+      <p class="pager__count">
+        Showing {{ pager.first }}&ndash;{{ pager.last }} of {{ pager.total }}
+        <span class="pager__page">page {{ pager.page }} of {{ pager.pages }}</span>
+      </p>
+      {% if pager.next_url %}
+        <a class="pager__step" href="{{ pager.next_url }}" rel="next">Next</a>
+      {% else %}
+        <span class="pager__step" aria-disabled="true">Next</span>
+      {% endif %}
+    </nav>
+    {% endif %}
   {% endif %}
 {% endif %}
 {% endblock %}

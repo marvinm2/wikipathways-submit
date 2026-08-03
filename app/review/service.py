@@ -517,12 +517,18 @@ class CurationService:
         *,
         status: ReviewStatus | None = ReviewStatus.OPEN,
         submitter: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[Review]:
         """The queue, filtered. ``status=None`` means every status.
 
         ``submitter`` backs the "my submissions" view: in pipeline mode a new pathway has no WPID
         until it is published, so a submitter has nothing to look their own work up by, and the
         status filter is no help either — they do not know which state it reached.
+
+        ``limit`` pages it (issue #17). Unset by default because the API route and several callers
+        want the whole list and a silent cap there would be worse than none; the dashboard, which
+        is where the cost is, always passes one. The order is total, so a page is stable.
         """
         with self._session_factory() as s:
             query = select(Review)
@@ -533,7 +539,13 @@ class CurationService:
             # Newest first for a personal list (you want the one you just filed), oldest first
             # for the curation queue (you want the one that has waited longest).
             order = Review.updated_at.desc() if submitter is not None else Review.created_at
-            return list(s.execute(query.order_by(order)).scalars())
+            # Tie-broken on the primary key. `created_at` is a timestamp and two submissions in
+            # the same tick would otherwise order arbitrarily — which is invisible on one page and
+            # becomes a row appearing twice, or not at all, once there are two.
+            query = query.order_by(order, Review.pr_number)
+            if limit is not None:
+                query = query.limit(limit).offset(offset)
+            return list(s.execute(query).scalars())
 
     def status_counts(self, *, submitter: str | None = None) -> dict[str, int]:
         """How many reviews sit in each status — the numbers on the queue tabs.

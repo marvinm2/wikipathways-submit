@@ -678,6 +678,117 @@ def _login(client, login: str) -> None:
     client.cookies.set("session", signer.sign(data).decode())
 
 
+def _fill_queue(app, count: int, *, submitter: str = "bob") -> None:
+    """Put `count` open reviews in the registry without uploading `count` pathways.
+
+    A submission is a render plus a pull request plus a mirror comment, and none of that is what
+    a paging test is about -- it is about how many of the rows come back. The pull requests are
+    opened on the fake all the same: the dashboard reconciles before it renders, and a review
+    whose pull request does not exist is terminalised on sight, which empties the queue.
+    """
+    from app.models import Review, ReviewStatus, utcnow
+
+    repo = app.state.settings.content_repo
+    for i in range(1, count + 1):
+        app.state._fake.open_pull_request(
+            repo, head=f"WP{5636 + i}_bob_x", base="main", title="t", body="b"
+        )
+    with app.state.session_factory() as s:
+        for pr in range(1, count + 1):
+            s.add(
+                Review(
+                    pr_number=pr,
+                    wpid=5636 + pr,
+                    submitter=submitter,
+                    kind="new",
+                    status=ReviewStatus.OPEN,
+                    checklist=[],
+                    created_at=utcnow(),
+                    updated_at=utcnow(),
+                )
+            )
+        s.commit()
+
+
+def test_the_queue_is_paged_rather_than_rendered_whole(tmp_path):
+    # Issue #17. Against the real content repo the Open tab is the ordinary working view -- the
+    # audit counted 51 pull requests in three months -- and every row is a full card.
+    from app.main import QUEUE_PAGE_SIZE
+
+    app, _ = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        _fill_queue(app, QUEUE_PAGE_SIZE + 3)
+        _login(c, "curator")
+        first = c.get("/dashboard").text
+        second = c.get("/dashboard", params={"page": 2}).text
+
+    assert first.count('class="review-card"') == QUEUE_PAGE_SIZE
+    assert second.count('class="review-card"') == 3
+    assert f"Showing 1&ndash;{QUEUE_PAGE_SIZE} of {QUEUE_PAGE_SIZE + 3}" in first
+    assert "page 1 of 2" in first
+    # No review is on both pages, and none is missing from the pair. The closing quote matters:
+    # without it `/dashboard/2` is also found inside `/dashboard/21`.
+    on_first = {n for n in range(1, QUEUE_PAGE_SIZE + 4) if f'/dashboard/{n}"' in first}
+    on_second = {n for n in range(1, QUEUE_PAGE_SIZE + 4) if f'/dashboard/{n}"' in second}
+    assert on_first & on_second == set()
+    assert on_first | on_second == set(range(1, QUEUE_PAGE_SIZE + 4))
+
+
+def test_paging_keeps_the_filter_it_was_reached_through(tmp_path):
+    # The pager builds its links off the live query string, so ?status= and ?mine=1 survive. A
+    # Next that dropped the filter would silently move the reader to a different queue.
+    from app.main import QUEUE_PAGE_SIZE
+
+    app, _ = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        _fill_queue(app, QUEUE_PAGE_SIZE + 1, submitter="curator")
+        _login(c, "curator")
+        page = c.get("/dashboard", params={"mine": 1}).text
+
+    assert 'href="/dashboard?mine=1&amp;page=2"' in page
+
+
+def test_pager_links_are_relative(tmp_path):
+    """Nothing tells uvicorn to trust `X-Forwarded-Proto`, and Traefik forwards plain HTTP, so an
+    absolute link would carry `http://` on a site served over `https://`."""
+    from app.main import QUEUE_PAGE_SIZE
+
+    app, _ = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        _fill_queue(app, QUEUE_PAGE_SIZE + 1)
+        _login(c, "curator")
+        page = c.get("/dashboard").text
+
+    assert 'href="/dashboard?page=2"' in page
+    assert "http://testserver" not in page
+
+
+def test_a_page_past_the_end_lands_on_the_last_one(tmp_path):
+    # Reached by a bookmark or a back button after the queue shrank underneath it. An empty page
+    # there reads as "everything is gone".
+    from app.main import QUEUE_PAGE_SIZE
+
+    app, _ = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        _fill_queue(app, QUEUE_PAGE_SIZE + 1)
+        _login(c, "curator")
+        page = c.get("/dashboard", params={"page": 99})
+
+    assert page.status_code == 200
+    assert page.text.count('class="review-card"') == 1
+    assert "page 2 of 2" in page.text
+
+
+def test_a_queue_that_fits_on_one_page_shows_no_pager(tmp_path):
+    app, _ = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        _fill_queue(app, 2)
+        _login(c, "curator")
+        page = c.get("/dashboard").text
+
+    assert 'class="pager"' not in page
+
+
 def test_dashboard_shows_the_render_after_changes_are_requested(tmp_path):
     # The render used to be computed for open reviews only, so every other filter showed the
     # "no render" state while the SVG sat in the cache.

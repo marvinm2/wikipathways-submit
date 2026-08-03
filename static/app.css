@@ -682,6 +682,47 @@ main { flex: 1; }
 
 .review-list { display: flex; flex-direction: column; gap: 1.25rem; }
 
+/* Queue pager (issue #17). Both steps are always present, disabled rather than absent, so the
+   Next control does not move under the pointer when the last page is reached. */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.pager__step {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.5em 1em;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+a.pager__step:hover { background: var(--surface); border-color: var(--moss); }
+.pager__step[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
+.pager__count {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.88rem;
+  text-align: center;
+}
+/* The page number sits under the span on a phone and beside it with room to spare, so the
+   ordinal never crowds the count it qualifies. */
+.pager__page { display: block; }
+@media (min-width: 30rem) {
+  .pager__page::before { content: "\00b7"; padding: 0 0.4em; }
+  .pager__page { display: inline; }
+}
+
 .review-card {
   background: var(--surface);
   border: 1px solid var(--line);
