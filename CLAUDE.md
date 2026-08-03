@@ -99,6 +99,8 @@ repos.
   one "Automated checks" block on the review card that absorbed the old free-floating
   pipeline-failure notice, and a table in the mirror comment. `_render_preview` therefore runs
   **before** `register`, or the first mirror comment has the table missing.
+  **An item marked `na` never blocks approval, and one leaving `na` blocks again** — the invariant
+  lives in `requirement_for` (`app/review/checklist.py`) and nowhere else (issue #27).
   **The checklist is aligned with the repository's own reviewer checklist** — added
   `interactions_connected`, gave `description_ok` an auto_check. That one can never return `pass`:
   `refresh_pipeline_checks` only writes items still `pending`, so anything the app puts there
@@ -255,9 +257,34 @@ In a third round the same day, two things:
   they turn **no fork mode on**. **#22** itself stays open: it is a design decision about whether
   the user OAuth token goes back into the write path, and its remaining steps need a person.
 
-459 tests. Live at `sha256:fcbcb8f3…` (from `1c73e4f`), deployed and verified the same day;
+In a fourth round the same day, the two issues that came out of driving the fork closed, leaving
+**#22 as the only open issue**:
+
+- **An N/A on a required checklist item wedged approval (#27).** `is_complete` demands `pass` on
+  every required item, so a required item at `na` was a gate nothing could open — waiting does
+  nothing because `na` is already an answer, and a re-upload re-derives it. Two separate faults.
+  The verdict: `references_valid` auto-resolved to `na` for a pathway declaring no references,
+  which is the wrong word when the repository's own reviewer checklist asks for at least one; it
+  is `warn` now, reading as `pending`. The rule: three writers each decided independently whether
+  an item blocks and only `build_checklist` was right. `requirement_for` is the single answer, and
+  it reads **both ways** — an item leaving `na` gets its requiredness back, without which a
+  curator clicking N/A then Fail would leave a failed required item blocking nothing. The disabled
+  button now names what is outstanding, in the template and in `recomputeApprove`.
+- **An interaction with no `LineThickness` kills the `metadata` job (#26)**, in
+  `readLineStyleProperty`, measured one variable apart (runs `30827814897` / `30829825691`).
+  `gpml.line_thickness`, severity `fail`, sibling of `gpml.board`; `<GraphicalLine>` is checked
+  too because `readLineElement` is shared. All three `demo/pathway_*.gpml` carried the defect and
+  now declare a thickness. **Fourth instance of the house failure mode** — and the quality
+  fixture named `GOOD` turned out to carry no references at all, so the "clean pathway" test was
+  passing a file missing something the repository asks for. It has one now.
+
+Both were driven through the demo in the browser: submit, the upload-time report, the checklist,
+the N/A → Fail → Pass round trip on the gate, and an approve that merged.
+
+466 tests. Live at `sha256:fcbcb8f3…` (from `1c73e4f`), deployed and verified the same day;
 migration `f6a2c3e4d5b7` applied on the way up. The previous digest `sha256:376eeee0…` (from
 `cfdd938`) is the rollback target — the added column is nullable, so an older image ignores it.
+**The live image predates this round**, so #26 and #27 are fixed in `main` and not yet deployed.
 
 The 07-29 summary below is kept because its details still hold.
 
