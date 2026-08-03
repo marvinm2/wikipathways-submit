@@ -9,6 +9,15 @@ repository.
 the submission app, and nothing here is imported by `app/`. The directory mirrors the
 target layout (`.github/workflows/...`) so the files can be copied across verbatim.
 
+> [!warning] Do not copy these over a fork's copies wholesale
+> The files here name the **upstream** repositories in their `repository:` inputs, because that is
+> what a pull request to `wikipathways/sandbox-wp-db` needs. A fork's own copies name the fork —
+> `marvinm2/sandbox-wp.gh.io` in workflow 1's `commit-outputs`, `marvinm2/sandbox-wp-db` in 3A.
+> Copying these files over a fork's therefore repoints its draft push at a repository it cannot
+> write to, and the symptom is the one already documented in this repo: the job 403s, no draft
+> appears, and the dashboard's pipeline panel goes quietly empty because a missing draft is the
+> ordinary case. Apply the *changes* to the fork's copies; do not replace the files.
+
 The three files:
 
 - `.github/workflows/1_on_pull_request.yml` — the PR processor. Two one-line fixes on the
