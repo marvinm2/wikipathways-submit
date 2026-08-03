@@ -299,7 +299,27 @@ apart: PR #20 under `bot` was authored by `app/wikipathways-submit-bot-dev`; PRs
 GitHub**. Its exit condition is one submission by anybody who is not Marvin, which exercises
 `ensure_fork`, the cross-repository pull request and the head-repo plumbing at once. #22 stays open
 until then, deliberately: this repo has been bitten four times by "the fake agreed and reality did
-not".
+not". What *is* confirmed against the real API: `POST /forks` on an already-forked repo returns the
+existing fork with `full_name` intact and creates nothing.
+
+> [!warning] **A fork pull request would have been approved and then silently never published.**
+> `pr_label_dispatcher.yml` ran on `pull_request`, and a fork pull request gets a **read-only**
+> `GITHUB_TOKEN` whatever the repository default says — so `gh workflow run`, needing
+> `actions: write`, could not dispatch 3a at all. Fixed on the fork (`pull_request_target` plus an
+> explicit permissions block, commit `0e5d666`; staged copy in `sandbox-workflows/`), safe there
+> because the job checks out nothing and runs no pull-request code.
+>
+> **How it was nearly missed is the reusable part.** It had never been *seen* failing, because no
+> fork pull request had ever been labelled on that repo: all 40 recent dispatcher successes are
+> same-repo pull requests the portal opened itself. The note that it "has recovered" was drawn
+> from a population that excludes the case in question — the same error as judging the ruleset by
+> hand-written fixtures. **When a component is declared healthy, check what its sample actually
+> contained.**
+>
+> Also settled empirically while looking: `youphendriks/youp-sandbox-wp-db` is a fork whose **name
+> differs from its parent's**, so assembling `owner/parent-name` rather than reading `full_name`
+> off GitHub's response would have sent every write for that user to a repository that does not
+> exist.
 
 > [!warning] **No application log line had ever reached production.** Uvicorn configures only its
 > own `uvicorn*` loggers and nothing here called `basicConfig`, so the root logger had no handler;
