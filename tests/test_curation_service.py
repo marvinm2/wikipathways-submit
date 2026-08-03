@@ -7,7 +7,7 @@ from app.curators import ConfigCurators
 from app.github import FakeGitHubClient, GitHubError
 from app.locks import PathwayLockRegistry
 from app.models import ReservationStatus, Review, ReviewStatus, WpidReservation
-from app.review.checklist import CURATION_CHECKLIST
+from app.review.checklist import CURATION_CHECKLIST, is_complete
 from app.review.service import (
     ChecklistIncomplete,
     CurationService,
@@ -153,6 +153,48 @@ def test_set_checklist_item_validates(session_factory):
         svc.set_checklist_item(1, "nonexistent", "pass")
     with pytest.raises(ValueError):
         svc.set_checklist_item(1, "render_ok", "not-a-state")
+
+
+def test_na_on_a_required_item_does_not_wedge_approval(session_factory):
+    # Issue #27. `is_complete` demands `pass` on every required item, so a required item left at
+    # `na` was an approval gate nothing could open: `na` is already an answer, so waiting did
+    # nothing, and a re-upload re-derived the same `na`. Marking an item N/A is a curator saying
+    # it does not apply, and that has to take it off the gate.
+    svc = _service(session_factory)
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
+    for key in REQUIRED_KEYS:
+        svc.set_checklist_item(1, key, "pass")
+
+    svc.set_checklist_item(1, "references_valid", "na")
+    item = next(i for i in svc.get(1).checklist if i["key"] == "references_valid")
+    assert item["state"] == "na"
+    assert item["required"] is False
+    assert is_complete(svc.get(1).checklist) is True
+
+
+def test_leaving_na_puts_the_item_back_on_the_gate(session_factory):
+    # The other half of issue #27's rule, and the more dangerous one to get wrong: if `na` only
+    # ever removed the requirement, a curator clicking N/A and then Fail would leave a *failed*
+    # required item blocking nothing, and approval would open on it.
+    svc = _service(session_factory)
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
+    for key in REQUIRED_KEYS:
+        svc.set_checklist_item(1, key, "pass")
+
+    svc.set_checklist_item(1, "references_valid", "na")
+    svc.set_checklist_item(1, "references_valid", "fail")
+    item = next(i for i in svc.get(1).checklist if i["key"] == "references_valid")
+    assert item["required"] is True
+    assert is_complete(svc.get(1).checklist) is False
+
+
+def test_na_on_an_optional_item_leaves_it_optional(session_factory):
+    svc = _service(session_factory)
+    svc.register(pr_number=1, wpid=5637, submitter="bob", kind="new")
+    svc.set_checklist_item(1, "ontology_tags", "na")
+    svc.set_checklist_item(1, "ontology_tags", "pass")
+    item = next(i for i in svc.get(1).checklist if i["key"] == "ontology_tags")
+    assert item["required"] is False  # never required, in either direction
 
 
 def test_concurrent_checklist_updates_all_persist(session_factory):

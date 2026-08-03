@@ -22,7 +22,13 @@ from app.curators import CuratorRegistry
 from app.github import GitHubClient, GitHubError
 from app.locks import PathwayLockRegistry
 from app.models import Review, ReviewStatus, utcnow
-from app.review.checklist import ChecklistState, build_checklist, is_complete, is_valid_key
+from app.review.checklist import (
+    ChecklistState,
+    build_checklist,
+    is_complete,
+    is_valid_key,
+    requirement_for,
+)
 from app.submit.gpml import PLACEHOLDER_GPML_PATH, PLACEHOLDER_WPID_STR
 from app.wpid import WpidAllocator
 
@@ -725,6 +731,13 @@ class CurationService:
                             item["state"] = state
                             changed = changed or bool(item.get("auto")) != auto
                             item["auto"] = auto
+                            # ``na`` never blocks approval, and an item leaving ``na`` gets its
+                            # requiredness back (issue #27). This writer used to set state and
+                            # leave ``required`` alone, so a curator marking a required item N/A
+                            # disabled Approve with no way back except guessing at Pass.
+                            required = requirement_for(key, state)
+                            changed = changed or bool(item.get("required")) != required
+                            item["required"] = required
                             # None = "not editing the note" — a Pass/Fail/N/A click must not
                             # erase the auto-derived explanation the curator is reading.
                             if note is not None:
@@ -798,10 +811,11 @@ class CurationService:
             current = next((i for i in checklist if i.get("key") == key), None)
             if current is None or current.get("state") != ChecklistState.PENDING.value:
                 continue
-            # An auto-derived `na` is only safe on an item build_checklist also marked optional.
-            # Writing it onto a required item would leave something is_complete can never accept
-            # — approval would be stuck until a curator noticed and overrode it by hand — so
-            # downgrade to pending and let the note carry the reasoning.
+            # The pipeline's tables are a second opinion, and a second opinion does not get to
+            # drop a requirement. Since issue #27 an `na` here would no longer wedge approval —
+            # `requirement_for` would quietly make the item non-blocking instead — which is the
+            # milder failure but still the wrong one: the item stops being asked. `pending` plus
+            # the note says the same thing and leaves it in front of the curator.
             if state == ChecklistState.NA.value and current.get("required"):
                 state = ChecklistState.PENDING.value
             try:

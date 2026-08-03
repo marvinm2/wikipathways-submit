@@ -213,6 +213,27 @@ CURATION_CHECKLIST: list[ChecklistItemDef] = [
 ]
 
 _VALID_KEYS = {item.key for item in CURATION_CHECKLIST}
+_REQUIRED_BY_KEY = {item.key: item.required for item in CURATION_CHECKLIST}
+
+
+def requirement_for(key: str, state: str) -> bool:
+    """Whether an item in ``state`` blocks approval — the one place that decides it.
+
+    The invariant is ``na`` never blocks. ``is_complete`` demands ``pass`` on every required
+    item, so a required item sitting at ``na`` is an approval gate nothing can open: not by
+    waiting, because ``na`` is already an answer, and not by re-uploading, because the new file
+    re-derives the same ``na``. Issue #27 is what that costs — one required item auto-resolving
+    to ``na`` disabled Approve on a pull request whose every other item passed, and the session
+    that hit it before applied the repository's label by hand rather than finding out why.
+
+    Three writers used to reach their own conclusion about this and only one of them was right,
+    so this reads both ways: an item leaving ``na`` gets its declared requiredness back. Without
+    that half, a curator clicking N/A and then Fail would leave a failed item not blocking
+    anything, which is the same bug pointing the other way and considerably worse.
+    """
+    if state == ChecklistState.NA.value:
+        return False
+    return _REQUIRED_BY_KEY.get(key, False)
 
 
 def build_checklist(
@@ -240,7 +261,7 @@ def build_checklist(
                 {
                     "key": d.key,
                     "label": d.label,
-                    "required": False,
+                    "required": requirement_for(d.key, ChecklistState.NA.value),
                     "state": ChecklistState.NA.value,
                     "note": "Not relevant: this update did not touch it.",
                     "auto": True,
@@ -248,22 +269,18 @@ def build_checklist(
             )
             continue
 
-        required = d.required
         state, note, auto = ChecklistState.PENDING.value, "", False
         if d.key == "naming_ok" and pipeline_mode:
             state, note, auto = _PIPELINE_NAMING.state, _PIPELINE_NAMING.note, True
         elif metadata is not None and d.auto_check is not None:
             res = d.auto_check(metadata)
             state, note, auto = res.state, res.note, True
-            # An auto "N/A" means there is nothing to check (e.g. no references), so it must not
-            # block approval — drop the requirement rather than force a manual override.
-            if state == ChecklistState.NA.value:
-                required = False
         items.append(
             {
                 "key": d.key,
                 "label": d.label,
-                "required": required,
+                # An auto "N/A" means there is nothing to check, so it must not block approval.
+                "required": requirement_for(d.key, state),
                 "state": state,
                 "note": note,
                 "auto": auto,

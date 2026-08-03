@@ -28,6 +28,12 @@ GOOD = """<?xml version="1.0"?>
   <DataNode TextLabel="AKT1" Type="GeneProduct" GraphId="b2">
     <Xref Database="Ensembl" ID="ENSG00000142208"/></DataNode>
   <OntologyTerm Term="insulin signaling pathway" ID="PW:0000143" Ontology="Pathway Ontology"/>
+  <BiopaxRef>ref1</BiopaxRef>
+  <Biopax><bp:PublicationXref xmlns:bp="http://www.biopax.org/release/biopax-level3.owl#"
+      xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" rdf:id="ref1">
+    <bp:ID>12345678</bp:ID><bp:DB>PubMed</bp:DB>
+    <bp:TITLE>Insulin signalling in adipose tissue</bp:TITLE>
+  </bp:PublicationXref></Biopax>
 </Pathway>
 """
 

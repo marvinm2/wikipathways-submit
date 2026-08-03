@@ -428,9 +428,14 @@
     <h3 class="checklist__title">Curation checklist</h3>
     <ul>
       {% for it in r.checklist %}
-      <li class="checklist__item" data-key="{{ it.key }}" data-required="{{ 'true' if it.required else 'false' }}">
+      {# data-label so the script can name this item in the Approve button's title without
+         scraping it back out of the label span, which also carries the bullet and the auto chip. #}
+      <li class="checklist__item" data-key="{{ it.key }}" data-label="{{ it.label }}"
+          data-required="{{ 'true' if it.required else 'false' }}">
         <span class="state-pill state-pill--{{ it.state }}" data-state="{{ it.state }}">{{ state_icon(it.state) }} <span class="state-pill__text">{{ STATE_LABEL.get(it.state, it.state) }}</span></span>
-        <span class="checklist__label">{{ it.label }}{% if it.required %}<span class="req" aria-hidden="true">&bull;</span><span class="visually-hidden">required</span>{% endif %}{% if it.auto %}<span class="checklist__auto" title="Suggested from the pathway metadata. Override it if you disagree.">auto</span>{% endif %}</span>
+        {# Rendered even when not required, and hidden, so the script can show and hide it as a
+           state change moves the item on and off the approval gate. #}
+        <span class="checklist__label">{{ it.label }}<span class="checklist__req"{% if not it.required %} hidden{% endif %}><span class="req" aria-hidden="true">&bull;</span><span class="visually-hidden">required</span></span>{% if it.auto %}<span class="checklist__auto" title="Suggested from the pathway metadata. Override it if you disagree.">auto</span>{% endif %}</span>
         {% if it.note %}<span class="checklist__note">{{ it.note }}</span>{% endif %}
         {% if can_act %}
         <span class="checklist__controls" role="group" aria-label="Set state for {{ it.label }}">
@@ -463,7 +468,12 @@
         {# "merge" is wrong wherever the target repository publishes through its own Actions:
            approving applies a label there and nothing is ever merged, so promising a merge sets
            the curator up to go looking for one. #}
-        <button type="button" class="btn btn--approve"{% if blocking %} aria-disabled="true" disabled{% endif %}>
+        {# A disabled control that does not say why cost a whole session once (issue #27), so the
+           title names the items standing in the way. Kept in step with recomputeApprove. #}
+        <button type="button" class="btn btn--approve"
+                {%- if blocking %} aria-disabled="true" disabled
+                title="Still to mark Pass: {{ blocking | map(attribute='label') | join(', ') }}"
+                {%- endif %}>
           {% if pipeline_mode %}Approve for publication{% else %}Approve &amp; merge{% endif %}
         </button>
       </div>

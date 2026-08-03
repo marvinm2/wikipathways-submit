@@ -472,16 +472,23 @@
     var approveBtn = card.querySelector('.btn--approve');
     if (!approveBtn) return;
     var required = card.querySelectorAll('.checklist__item[data-required="true"]');
-    var allPass = true;
+    // Naming the outstanding items rather than only disabling the button: a control disabled for
+    // a reason the page never states is what made issue #27 expensive to find. Kept in step with
+    // the same title the template writes on first render.
+    var blocking = [];
     required.forEach(function (li) {
       var pill = li.querySelector('.state-pill');
-      if (!pill || pill.dataset.state !== 'pass') allPass = false;
+      if (!pill || pill.dataset.state !== 'pass') {
+        blocking.push(li.getAttribute('data-label') || li.getAttribute('data-key'));
+      }
     });
-    if (allPass) {
+    if (!blocking.length) {
       approveBtn.removeAttribute('aria-disabled');
+      approveBtn.removeAttribute('title');
       approveBtn.disabled = false;
     } else {
       approveBtn.setAttribute('aria-disabled', 'true');
+      approveBtn.setAttribute('title', 'Still to mark Pass: ' + blocking.join(', '));
       approveBtn.disabled = true;
     }
   }
@@ -503,6 +510,13 @@
       item.querySelectorAll('.chip-btn').forEach(function (b) {
         b.setAttribute('aria-pressed', b.getAttribute('data-state') === srv.state ? 'true' : 'false');
       });
+      // `required` moves with the state now (issue #27): marking an item N/A takes it off the
+      // approval gate, and marking it anything else puts it back. Reading it off the server's
+      // answer rather than re-deriving it keeps one rule in one place.
+      var required = srv.required ? 'true' : 'false';
+      item.setAttribute('data-required', required);
+      var bullet = item.querySelector('.checklist__req');
+      if (bullet) bullet.hidden = !srv.required;
     });
     recomputeApprove(card);
   }

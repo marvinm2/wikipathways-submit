@@ -41,9 +41,13 @@ def test_auto_checks_prefill_states():
     # answered from parsed annotation, so it stays a blank human judgement.
     assert _item(cl, "interactions_connected")["state"] == "pending"
     assert _item(cl, "interactions_connected")["auto"] is False
+    # No references is `pending`, not `na` (issue #27). The repository asks for at least one, so
+    # a pathway with none has not answered the check — it is exactly the thing a curator should
+    # be weighing, and `na` was quietly taking it off the approval gate instead.
     refs = _item(cl, "references_valid")
-    assert refs["state"] == "na"  # no references
-    assert refs["required"] is False  # auto-N/A must not block approval
+    assert refs["state"] == "pending"
+    assert refs["required"] is True
+    assert "at least one" in refs["note"]
     # The render check stays a human judgement — no auto state.
     assert _item(cl, "render_ok")["state"] == "pending"
     assert _item(cl, "render_ok")["auto"] is False
@@ -52,8 +56,9 @@ def test_auto_checks_prefill_states():
 def test_well_annotated_submission_only_needs_human_checks():
     cl = build_checklist(metadata=parse_curation_metadata(MAPPED), kind="new")
     assert is_complete(cl) is False  # the human judgements are still pending
-    # The structural checks auto-pass; only the human judgements remain.
-    for key in ("render_ok", "description_ok", "interactions_connected"):
+    # The structural checks auto-pass; only the human judgements remain. `references_valid` is
+    # among them because MAPPED declares none and the repository asks for one.
+    for key in ("render_ok", "description_ok", "interactions_connected", "references_valid"):
         assert _item(cl, key)["state"] == "pending"
         _item(cl, key)["state"] = "pass"
     assert is_complete(cl) is True

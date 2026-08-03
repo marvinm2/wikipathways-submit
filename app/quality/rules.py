@@ -444,10 +444,21 @@ def _check_references(s: Subject) -> tuple[str, str] | None:
     The checklist binding keeps this at ``pending`` even when it passes, for that reason: the
     review card lists every reference as a clickable link, and the honest instruction is to open
     them, not a green tick derived from counting.
+
+    **No references is ``warn``, not ``na``.** It read ``na`` — "nothing to check" — until issue
+    #27, which is the wrong word for it: the repository's own reviewer checklist asks for "at
+    least one literature reference", so a pathway with none has not satisfied the check, it has
+    failed to answer it. The practical consequence was worse than the wording. ``na`` makes the
+    item non-blocking, so the one required item that a curator most needs to weigh was the one
+    silently dropped from the approval gate.
     """
     refs = list(getattr(s.metadata, "references", []) or [])
     if not refs:
-        return (Severity.NA.value, "No literature references to resolve.")
+        return (
+            Severity.WARN.value,
+            "No literature references. The repository asks for at least one, so this is for a "
+            "curator to weigh rather than nothing to check.",
+        )
     n = len(refs)
     return (
         Severity.PASS.value,
