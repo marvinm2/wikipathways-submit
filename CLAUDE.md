@@ -216,13 +216,24 @@ GlusterFS-backed data at `/mnt/gluster/docker/<service>/data`, **no node pinning
 Docker secrets (never in the repo). The app needs a GitHub App identity installed on
 `wikipathways-database` with contents RW, pull_requests RW, and issues/comments RW.
 
-## Current state (2026-07-29) — read `docs/session-handoff-2026-07-29.md` first
+## Current state (2026-08-03) — read `docs/session-handoff-2026-08-03.md` first
 
-That is the read-me-first handoff and supersedes the 07-27 one, which is still worth reading for
-the sandbox pipeline and the first deployment. In short, since then: the whole submit → review →
-approve → publish lifecycle has been driven against live GitHub, clickable data nodes shipped
-(#14), `WPSUBMIT_SITE_NOTICE` warns when a target cannot publish, and the issue tracker was
-reconciled against the code — nine open, none of them stale.
+That is the read-me-first handoff. It supersedes the 07-29 one, which remains the account of the
+deployment, the fork's draft pipeline and the first publication. In short, since then: quality
+control was consolidated into one graded ruleset (`app/quality/`) that runs at upload time and is
+mirrored to the pull request; the app's checklist was aligned with the reviewer checklist the
+target repository appends to every pull request; and the two systems can now read each other's
+verdicts over a marker comment, proven end to end on the fork. A missing root `<Graphics>` canvas
+was identified as a hard crasher for the repository's `metadata` job and is now a `fail` rule.
+Live at `sha256:8d8dda3e…`, 401 tests.
+
+The 07-29 summary below is kept because its details still hold.
+
+### Previously (2026-07-29)
+
+The whole submit → review → approve → publish lifecycle has been driven against live GitHub,
+clickable data nodes shipped (#14), `WPSUBMIT_SITE_NOTICE` warns when a target cannot publish, and
+the issue tracker was reconciled against the code (nine open at the time; five as of 2026-08-03).
 
 **The app is deployed and live at https://upload.wikipathways.org**, pointed at the fork
 `marvinm2/sandbox-wp-db` in `pipeline` mode. The handoff doc is authoritative for what is
