@@ -138,6 +138,19 @@ up. `continue-on-error: true`: it is a convenience for a downstream reader and n
 fail a run that has already done its real work. Comments are untouched by the description
 rewrites, which is the whole point.
 
+> [!note] Live on the fork since 2026-08-03, and proven
+> `marvinm2/sandbox-wp-db` carries these three changes. The round-trip was verified on two pull
+> requests: #15 posted `{"title":"review","description":"review","nodes":"review"}` and #16 posted
+> `{"title":"pass","description":"pass","nodes":"review"}`, both read back and rendered beside the
+> portal's own predictions. The corrected counts were confirmed by replaying #16's real diff
+> through both versions of the logic — the old one reported `deleted=3 modified=1 added=3` where
+> the truth was `deleted=0 modified=3 added=0`.
+>
+> **One leftover, deliberately not fixed:** `note_test_nodes` and `review_note` still build their
+> text with a literal `\n`, so the PR table reads `Modified nodes: 3\n`. Same class of bug as the
+> counts, but in the prose rather than the arithmetic, and nothing reads it. A one-line fix
+> whenever that job is next touched.
+
 The portal predicts all three offline as well, from the uploaded GPML, so a submitter sees them
 before the pull request exists (`app/quality/`). Showing both answers side by side is deliberate:
 where they disagree, the portal's copy of these thresholds has fallen behind the real ones, and
