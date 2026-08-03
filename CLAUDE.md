@@ -235,8 +235,9 @@ table so it survives a redeploy (#21). **#22** (fork-per-submitter) and **#23** 
 remain open — the first needs a decision and a broader OAuth scope, the second needs real
 submission data that does not exist yet.
 
-437 tests. **Live is still `sha256:8d8dda3e…`, which predates all three** — nothing from the
-second round is deployed.
+437 tests. Live at `sha256:45119303…` (from `e7b7c8d`), deployed and verified the same day: the
+sweep took the live cache from 154K to 2.5K and kept exactly the one render that belongs to a
+non-terminal review.
 
 The 07-29 summary below is kept because its details still hold.
 

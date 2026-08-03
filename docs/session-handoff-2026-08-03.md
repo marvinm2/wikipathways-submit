@@ -9,9 +9,22 @@ sandbox pipeline.
 
 Three of the five open issues were closed after the quality-ruleset work below. All three came
 from an audit rather than an incident, and all three are the kind that only bite once the target
-is something other than a sandbox. **Not deployed** — the live digest is still the one named
-under "Deployed right now", which predates every commit in this section. 437 tests, ruff-clean.
-No migration; two new settings, both with defaults that need no action.
+is something other than a sandbox. 437 tests, ruff-clean. No migration; two new settings, both
+left at their defaults on the live service.
+
+**Deployed and verified live** at `sha256:45119303…` (built from `e7b7c8d`). The sweep took the
+live cache from 154K to 2.5K on the first dashboard load, and what it kept is the proof it works
+rather than merely runs:
+
+- **PR 1's render went, though its pull request is still open on GitHub.** The app's record says
+  `rejected`, which is terminal; the pull request is open only because the fork's rejection
+  workflow never closes one. The sweep keys off the *review*, not the pull request, and that is
+  the difference showing up in practice.
+- **PR 3's render was kept.** It is `PUBLISH_FAILED` — approved, never published — which is
+  deliberately not terminal, because it is waiting on the person who most needs to see the
+  diagram.
+- All 24 drafts entries went and the reader refilled on the next load, which is the whole claim
+  that deleting past the TTL is behaviour-neutral.
 
 **#18, the render cache, was half-built and leaking on the path that matters.** `PreviewService.
 discard` existed and was wired to every terminal transition a curator can reach through the
@@ -59,10 +72,13 @@ real submission data, which does not exist until the org install lands).
 ## Deployed right now
 
 **https://upload.wikipathways.org**, image
-`ghcr.io/marvinm2/wikipathways-submit@sha256:8d8dda3e3e115aab0418245a05b358023222667253d167a0b887332b57a6e658`
-(built from `0db9c1b`), running on **tgx1**. 401 tests, ruff-clean. No new env var, no new secret
-and no migration in this round — the quality report is cached in the render cache on `/data`, so a
-rollback is a plain digest change.
+`ghcr.io/marvinm2/wikipathways-submit@sha256:45119303cf3a66c0055199f180c7714c53de8c66e755e00cf6fbd145bb58f897`
+(built from `e7b7c8d`), running on **tgx1**. 437 tests, ruff-clean.
+
+The previous digest was
+`sha256:8d8dda3e3e115aab0418245a05b358023222667253d167a0b887332b57a6e658` (from `0db9c1b`), which
+is the rollback target. Neither round added a migration, a secret or a required env var, so a
+rollback in either direction is a plain digest change.
 
 Deploy by digest, never by `:latest` — a bare tag is a no-op on swarm. And find the node before
 reading logs; an empty log on the wrong node is indistinguishable from an app that never got the
