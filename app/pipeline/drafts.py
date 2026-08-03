@@ -63,6 +63,12 @@ _PLACEHOLDER_GPML = "WP0001.gpml"
 # GPML side of the app treats empty as unmapped; the TSV round-trip adds these spellings.
 _UNMAPPED_VALUES = {"", "na", "null", "none"}
 
+# How often the cache sweep may run, and how far past the TTL an entry must be before it is
+# taken. See `DraftsReader.sweep` — the margin is for mtime across a GlusterFS replica, not for
+# anything about the cache, since past the TTL nothing can serve the file anyway.
+_DRAFT_SWEEP_INTERVAL_SECONDS = 3600.0
+_DRAFT_SWEEP_TTL_MARGIN = 4
+
 
 def _checklist_auto_check(key: str):
     """The checklist's own auto-check for `key`, or a loud failure at import time.
@@ -187,6 +193,9 @@ class DraftsReader:
         self._site_base_url = site_base_url.rstrip("/")
         self._cache_dir = Path(cache_dir)
         self._ttl_seconds = ttl_seconds
+        #: Monotonic stamp of the last sweep — see ``sweep``. Held on the reader because the app
+        #: builds it once at startup, so the throttle survives the requests that call it.
+        self._last_sweep: float | None = None
         # One pooled client for the process: a dashboard page fetches three files per queue row,
         # and a fresh connection per file would dominate the render. Never closed — the reader is
         # built once at startup and lives as long as the process, and the app's lifespan has no
@@ -366,6 +375,44 @@ class DraftsReader:
             )
         except (OSError, ValueError):
             pass  # the cache is an optimisation; losing it costs requests, not correctness
+
+    def sweep(self, *, force: bool = False) -> int:
+        """Delete cache entries too old to be served. Returns how many went.
+
+        The same leak issue #18 fixed next door, in the other cache under the same directory:
+        entries expire by the TTL but nothing ever removed the file, so the disk kept one per
+        submission per scope forever. The dead ones are not hypothetical — the live deployment
+        carries a whole scope's worth from before its drafts repo was repointed at the fork, which
+        nothing will ever read again.
+
+        Deleting past the TTL is behaviour-neutral by construction: ``_read_cache`` already
+        refuses anything that old, so the file was going to be refetched and rewritten either way.
+        The margin on top of the TTL is for mtime across a GlusterFS replica rather than for any
+        property of the cache.
+        """
+        now = time.monotonic()
+        if (
+            not force
+            and self._last_sweep is not None
+            and now - self._last_sweep < _DRAFT_SWEEP_INTERVAL_SECONDS
+        ):
+            return 0
+        self._last_sweep = now
+        cutoff = time.time() - max(self._ttl_seconds * _DRAFT_SWEEP_TTL_MARGIN, 60.0)
+        freed = 0
+        try:
+            entries = sorted(self._cache_dir.glob("*.json"))
+        except OSError:
+            return 0
+        for path in entries:
+            try:
+                if path.stat().st_mtime > cutoff:
+                    continue
+                path.unlink()
+            except OSError:
+                continue
+            freed += 1
+        return freed
 
 
 def _safe(parse, raw: bytes | None):

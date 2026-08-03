@@ -16,7 +16,7 @@ from app.review.service import (
     ReviewNotFound,
 )
 from app.wpid import WpidAllocator
-from tests.conftest import RecordingPreviews
+from tests.conftest import RecordingDrafts, RecordingPreviews
 
 REPO = "wikipathways/wikipathways-database"
 CURATORS = {"curator", "alice"}
@@ -35,7 +35,13 @@ def locks(session_factory):
 
 
 def _service(
-    session_factory, github=None, allocator=None, locks=None, app_base_url="", previews=None
+    session_factory,
+    github=None,
+    allocator=None,
+    locks=None,
+    app_base_url="",
+    previews=None,
+    drafts=None,
 ) -> CurationService:
     return CurationService(
         session_factory,
@@ -46,6 +52,7 @@ def _service(
         locks=locks,
         app_base_url=app_base_url,
         previews=previews,
+        drafts=drafts,
     )
 
 
@@ -524,6 +531,36 @@ def test_reconcile_sweeps_with_every_live_review_and_no_terminal_one(session_fac
     svc.reconcile()
 
     assert previews.swept == [{3}]
+
+
+def test_reconcile_sweeps_the_drafts_cache_too(session_factory):
+    # The drafts cache sits in the same directory and has the same defect, but no per-transition
+    # path to back up -- it expires by TTL and keeps the file, so this is the only thing that
+    # removes one.
+    gh = FakeGitHubClient()
+    drafts = RecordingDrafts()
+    svc = _service(session_factory, github=gh, drafts=drafts)
+    svc.register(pr_number=3, wpid=5637, submitter="bob", kind="new")
+
+    svc.reconcile()
+
+    assert drafts.sweeps == 1
+
+
+def test_one_cache_failing_to_sweep_does_not_stop_the_other(session_factory):
+    class _Broken:
+        def sweep(self, *a, **kw):
+            raise OSError("read-only file system")
+
+    drafts = RecordingDrafts()
+    svc = _service(
+        session_factory, github=FakeGitHubClient(), previews=_Broken(), drafts=drafts
+    )
+    svc.register(pr_number=3, wpid=5637, submitter="bob", kind="new")
+
+    svc.reconcile()
+
+    assert drafts.sweeps == 1
 
 
 def test_a_service_without_a_preview_cache_still_works(session_factory):

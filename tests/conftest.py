@@ -43,3 +43,14 @@ class RecordingPreviews:
     def sweep(self, keep, *, force: bool = False) -> int:
         self.swept.append(set(keep))
         return 0
+
+
+class RecordingDrafts:
+    """Stands in for DraftsReader, for the one thing the curation service asks of it."""
+
+    def __init__(self) -> None:
+        self.sweeps = 0
+
+    def sweep(self, *, force: bool = False) -> int:
+        self.sweeps += 1
+        return 0

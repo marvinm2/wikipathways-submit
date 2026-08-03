@@ -9,6 +9,7 @@ draft whose GPML declares 8 distinct references and whose bibliography resolved 
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import httpx
@@ -455,6 +456,84 @@ def test_readers_on_different_branches_do_not_share_a_cache_entry(tmp_path):
     )
     assert other.fetch(SLUG).available is False  # not the main-branch payload
     assert len(seen) == 6
+
+
+def _cached_files(tmp_path) -> list[Path]:
+    return sorted((tmp_path / "drafts-cache").glob("*.json"))
+
+
+def _age(tmp_path, seconds: float) -> None:
+    """Backdate every cache file, since the sweep is a question about elapsed time.
+
+    Faking it with a tiny TTL does not work: the cutoff has a floor under it, so that a reader
+    configured to cache for no time at all still does not delete a file it wrote a moment ago.
+    """
+    for path in _cached_files(tmp_path):
+        stamp = path.stat().st_mtime - seconds
+        os.utime(path, (stamp, stamp))
+
+
+def test_sweep_takes_entries_too_old_to_serve(tmp_path):
+    # Issue #18's other half. Entries expired by the TTL but the file stayed, so the disk kept one
+    # per submission per scope forever -- including a whole dead scope on the live deployment,
+    # from before its drafts repo was repointed at the fork.
+    reader = make_reader(serve(real_files()), tmp_path, ttl_seconds=300)
+    reader.fetch(SLUG)
+    assert len(_cached_files(tmp_path)) == 1
+    _age(tmp_path, 86400)
+
+    assert reader.sweep() == 1
+    assert _cached_files(tmp_path) == []
+
+
+def test_sweep_spares_an_entry_still_inside_its_ttl(tmp_path):
+    reader = make_reader(serve(real_files()), tmp_path, ttl_seconds=300)
+    reader.fetch(SLUG)
+
+    assert reader.sweep() == 0
+    assert len(_cached_files(tmp_path)) == 1
+
+
+def test_sweep_spares_an_entry_only_just_expired(tmp_path):
+    # The margin over the TTL. Nothing breaks without it -- an expired entry is refetched either
+    # way -- but mtime on the GlusterFS replica is not worth trusting to the second.
+    reader = make_reader(serve(real_files()), tmp_path, ttl_seconds=300)
+    reader.fetch(SLUG)
+    _age(tmp_path, 400)
+
+    assert reader.sweep() == 0
+    assert len(_cached_files(tmp_path)) == 1
+
+
+def test_sweeping_an_entry_costs_a_refetch_and_nothing_else(tmp_path):
+    """The sweep is behaviour-neutral by construction: it only takes what `_read_cache` would
+    already have refused, so the worst it can do is what the TTL was going to do anyway."""
+    seen: list[str] = []
+    reader = make_reader(serve(real_files(), seen), tmp_path, ttl_seconds=300)
+    first = reader.fetch(SLUG)
+    _age(tmp_path, 86400)
+    reader.sweep()
+
+    assert reader.fetch(SLUG) == first
+    assert len(seen) == 6
+
+
+def test_sweep_is_throttled(tmp_path):
+    # The caller is the dashboard load, and this globs and stats the whole directory.
+    reader = make_reader(serve(real_files()), tmp_path, ttl_seconds=300)
+    reader.fetch(SLUG)
+    _age(tmp_path, 86400)
+    assert reader.sweep() == 1
+
+    reader.fetch(SLUG)
+    _age(tmp_path, 86400)
+    assert reader.sweep() == 0
+    assert len(_cached_files(tmp_path)) == 1
+    assert reader.sweep(force=True) == 1
+
+
+def test_sweep_on_a_cache_that_was_never_written_is_not_an_error(tmp_path):
+    assert make_reader(serve({}), tmp_path).sweep() == 0
 
 
 def test_unparseable_json_degrades_to_no_info_without_losing_the_tables(tmp_path):

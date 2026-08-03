@@ -380,24 +380,29 @@ class CurationService:
         except Exception:  # noqa: BLE001 - freeing disk must never fail a curation action
             pass
 
-    def _sweep_previews(self, live: Iterable[int]) -> None:
-        """Collect cached renders no live review claims (issue #18).
+    def _sweep_caches(self, live: Iterable[int]) -> None:
+        """Collect what the two on-disk caches are holding and nothing needs (issue #18).
 
-        The call sites above are the primary path and this is the backstop, for the reason the
-        backstop was needed at all: two terminal transitions had been missed, and the ones that
-        get missed are by definition the ones nobody was thinking about. It also reaches what no
-        transition can — reviews terminalised before any of this existed, and a submission that
-        died between rendering and registering.
+        For the renders, the call sites above are the primary path and this is the backstop — for
+        the reason a backstop was needed at all: two terminal transitions had been missed, and the
+        ones that get missed are by definition the ones nobody was thinking about. It also reaches
+        what no transition can: reviews terminalised before any of this existed, and a submission
+        that died between rendering and registering.
 
-        ``live`` must be every non-terminal review, since the sweep treats anything absent from it
-        as collectable.
+        The drafts cache next door has no primary path to back up. It expires by TTL and keeps the
+        file, so this is the only thing that removes one.
+
+        ``live`` must be every non-terminal review, since the render sweep treats anything absent
+        from it as collectable.
         """
-        if self._previews is None:
-            return
-        try:
-            self._previews.sweep(set(live))
-        except Exception:  # noqa: BLE001 - freeing disk must never fail a dashboard load
-            pass
+        pr_numbers = set(live)
+        for cache, arg in ((self._previews, (pr_numbers,)), (self._drafts, ())):
+            if cache is None:
+                continue
+            try:
+                cache.sweep(*arg)
+            except Exception:  # noqa: BLE001 - freeing disk must never fail a dashboard load
+                pass
 
     def _maybe_mirror(self, review: Review) -> None:
         """Best-effort: sync the read-only PR mirror comment via the bot client.
@@ -1525,7 +1530,7 @@ class CurationService:
         # Every non-terminal review is already in hand here, which is exactly the set the render
         # sweep needs, so the backstop costs no query of its own. It runs before the GitHub guard
         # below on purpose: disk fills up on a deployment with no client wired just the same.
-        self._sweep_previews(pr_number for pr_number, _, _ in live)
+        self._sweep_caches(pr_number for pr_number, _, _ in live)
 
         if self._github is None:
             return 0
