@@ -184,7 +184,8 @@ submitter when changes are requested. Added:
 ## Live check commands
 
 ```bash
-curl -sI https://upload.wikipathways.org/health
+# GET, not HEAD: the route is GET-only, so `curl -sI` answers 405 and reads like an outage.
+curl -s https://upload.wikipathways.org/health
 curl -s -X POST https://upload.wikipathways.org/api/validate -F file=@some.gpml \
   | jq '.quality.findings[] | select(.severity != "pass" and .severity != "na")'
 ssh tgx1 "docker service ps wikipathways-submit -f desired-state=running --format '{{.Node}}'"
