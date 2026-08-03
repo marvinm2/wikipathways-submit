@@ -278,8 +278,19 @@ In a fourth round the same day, the two issues that came out of driving the fork
   fixture named `GOOD` turned out to carry no references at all, so the "clean pathway" test was
   passing a file missing something the repository asks for. It has one now.
 
-Both were driven through the demo in the browser: submit, the upload-time report, the checklist,
-the N/A → Fail → Pass round trip on the gate, and an approve that merged.
+Both were driven through the demo in the browser (`WPSUBMIT_DEMO_FAKE=1`, so a fake GitHub client
+and not the live service): submit, the upload-time report, the checklist, the N/A → Fail → Pass
+round trip on the gate, and an approve that merged.
+
+**Real published pathways are now in the suite** — `tests/fixtures/published/` +
+`test_published_pathways.py`. Read that directory's README before adding a rule. Hand-written
+fixtures encode what their author already knew to include, which is why the same class of defect
+got through five times; these two are verbatim WikiPathways content and act as the negative
+control, since **no rule may report `fail` or `block` on a file the project itself published**.
+Measured while adding them, by running the ruleset over 30 sampled pathways: `gpml.line_thickness`
+and `gpml.board` fire on **none** of them, which is the evidence real PathVisio output always
+writes both; `content.datanode_annotation` fails on **21 of 30** and `content.references` warns on
+**6 of 30**, so a rollup over real content is not a health score.
 
 466 tests. Live at `sha256:fcbcb8f3…` (from `1c73e4f`), deployed and verified the same day;
 migration `f6a2c3e4d5b7` applied on the way up. The previous digest `sha256:376eeee0…` (from
