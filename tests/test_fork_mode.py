@@ -293,7 +293,9 @@ def test_ensure_fork_reads_the_name_off_the_response_and_waits_for_readiness():
         client_module.time.sleep = original
 
     assert calls[0] == f"POST /repos/{REPO}/forks"
-    assert calls[1:] == ["GET /repos/alice/sandbox-wp-db-1"] * 3
+    # Three probes until it answers, then the fast-forward to its parent.
+    assert calls[1:4] == ["GET /repos/alice/sandbox-wp-db-1"] * 3
+    assert calls[4] == "POST /repos/alice/sandbox-wp-db-1/merge-upstream"
 
 
 def test_ensure_fork_raises_when_the_fork_never_becomes_readable():
@@ -604,3 +606,43 @@ def test_a_denied_write_quotes_what_github_actually_said():
     assert "Not Found" in text          # what GitHub said
     assert FORK in text                 # where
     assert "public_repo" in text        # with what
+
+
+def test_ensure_fork_brings_the_fork_level_with_its_parent():
+    """A fork only holds the objects its parent had when it was created.
+
+    Everything pushed upstream afterwards is readable through the shared network but is not the
+    fork's own, and branching from such a commit is where 2026-08-04's `404 Not Found` came from —
+    for a submitter whose token, scopes and ownership were all correct, and whose first submission
+    minutes earlier had worked only because the fork was seconds old and still level. Syncing
+    first removes the question instead of answering it.
+    """
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(f"{request.method} {request.url.path}")
+        if request.method == "POST" and request.url.path.endswith("/forks"):
+            return httpx.Response(202, json={"full_name": FORK})
+        return httpx.Response(200, json={"full_name": FORK})
+
+    client = HttpGitHubClient(
+        token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    assert client.ensure_fork(REPO) == FORK
+    assert f"POST /repos/{FORK}/merge-upstream" in calls
+
+
+def test_a_fork_that_cannot_fast_forward_still_submits():
+    """A submitter's own commits on their default branch are theirs to keep. The sync is an
+    optimisation of the *next* step, not a precondition, so it must never fail the submission."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/forks"):
+            return httpx.Response(202, json={"full_name": FORK})
+        if request.url.path.endswith("/merge-upstream"):
+            return httpx.Response(409, json={"message": "merge conflict"})
+        return httpx.Response(200, json={"full_name": FORK})
+
+    client = HttpGitHubClient(
+        token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    assert client.ensure_fork(REPO) == FORK  # no raise

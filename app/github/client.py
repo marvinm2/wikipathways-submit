@@ -7,6 +7,7 @@ interface this small makes the fake trivial and keeps the real client honest.
 from __future__ import annotations
 
 import base64
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -401,6 +402,11 @@ class FakeGitHubClient(GitHubClient):
         fork = f"{self.login}/{repo.split('/', 1)[1]}"
         if (repo, fork) not in self.forks_created:
             self.forks_created.append((repo, fork))
+        # Stands in for `merge-upstream`: the fork is brought level with its parent's default
+        # branch on every call, which is what the real client now does and what makes a base
+        # commit the fork's own rather than merely visible through the network.
+        if (repo, "main") in self.branches:
+            self.branches[(fork, "main")] = self.branches[(repo, "main")]
         # A fork shares its parent's object database, so every commit reachable from the parent
         # is reachable from the fork. Mirroring the base branch is what makes a branch cut from
         # the *upstream* head resolvable here, which is the whole point of doing it that way.
@@ -762,6 +768,7 @@ class HttpGitHubClient(GitHubClient):
         for _ in range(_FORK_READY_ATTEMPTS):
             probe = self._client.get(f"/repos/{full_name}")
             if probe.status_code == 200:
+                self._sync_fork(full_name)
                 return full_name
             time.sleep(_FORK_READY_DELAY_SECONDS)
         raise GitHubError(
@@ -773,6 +780,36 @@ class HttpGitHubClient(GitHubClient):
         resp = self._client.get(f"/repos/{repo}/git/ref/heads/{branch}")
         self._raise_for(resp, f"get_branch_sha({branch})")
         return resp.json()["object"]["sha"]
+
+    def _sync_fork(self, fork: str, branch: str = "main") -> None:
+        """Fast-forward the fork's default branch to its parent's, best effort.
+
+        A fork only holds the objects its parent had **at the moment it was created**. Everything
+        pushed upstream afterwards is visible through the shared network for reads, but is not the
+        fork's own — and branching from such a commit is where the trouble is: a submission cut
+        from the content repo's current head is asking the fork to point a ref at an object it
+        does not natively hold. On 2026-08-04 that came back as a bare ``404 Not Found`` for a
+        submitter whose token, scopes and ownership were all correct, and whose *first* submission
+        minutes earlier had worked precisely because the fork was seconds old and still level.
+
+        Syncing first removes the question rather than answering it: after this the base commit is
+        the fork's own, and ``create_branch`` is an ordinary write. It also settles the drift
+        problem issue #22 raised from the other direction — a fork left alone for a year is now
+        brought level on every submission instead of accumulating distance from the base its
+        branches are cut from.
+
+        Best effort on purpose. A fork with local commits on its default branch cannot
+        fast-forward, and that is the submitter's repository to keep as they like; the submission
+        should proceed and fail later with something specific if it is going to fail at all.
+        """
+        resp = self._client.post(f"/repos/{fork}/merge-upstream", json={"branch": branch})
+        if resp.is_error:
+            logging.getLogger("wpsubmit.github").info(
+                "could not fast-forward %s@%s to its upstream (%s); continuing",
+                fork,
+                branch,
+                resp.status_code,
+            )
 
     def _token_scopes(self) -> str:
         """What GitHub says this token actually carries, for a denial message.
