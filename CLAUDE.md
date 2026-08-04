@@ -315,6 +315,27 @@ processed, and the contribution history is no longer flattened onto one account.
 > to open — issue #27's fix working. Recording a false `pass` on somebody else's submission to make
 > a test go green would have been the wrong trade; the Approve button was already proven on PR #20.
 
+> [!warning] **A submitter's token can read and not write, and the app cannot tell.**
+> The day after publishing successfully, the same submitter's next two uploads both died with a
+> 502: the fork resolved, the base was read, and `POST /git/refs` came back **404**. GitHub answers
+> a write you may not make with 404 rather than 403, and `create_branch` did not name the
+> repository — so the only report that reached a human read
+> `create_branch(update/WP5427) failed: 404` and could not say whether the app had aimed at the
+> fork or the base. Diagnosis was by elimination: a submission as Marvin at the same moment
+> succeeded, so the write path was fine; and a ref *can* be created in a fork at a parent-only SHA
+> (probed directly on a fork 24 commits behind), so it was not drift.
+>
+> **The root cause is not fixed.** `GithubOAuth.exchange_code` keeps `access_token` and discards
+> `expires_in` and `refresh_token`, so a long-lived session can hold a token that still reads and
+> no longer writes, and nothing renews it. That is its own piece of work.
+>
+> What *is* fixed: the error names the repository and says what a write-404 usually means, and a
+> refusal at `create_branch` — **the first mutating call in every write path**, so nothing has been
+> created — now retries under the bot rather than losing an upload the submitter has already made.
+> `FakeGitHubClient` had no notion of an identity that may read a repository and not write it, so
+> no test could have failed; it takes `deny_writes_to` now. **Sixth** time the fake has been the
+> more capable of the two.
+
 Three defects had to be fixed to get there and **only the first was ours** — the other two were
 pre-existing in the target repository and are worth carrying to
 `wikipathways/wikipathways-database`, where most contributions are fork pull requests and the same
