@@ -12,6 +12,14 @@ repository.
 > rather than staged as a file here, because this workflow names fork repositories throughout its
 > `repository:` inputs (see the warning below). The change, for applying upstream:
 >
+> **There are two such checkouts, not one.** `get-gpml` and `update-pr-desc` both check out the
+> pull request head; the other six checkouts in the file take the base default and are fine.
+> `update-pr-desc` was missed on the first pass because the audit checked six of the eight and
+> generalised — the same sample-excludes-the-case error recorded twice elsewhere in these notes,
+> committed by the person who had just written it down. **Grep the whole file for `refs/pull`
+> rather than reading the checkouts you happen to look at.** It never used the checkout at all: it
+> reads job outputs and runs `gh pr edit`.
+>
 > - Delete the `Checkout repository` step (`ref: refs/pull/${{ … }}/head`) from `get-gpml`.
 >   `actions/checkout@v6` refuses it from a `pull_request_target` workflow, so the job fails at its
 >   first step for every fork pull request. Do **not** answer that with
@@ -30,10 +38,17 @@ repository.
 >   is declared as a job output and **consumed by no job**, while 3A checks out `main`. It was
 >   copying a fork's commits into the base repository for nothing.
 >
-> Verified on `marvinm2/sandbox-wp-db` 2026-08-04: run `30892475738` on PR #23, a genuine
-> cross-repository pull request from `MadhushriMSV`, **all ten jobs green** — the first fork pull
-> request that repository has ever processed. The `testing` marker came back, `WP0__PR23.md` was
-> pushed to the drafts site, and the portal showed the repository's verdicts beside its own.
+> Verified on `marvinm2/sandbox-wp-db` 2026-08-04, and the second verification is the one that
+> counts. Run `30892475738` on PR #23 was **all ten green but `workflow_dispatch`**, where the
+> checkout guard does not apply at all — so it proved nothing about the trigger that matters. Run
+> `30906919228` on PR #28 is **all ten green under `pull_request_target`**, on a genuine
+> cross-repository pull request, raised by the `synchronize` event of a revision. The `testing`
+> marker came back, the pull request description was rewritten, and the portal showed the
+> repository's verdicts beside its own.
+>
+> **Re-running a fork pull request by hand does not test a fork pull request.** `workflow_dispatch`
+> runs in the base context with a full token; the refusal only happens on the real event. Any
+> check of this fix has to come from an actual pull request or a push to one.
 >
 > **2. `pr_label_dispatcher.yml` is the other half**
 > Unlike the others here, this one is **not** a nicety: without it, approving a submission that

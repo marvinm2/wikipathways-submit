@@ -315,6 +315,31 @@ processed, and the contribution history is no longer flattened onto one account.
 > to open — issue #27's fix working. Recording a false `pass` on somebody else's submission to make
 > a test go green would have been the wrong trade; the Approve button was already proven on PR #20.
 
+**Revise on a fork pull request is proven (2026-08-04, PR #28).** A dedicated test account
+(`mmarvinm2`, no repos, not a curator) submitted: the fork was created and the branch cut one
+second later, the pull request was cross-repository and **authored by that account with no
+fallback**, `head_repo` was captured, a curator's change request reached GitHub, and the account's
+re-upload landed a second commit on **its own fork** — the exact path the `head_repo` bug broke.
+The `synchronize` event that revision raised then ran workflow 1 **all ten jobs green under
+`pull_request_target`**. Only **update-in-fork** remains untested.
+
+> [!important] Two lessons from that pass, and I committed the second one myself
+> **A fresh OAuth grant writes; a stale one may not.** The consent screen for a new authorisation
+> reads "read and write all public repository data … Code", so the app asks for the right scope.
+> Signing out of the *portal* does not re-prompt — GitHub reuses the existing grant — so the remedy
+> for a submitter whose writes are refused is to **revoke the app** at
+> `github.com/settings/applications` and authorise again, not to sign in again.
+>
+> **`workflow_dispatch` does not test a fork pull request.** A hand re-run executes in the base
+> context with a full token, so the `checkout@v6` refusal never fires; only the real event
+> exercises it. The first "all ten green" on a fork was a manual re-run and proved nothing about
+> the trigger that mattered — which was not noticed until a second checkout turned up.
+>
+> And that second checkout is the sharper lesson: `update-pr-desc` also checked out the fork head,
+> and was missed because the audit read **six of the eight** checkouts in the file and generalised.
+> That is the *same* sample-excludes-the-case error recorded twice above, committed hours after
+> writing it down. **Grep for the pattern; do not read the instances you happen to open.**
+
 > [!warning] **A submitter's token can read and not write, and the app cannot tell.**
 > The day after publishing successfully, the same submitter's next two uploads both died with a
 > 502: the fork resolved, the base was read, and `POST /git/refs` came back **404**. GitHub answers
