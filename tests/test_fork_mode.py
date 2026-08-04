@@ -491,7 +491,7 @@ def test_create_branch_names_the_repository_it_was_refused_on():
     with pytest.raises(WriteDenied) as exc:
         client.create_branch(FORK, "update/WP5427", "sha1")
     assert FORK in str(exc.value)
-    assert "sign in again" in str(exc.value)
+    assert "cannot write there" in str(exc.value)
 
 
 def test_a_refused_fork_push_falls_back_to_the_bot():
@@ -543,3 +543,40 @@ def test_nothing_is_left_behind_on_the_fork_when_the_push_is_refused():
 def test_no_bot_means_the_refusal_still_surfaces():
     """Falling back to nothing would turn a clear permission error into a silent no-op."""
     assert bot_fallback_target(None, REPO, submitter="alice", reason="denied") is None
+
+
+def test_a_denied_write_reports_what_the_token_is_actually_allowed_to_do():
+    """A write refused as 404 looks exactly like a missing repository, and the two have completely
+    different answers. Asking GitHub what the token carries is the one question that separates
+    them, and 2026-08-04 was spent unable to ask it: signing in again did not restore the write,
+    so "the authorisation lapsed" stopped explaining anything.
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/user":
+            return httpx.Response(
+                200, json={"login": "alice"}, headers={"x-oauth-scopes": "read:user"}
+            )
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    client = HttpGitHubClient(
+        token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    with pytest.raises(WriteDenied) as exc:
+        client.create_branch(FORK, "b", "sha1")
+    assert "token scopes: read:user" in str(exc.value)
+
+
+def test_the_scope_probe_never_replaces_the_error_it_is_describing():
+    """A diagnostic that can fail would swallow the failure being reported."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/user":
+            raise httpx.ConnectError("network gone")
+        return httpx.Response(403, json={"message": "Forbidden"})
+
+    client = HttpGitHubClient(
+        token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    with pytest.raises(WriteDenied) as exc:
+        client.create_branch(FORK, "b", "sha1")
+    assert "token scopes: unknown" in str(exc.value)
+    assert FORK in str(exc.value)

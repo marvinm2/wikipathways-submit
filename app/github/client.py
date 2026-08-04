@@ -774,6 +774,23 @@ class HttpGitHubClient(GitHubClient):
         self._raise_for(resp, f"get_branch_sha({branch})")
         return resp.json()["object"]["sha"]
 
+    def _token_scopes(self) -> str:
+        """What GitHub says this token actually carries, for a denial message.
+
+        A write refused as 404 is indistinguishable from a missing repository, and the two have
+        completely different answers — so the one question worth asking on the way out is what the
+        token is allowed to do. Asked only on the failure path, and never allowed to raise: a
+        diagnostic that can itself fail would replace the real error with its own.
+
+        Empty means GitHub returned the header blank, which for an OAuth token means *no scopes* —
+        as distinct from ``unknown``, which means the question could not be asked.
+        """
+        try:
+            resp = self._client.get("/user")
+            return resp.headers.get("x-oauth-scopes", "").strip() or "none"
+        except Exception:  # noqa: BLE001 - never mask the failure being reported
+            return "unknown"
+
     def create_branch(self, repo: str, new_branch: str, from_sha: str) -> None:
         resp = self._client.post(
             f"/repos/{repo}/git/refs",
@@ -787,9 +804,10 @@ class HttpGitHubClient(GitHubClient):
         # reaching a human read `create_branch(update/WP5427) failed: 404` and did not say *where*.
         if resp.status_code in (403, 404):
             raise WriteDenied(
-                f"create_branch({new_branch}) on {repo}: {resp.status_code} — the acting token "
-                f"cannot write there. On a submitter's own fork this usually means their GitHub "
-                f"authorisation has lapsed and they need to sign in again."
+                f"create_branch({new_branch}) on {repo}: {resp.status_code} "
+                f"[token scopes: {self._token_scopes()}] — the acting token cannot write there. "
+                f"On a submitter's own fork this usually means their GitHub authorisation has "
+                f"lapsed or was granted a narrower scope than the app asks for."
             )
         self._raise_for(resp, f"create_branch({new_branch}) on {repo}")
 
