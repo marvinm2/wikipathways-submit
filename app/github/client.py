@@ -781,6 +781,19 @@ class HttpGitHubClient(GitHubClient):
         self._raise_for(resp, f"get_branch_sha({branch})")
         return resp.json()["object"]["sha"]
 
+    def _ref_exists(self, repo: str, branch: str) -> bool:
+        """Whether ``refs/heads/{branch}`` is already there. Read-only; False if it cannot be asked.
+
+        False on error rather than True: the caller uses this to *downgrade* a refusal to
+        "already exists", and guessing that way round would relabel a genuine permission failure
+        as a harmless collision and send the flow off looking for a pull request that is not there.
+        """
+        try:
+            resp = self._client.get(f"/repos/{repo}/git/ref/heads/{branch}")
+            return resp.status_code == 200
+        except Exception:  # noqa: BLE001 - never mask the failure being classified
+            return False
+
     def _sync_fork(self, fork: str, branch: str = "main") -> None:
         """Fast-forward the fork's default branch to its parent's, best effort.
 
@@ -840,6 +853,15 @@ class HttpGitHubClient(GitHubClient):
         # unless the repository is named — which it was not, so the only report of this failure
         # reaching a human read `create_branch(update/WP5427) failed: 404` and did not say *where*.
         if resp.status_code in (403, 404):
+            # GitHub is ambiguous here, so ask rather than infer. A duplicate ref answers 422 to a
+            # token with `repo` and **404 to one with only `public_repo`** — the
+            # don't-confirm-what-you-may-not-see pattern — which makes "already exists" and
+            # "you may not write" the same status for exactly the submitters fork mode is for.
+            # It cost most of an afternoon: every `update/WP<id>` branch the content repo has ever
+            # had is inherited by every fork at creation, so an update from a fork collides by
+            # construction, and the collision arrived looking like a permission failure.
+            if self._ref_exists(repo, new_branch):
+                raise BranchAlreadyExists(f"{new_branch} already exists in {repo}")
             # GitHub's own message included, not just the status. Dropping it was a mistake worth
             # naming: the first report of this failure carried the body because it came through
             # `_raise_for`, and the "better" error that replaced it kept the repository and the

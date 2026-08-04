@@ -646,3 +646,28 @@ def test_a_fork_that_cannot_fast_forward_still_submits():
         token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
     )
     assert client.ensure_fork(REPO) == FORK  # no raise
+
+
+def test_an_inherited_update_branch_is_a_collision_not_a_refusal(session_factory):
+    """A fork inherits every branch its parent had, so `update/WP<id>` is taken before the
+    submitter has ever edited that pathway. GitHub reports the duplicate as 404 to a
+    `public_repo` token, which made a routine collision look like a permission failure and sent
+    two real update attempts to the bot fallback."""
+    user = FakeGitHubClient(
+        default_branches={f"{REPO}#main": "upstream-head"},
+        existing_files={f"{REPO}#pathways/WP554/WP554.gpml": "blob1"},
+        login="alice",
+    )
+    # The parent already carries an update branch for this pathway; the fork inherits it.
+    user.branches[(REPO, "update/WP554")] = "someone-elses-old-edit"
+    target = _fork_target(user)
+    assert (FORK, "update/WP554") in user.branches, "the fake must inherit parent branches"
+
+    result = UpdateService(
+        PathwayLockRegistry(session_factory), target.client, repo=REPO, target=target
+    ).update_pathway(wpid=554, gpml=GOOD_GPML, submitter="alice")
+
+    # Stepped past the inherited name onto a fresh one, on the fork, as a cross-repo pull request.
+    assert result.branch != "update/WP554"
+    assert (FORK, result.branch) in user.branches
+    assert result.head_repo == FORK
