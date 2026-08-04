@@ -771,10 +771,13 @@ class HttpGitHubClient(GitHubClient):
         # *parent's* default — read off the response rather than assumed to be `main`, since a
         # content repository is free to call it something else.
         branch = (payload.get("parent") or {}).get("default_branch") or "main"
+        # Which sync method is even possible depends on the fork network's shape, so read where
+        # GitHub says this fork's network root is. See ``_sync_fork``.
+        source = (payload.get("source") or {}).get("full_name")
         for _ in range(_FORK_READY_ATTEMPTS):
             probe = self._client.get(f"/repos/{full_name}")
             if probe.status_code == 200:
-                self._sync_fork(full_name, repo, branch)
+                self._sync_fork(full_name, repo, branch, source=source)
                 return full_name
             time.sleep(_FORK_READY_DELAY_SECONDS)
         raise GitHubError(
@@ -800,8 +803,8 @@ class HttpGitHubClient(GitHubClient):
         except Exception:  # noqa: BLE001 - never mask the failure being classified
             return False
 
-    def _sync_fork(self, fork: str, parent: str, branch: str) -> None:
-        """Fast-forward ``fork``'s ``branch`` to ``parent``'s head, best effort.
+    def _sync_fork(self, fork: str, parent: str, branch: str, *, source: str | None = None) -> None:
+        """Bring ``fork``'s ``branch`` level with ``parent``'s, best effort.
 
         A fork only holds the objects its parent had **at the moment it was created**. Everything
         pushed upstream afterwards is visible through the shared network for reads, but is not the
@@ -830,11 +833,47 @@ class HttpGitHubClient(GitHubClient):
         sync for ``merge-upstream`` to do. It could not bring the fork level with the repository
         the branch is actually cut from, whatever it returned.
 
-        Updating the ref directly names the parent explicitly, so topology stops mattering.
+        **Neither method works everywhere, so the topology picks one.**
+
+        ``merge-upstream`` syncs against the network *source* and says so in ``base_branch``. When
+        the source **is** the content repository — a submitter forking
+        ``wikipathways/wikipathways-database``, which is a network root — that is exactly right,
+        and it is the only method that works, because it happens server-side inside the network.
+
+        Updating the ref directly names the parent, but can only point it at an object the fork
+        already holds. A commit merely *readable* through the shared network is refused with
+        **404** — distinct from 422 ``Object does not exist``, which is what a commit from another
+        network entirely returns. Measured 2026-08-04. That is why a submission works for minutes
+        after a fork is created (still level, so the base commit is the fork's own) and fails
+        afterwards, for any account of any age.
+
+        So: source == content repo, use ``merge-upstream``. Otherwise the fork is a fork of a
+        fork — ``merge-upstream`` would aim at a third repository the branch is never cut from —
+        and the ref update is the only thing left to try, knowing it may be refused.
+
         ``force`` stays false: GitHub then refuses a non-fast-forward itself, which is exactly the
         "their commits are theirs to keep" rule, enforced server-side rather than guessed at here.
         """
         log = logging.getLogger("wpsubmit.github")
+        if source and source == parent:
+            resp = self._client.post(f"/repos/{fork}/merge-upstream", json={"branch": branch})
+            if resp.is_error:
+                log.info(
+                    "could not sync %s@%s from upstream (%s %s); continuing",
+                    fork,
+                    branch,
+                    resp.status_code,
+                    resp.text.strip(),
+                )
+            return
+        if source:
+            log.info(
+                "%s is a fork of a fork (network source %s, parent %s); merge-upstream would "
+                "sync against the wrong repository, falling back to a direct ref update",
+                fork,
+                source,
+                parent,
+            )
         try:
             head = self.get_branch_sha(parent, branch)
         except Exception as exc:  # noqa: BLE001 - a best-effort sync must never fail a submission

@@ -631,7 +631,13 @@ def test_ensure_fork_brings_the_fork_level_with_its_parent():
         calls.append(f"{request.method} {request.url.path}")
         if request.method == "POST" and request.url.path.endswith("/forks"):
             return httpx.Response(
-                202, json={"full_name": FORK, "parent": {"default_branch": "main"}}
+                202,
+                json={
+                    "full_name": FORK,
+                    "parent": {"default_branch": "main"},
+                    # Network root is a third repository, so this is a fork of a fork.
+                    "source": {"full_name": "wikipathways/upstream-of-the-target"},
+                },
             )
         if request.url.path == f"/repos/{REPO}/git/ref/heads/main":
             return httpx.Response(200, json={"object": {"sha": "parent-head"}})
@@ -652,6 +658,37 @@ def test_ensure_fork_brings_the_fork_level_with_its_parent():
     assert f"PATCH /repos/{FORK}/git/refs/heads/main" in calls
     assert not any("merge-upstream" in c for c in calls)
     assert patched == {"sha": "parent-head", "force": False}
+
+
+def test_the_production_topology_syncs_with_merge_upstream():
+    """When the fork's network source **is** the content repo — a submitter forking
+    `wikipathways/wikipathways-database`, which is a root — `merge-upstream` is both correct and
+    the only thing that works.
+
+    A direct ref update cannot substitute: it can only point a ref at an object the fork already
+    holds, and a commit merely readable through the shared network is refused with 404. So this
+    is not a stylistic choice between two equivalent calls (issue #29)."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(f"{request.method} {request.url.path}")
+        if request.method == "POST" and request.url.path.endswith("/forks"):
+            return httpx.Response(
+                202,
+                json={
+                    "full_name": FORK,
+                    "parent": {"default_branch": "main"},
+                    "source": {"full_name": REPO},  # the content repo IS the network root
+                },
+            )
+        return httpx.Response(200, json={"full_name": FORK})
+
+    client = HttpGitHubClient(
+        token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    assert client.ensure_fork(REPO) == FORK
+    assert f"POST /repos/{FORK}/merge-upstream" in calls
+    assert not any("PATCH" in c for c in calls), "must not try the ref update in this topology"
 
 
 def test_a_fork_that_cannot_fast_forward_still_submits():

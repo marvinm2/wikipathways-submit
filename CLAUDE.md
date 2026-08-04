@@ -350,9 +350,44 @@ The `synchronize` event that revision raised then ran workflow 1 **all ten jobs 
 > succeeded, so the write path was fine; and a ref *can* be created in a fork at a parent-only SHA
 > (probed directly on a fork 24 commits behind), so it was not drift.
 >
-> **The root cause is not fixed.** `GithubOAuth.exchange_code` keeps `access_token` and discards
-> `expires_in` and `refresh_token`, so a long-lived session can hold a token that still reads and
-> no longer writes, and nothing renews it. That is its own piece of work.
+> **That attribution was wrong. So were the three that replaced it** — recorded in order, because
+> the sequence is the lesson (2026-08-04):
+>
+> 1. *Token staleness (issue #28).* Falsified: after revoking the app and authorising again, a
+>    **freshly granted** token with the same scopes was refused identically, as was an independent
+>    classic PAT on the same account. #28 is real and still open; it is not this.
+> 2. *A restricted new account.* `mmarvinm2` was two hours old, so this fitted — until
+>    `MadhushriMSV`, a 2021 account with eight repositories that had **published through this app
+>    the same morning**, failed in exactly the same way.
+> 3. *Insufficient scope.* `POST /git/refs` answers `x-accepted-oauth-scopes: repo` while the app
+>    requests `public_repo`, which looked decisive. It is a red herring: a `public_repo`-only PAT
+>    created refs on both a normal repository and a fork, **201** each time. **Do not widen
+>    `oauth_scope`** — it would force every submitter to re-authorise for nothing.
+>
+> **What it actually is: which commit the ref points at.** GitHub answers ref creation three ways,
+> all three measured — an object from another network entirely gives **422 Object does not exist**;
+> the repository's own object gives **201**; an object *readable through the fork network but not
+> the fork's own* gives **404**, indistinguishable from a permission denial. Every failure was the
+> third. `a4bc119` (the parent's head) reads back fine from `mmarvinm2/sandbox-wp-db`, whose own
+> head was `828ba1f`, and `GET /repos/...` truthfully reported `push: true` the whole time.
+>
+> **So the correlation was fork age, not account age.** A fork created seconds ago is level with
+> its parent, so the base commit *is* its own and the write succeeds — which is every success in
+> the record (07:22 and 11:45). Once the parent moves ahead, every submission points at a commit
+> the fork does not hold. The web UI is unaffected because it branches from the fork's own head.
+>
+> **And it is largely an artifact of the sandbox.** `wikipathways/wikipathways-database` is a
+> network **root**, so in production a submitter's fork is first-level, its source *is* the content
+> repository, and `merge-upstream` syncs it correctly. The sandbox target is itself a fork, so
+> submitters get forks **of forks**, where `merge-upstream` aims at a third repository and a direct
+> ref update cannot substitute. `_sync_fork` now picks its method from the topology
+> (see [[reference_merge_upstream_targets_network_source]]). **Update-in-fork has therefore never
+> been tested on a representative topology** — the testbed, not the app, is what has been failing.
+>
+> The reusable lesson is the shape of the list above: four consecutive explanations each fitted
+> every observation available when it was formed, and each died to one new measurement. The ones
+> that died fastest were the ones that named a *property of the actor* (this token, this account,
+> this scope) rather than a property of the *operation*.
 >
 > What *is* fixed: the error names the repository and says what a write-404 usually means, and a
 > refusal at `create_branch` — **the first mutating call in every write path**, so nothing has been
