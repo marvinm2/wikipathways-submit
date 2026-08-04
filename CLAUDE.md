@@ -302,13 +302,23 @@ until then, deliberately: this repo has been bitten four times by "the fake agre
 not". What *is* confirmed against the real API: `POST /forks` on an already-forked repo returns the
 existing fork with `full_name` intact and creates nothing.
 
-**A real third-party submitter proved it, 2026-08-04.** `MadhushriMSV` submitted twice through the
-portal: `MadhushriMSV/sandbox-wp-db` was created by `ensure_fork` at 07:20:21, PR #23 opened four
-seconds later, both pull requests `isCrossRepository: true` and **authored by her**. Two defects
-fell out, one ours and one the target repository's — see below. After both fixes, run
-`30892475738` on her PR #23 went **green on all ten jobs**, the `testing` marker round-tripped, the
-draft was pushed, and the portal showed the repository's verdicts beside its own. That is the first
-fork pull request the target repository has ever processed.
+**#22 is closed. A real third-party submitter published through the fork path, 2026-08-04.**
+`MadhushriMSV` submitted through the portal; `MadhushriMSV/sandbox-wp-db` was created by
+`ensure_fork`, her pull request was `isCrossRepository: true` and **authored by her**, workflow 1
+went green on all ten jobs, the `accepted` label dispatched 3A, and it **published as WP5427** with
+the pull request closed unmerged and the app settling itself over the webhook. Eight artifacts on
+the content repo plus the assets repo. The first fork pull request that repository has ever
+processed, and the contribution history is no longer flattened onto one account.
+
+> Approval was applied as a **label**, not through the dashboard button, and deliberately: her
+> checklist carries a real failure (17 of 88 data nodes unannotated) and the gate correctly refuses
+> to open — issue #27's fix working. Recording a false `pass` on somebody else's submission to make
+> a test go green would have been the wrong trade; the Approve button was already proven on PR #20.
+
+Three defects had to be fixed to get there and **only the first was ours** — the other two were
+pre-existing in the target repository and are worth carrying to
+`wikipathways/wikipathways-database`, where most contributions are fork pull requests and the same
+patterns are present.
 
 > [!warning] **`open_pull_request` echoed the request instead of reading the answer.**
 > It returned the `head` it was *asked for* and never parsed `head_repo`, so both of her pull
