@@ -302,6 +302,44 @@ until then, deliberately: this repo has been bitten four times by "the fake agre
 not". What *is* confirmed against the real API: `POST /forks` on an already-forked repo returns the
 existing fork with `full_name` intact and creates nothing.
 
+**A real third-party submitter proved it, 2026-08-04.** `MadhushriMSV` submitted twice through the
+portal: `MadhushriMSV/sandbox-wp-db` was created by `ensure_fork` at 07:20:21, PR #23 opened four
+seconds later, both pull requests `isCrossRepository: true` and **authored by her**. Two defects
+fell out, one ours and one the target repository's — see below. After both fixes, run
+`30892475738` on her PR #23 went **green on all ten jobs**, the `testing` marker round-tripped, the
+draft was pushed, and the portal showed the repository's verdicts beside its own. That is the first
+fork pull request the target repository has ever processed.
+
+> [!warning] **`open_pull_request` echoed the request instead of reading the answer.**
+> It returned the `head` it was *asked for* and never parsed `head_repo`, so both of her pull
+> requests recorded their branch as if it were on the base repo — and every branch-side lookup
+> then goes to the wrong repository, so **revise raises `NoPendingSubmission`** and a curator
+> requesting changes leaves the submitter unable to answer. Echoing was wrong for `head_branch`
+> too: a cross-repository `head` is `owner:branch`, so the owner prefix would have been stored as
+> part of the branch name.
+>
+> **`FakeGitHubClient` parsed both correctly**, so 494 tests agreed while production did not —
+> the *fifth* time here that the fake has been more capable than the thing it stands in for. Only
+> a `MockTransport` test against a real-shaped response catches this class.
+>
+> The affected rows **heal themselves**: the reconcile already reads the pull request from GitHub,
+> so it now fills a blank head repo from what GitHub says. No database was touched by hand — which
+> also meant the permission classifier's refusal of a production `UPDATE` pushed the work toward
+> the better fix.
+
+> [!warning] **The target repository could not process *any* fork pull request.**
+> `get-gpml` ran on `pull_request_target` — holding the deploy keys — and checked out
+> `refs/pull/N/head`, the fork's own code. `actions/checkout@v6` now refuses that outright, so the
+> job failed at its first step. **Pre-existing and nothing to do with fork mode**, and the same
+> pattern is in `wikipathways/wikipathways-database`'s own workflow 1, where most contributions
+> *are* fork pull requests.
+>
+> Fixed by removing the checkout rather than by `allow-unsafe-pr-checkout: true`. The checkout was
+> never needed for code: it read one GPML file and pushed a branch nothing consumes. The file is
+> now fetched over the API as **data**, and the generators already ran from base code via the
+> artifact — so a fork's contents are never executed. The dead `git push` went with it
+> (`branch-name` feeds no job; 3A checks out `main`). Full change in `sandbox-workflows/README.md`.
+
 > [!warning] **A fork pull request would have been approved and then silently never published.**
 > `pr_label_dispatcher.yml` ran on `pull_request`, and a fork pull request gets a **read-only**
 > `GITHUB_TOKEN` whatever the repository default says — so `gh workflow run`, needing

@@ -5,7 +5,37 @@ Repaired copies of GitHub Actions workflows belonging to
 staged here so they can be reviewed and then opened as a pull request against that
 repository.
 
-> [!important] `pr_label_dispatcher.yml` is the one that blocks fork mode
+> [!important] Two changes are needed before *any* fork pull request works, and both are applied
+> on `marvinm2/sandbox-wp-db` only
+>
+> **1. `1_on_pull_request.yml` — `get-gpml` must not check out the fork.** Applied as a change
+> rather than staged as a file here, because this workflow names fork repositories throughout its
+> `repository:` inputs (see the warning below). The change, for applying upstream:
+>
+> - Delete the `Checkout repository` step (`ref: refs/pull/${{ … }}/head`) from `get-gpml`.
+>   `actions/checkout@v6` refuses it from a `pull_request_target` workflow, so the job fails at its
+>   first step for every fork pull request. Do **not** answer that with
+>   `allow-unsafe-pr-checkout: true`: the workflow holds the deploy keys, and that is the whole
+>   pwn-request hazard rather than a warning to silence.
+> - Replace `cp "$GPML_FILEPATH" ./"$GPML_FILE"` with an API fetch of the file from the pull
+>   request's head (`gh pr view --json headRepositoryOwner,headRepository,headRefOid`, then
+>   `gh api "repos/$HEAD_REPO/contents/$GPML_FILEPATH?ref=$HEAD_SHA" -H "Accept: application/vnd.github.raw"`),
+>   plus an empty-file guard. This keeps the fork's contribution as **data**; the generators
+>   downstream already run from the base repository's own code via the `gpml-file` artifact, so
+>   nothing from the fork is ever executed.
+> - Add `GH_REPO: ${{ github.repository }}` to the step's `env` — without a checkout there is no
+>   git remote for `gh` to infer the repository from.
+> - Delete the `git ls-remote` / `git push origin HEAD:refs/heads/$BRANCH_NAME` lines in
+>   `Get branch name`. They need a working tree, and they answer the step's own TODO: `branch-name`
+>   is declared as a job output and **consumed by no job**, while 3A checks out `main`. It was
+>   copying a fork's commits into the base repository for nothing.
+>
+> Verified on `marvinm2/sandbox-wp-db` 2026-08-04: run `30892475738` on PR #23, a genuine
+> cross-repository pull request from `MadhushriMSV`, **all ten jobs green** — the first fork pull
+> request that repository has ever processed. The `testing` marker came back, `WP0__PR23.md` was
+> pushed to the drafts site, and the portal showed the repository's verdicts beside its own.
+>
+> **2. `pr_label_dispatcher.yml` is the other half**
 > Unlike the others here, this one is **not** a nicety: without it, approving a submission that
 > came from a contributor's fork applies the label and then nothing happens. The dispatcher runs
 > on `pull_request`, and a pull request from a fork gets a **read-only** `GITHUB_TOKEN` whatever
