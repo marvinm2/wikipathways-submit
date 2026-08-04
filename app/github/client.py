@@ -99,6 +99,20 @@ class BranchAlreadyExists(GitHubError):
     """The branch to be created already exists (e.g. a resubmission collided)."""
 
 
+class WriteDenied(GitHubError):
+    """The acting token may not write where it was asked to.
+
+    Raised only from ``create_branch``, which is the **first** mutating call in every write path —
+    so a caller catching this knows nothing has been created yet and may safely retry under a
+    different identity. That is what makes the bot fallback sound here and unsound later on.
+
+    Its own case: a submitter whose GitHub authorisation has lapsed since they signed in. The app
+    stores the OAuth token it was given and never refreshes it, so a long-lived session can hold a
+    token that still reads and no longer writes — which is exactly how this presented (2026-08-04:
+    reads fine, `POST /git/refs` 404, on a fork the submitter owns).
+    """
+
+
 class GitHubClient(ABC):
     @abstractmethod
     def ensure_fork(self, repo: str) -> str:
@@ -319,9 +333,13 @@ class FakeGitHubClient(GitHubClient):
         team_members: dict[str, list[str]] | None = None,
         previews: dict[int, dict] | None = None,
         login: str = "submitter",
+        deny_writes_to: set[str] | None = None,
     ) -> None:
         #: Who this client is acting as, which is what ``ensure_fork`` names the fork after.
         self.login = login
+        #: Repositories this identity may read but not write — a lapsed authorisation, or a token
+        #: scoped narrower than the caller assumed. ``create_branch`` is where that first shows.
+        self.deny_writes_to = set(deny_writes_to or ())
         #: [(repo, fork)] in call order, so a test can prove the fork was ensured once per
         #: submission and that a second submission reused it rather than asking again.
         self.forks_created: list[tuple[str, str]] = []
@@ -406,6 +424,11 @@ class FakeGitHubClient(GitHubClient):
 
     def create_branch(self, repo: str, new_branch: str, from_sha: str) -> None:
         self._maybe_fail("create_branch")
+        # Refuse writes to repositories this identity may not touch, so the fake can reproduce a
+        # submitter whose authorisation has lapsed — the shape that took two real submissions down
+        # on 2026-08-04 and that the previous fake could not express at all.
+        if repo in self.deny_writes_to:
+            raise WriteDenied(f"create_branch({new_branch}) on {repo}: denied")
         if (repo, new_branch) in self.branches:
             raise BranchAlreadyExists(f"{new_branch} already exists in {repo}")
         self.branches[(repo, new_branch)] = from_sha
@@ -758,7 +781,17 @@ class HttpGitHubClient(GitHubClient):
         )
         if resp.status_code == 422:
             raise BranchAlreadyExists(f"{new_branch} already exists in {repo}")
-        self._raise_for(resp, f"create_branch({new_branch})")
+        # GitHub answers a write the caller may not make with **404**, not 403, so as not to
+        # confirm the repository exists. On this endpoint that is indistinguishable from a typo
+        # unless the repository is named — which it was not, so the only report of this failure
+        # reaching a human read `create_branch(update/WP5427) failed: 404` and did not say *where*.
+        if resp.status_code in (403, 404):
+            raise WriteDenied(
+                f"create_branch({new_branch}) on {repo}: {resp.status_code} — the acting token "
+                f"cannot write there. On a submitter's own fork this usually means their GitHub "
+                f"authorisation has lapsed and they need to sign in again."
+            )
+        self._raise_for(resp, f"create_branch({new_branch}) on {repo}")
 
     def get_file_sha(self, repo: str, ref: str, path: str) -> str | None:
         resp = self._client.get(f"/repos/{repo}/contents/{path}", params={"ref": ref})

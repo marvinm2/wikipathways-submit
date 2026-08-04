@@ -149,6 +149,28 @@ def resolve_write_target(
     return same_repo_target(user_client, content_repo, identity="user")
 
 
+def bot_fallback_target(
+    bot_client: GitHubClient | None, content_repo: str, *, submitter: str, reason: str
+) -> WriteTarget | None:
+    """The target to retry under when a fork write was refused, or None if there is none.
+
+    Called only where the refusal came from ``create_branch``, the first mutating call in every
+    write path — so nothing has been created and retrying under another identity cannot leave two
+    repositories holding halves of one submission. That is the same boundary
+    ``resolve_write_target`` draws, reached a step later: the fork resolved fine and the *push*
+    was refused, which is what a lapsed authorisation looks like (2026-08-04).
+
+    Degrading to a bot-authored pull request is worse than the submitter's own, and much better
+    than a 502 on work they have already done.
+    """
+    if bot_client is None:
+        return None
+    logger.warning(
+        "fork write refused for %s (%s); retrying as the bot", submitter, reason
+    )
+    return same_repo_target(bot_client, content_repo, identity="bot")
+
+
 class BotIdentityUnavailable(RuntimeError):
     """``submit_identity=bot`` with no GitHub App configured.
 

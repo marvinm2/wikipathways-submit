@@ -14,10 +14,12 @@ from app.github.client import (
     PullRequest,
     PullRequestDetail,
     WorkflowRun,
+    WriteDenied,
 )
 
 __all__ = [
     "BranchAlreadyExists",
+    "WriteDenied",
     "FakeGitHubClient",
     "GitHubClient",
     "GitHubError",

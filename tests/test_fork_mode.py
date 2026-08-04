@@ -23,13 +23,14 @@ import httpx
 import pytest
 
 from app.config import Settings
-from app.github import FakeGitHubClient, GitHubError, HttpGitHubClient
+from app.github import FakeGitHubClient, GitHubError, HttpGitHubClient, WriteDenied
 from app.locks import PathwayLockRegistry
 from app.submit import SubmissionService
 from app.submit.service import SubmissionMode
 from app.submit.targets import (
     BotIdentityUnavailable,
     WriteTarget,
+    bot_fallback_target,
     resolve_write_target,
     same_repo_target,
 )
@@ -471,3 +472,74 @@ def test_every_logger_is_under_the_wpsubmit_parent():
                 ):
                     offenders.append(f"{path.name}:{node.lineno}")
     assert offenders == [], f"loggers outside the wpsubmit tree write nowhere: {offenders}"
+
+
+# ---- a submitter whose authorisation has lapsed ------------------------------------------------
+
+
+def test_create_branch_names_the_repository_it_was_refused_on():
+    """The only report of this failure that reached a human said `create_branch(update/WP5427)
+    failed: 404` — no repository, so it was impossible to tell from the message alone whether the
+    app had aimed at the fork or the base. GitHub answers a forbidden write with 404 rather than
+    403, which removes the other clue."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    client = HttpGitHubClient(
+        token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    with pytest.raises(WriteDenied) as exc:
+        client.create_branch(FORK, "update/WP5427", "sha1")
+    assert FORK in str(exc.value)
+    assert "sign in again" in str(exc.value)
+
+
+def test_a_refused_fork_push_falls_back_to_the_bot():
+    """Real failure, 2026-08-04: a submitter's token still *read* fine — the fork resolved, the
+    base was read — and then `POST /git/refs` came back 404. Her submission died with a 502 on
+    work she had already done.
+
+    `create_branch` is the first mutating call in the flow, so nothing exists yet and the bot can
+    take over cleanly. A bot-authored pull request is worse than her own and much better than
+    losing the upload.
+    """
+    user = FakeGitHubClient(
+        default_branches={f"{REPO}#main": "upstream-head"},
+        login="alice",
+        deny_writes_to={FORK},
+    )
+    bot = FakeGitHubClient(default_branches={f"{REPO}#main": "upstream-head"}, login="wp-bot")
+
+    target = _fork_target(user)
+    assert target.branch_repo == FORK  # the fork resolved fine; it is the *push* that is refused
+
+    with pytest.raises(WriteDenied):
+        _service(user, target).submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
+
+    retry = bot_fallback_target(bot, REPO, submitter="alice", reason="denied")
+    assert retry is not None and retry.identity == "bot"
+    result = _service(user, retry).submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
+    assert (REPO, result.branch) in bot.branches
+    assert result.head_repo is None
+
+
+def test_nothing_is_left_behind_on_the_fork_when_the_push_is_refused():
+    """What makes retrying at this point sound rather than merely convenient."""
+    user = FakeGitHubClient(
+        default_branches={f"{REPO}#main": "upstream-head"},
+        login="alice",
+        deny_writes_to={FORK},
+    )
+    target = _fork_target(user)
+    with pytest.raises(WriteDenied):
+        _service(user, target).submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
+    # The fork's own `main` is there because the fork exists, not because the submission got
+    # anywhere. What must be absent is any *submission* branch, file or pull request.
+    assert [b for (r, b) in user.branches if r == FORK] == ["main"]
+    assert user.files == {}
+    assert user.pulls == []
+
+
+def test_no_bot_means_the_refusal_still_surfaces():
+    """Falling back to nothing would turn a clear permission error into a silent no-op."""
+    assert bot_fallback_target(None, REPO, submitter="alice", reason="denied") is None

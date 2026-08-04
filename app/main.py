@@ -41,7 +41,7 @@ from app.auth import GitHubApp, GithubOAuth, OAuthError, TokenCipher, TokenCiphe
 from app.config import Settings
 from app.curators import make_curator_registry
 from app.db import make_engine, make_session_factory
-from app.github import GitHubClient, GitHubError, HttpGitHubClient
+from app.github import GitHubClient, GitHubError, HttpGitHubClient, WriteDenied
 from app.locks import LockUnavailable, PathwayLockRegistry
 from app.models import Base, ReviewStatus
 from app.pipeline import DraftsReader
@@ -73,7 +73,12 @@ from app.submit import (
 )
 from app.submit.gpml import PLACEHOLDER_GPML_PATH
 from app.submit.service import SubmissionMode
-from app.submit.targets import BotIdentityUnavailable, WriteTarget, resolve_write_target
+from app.submit.targets import (
+    BotIdentityUnavailable,
+    WriteTarget,
+    bot_fallback_target,
+    resolve_write_target,
+)
 from app.update import PathwayNotFound, UpdateService
 from app.wpid import WpidAllocator
 from app.wpid.github_floor import github_wpid_floor
@@ -1056,13 +1061,35 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             mode=SubmissionMode(settings.publish_mode),
             target=target,
         )
-        try:
-            result = service.submit_new_pathway(
+        def _submit_with(svc: SubmissionService):
+            return svc.submit_new_pathway(
                 gpml=content,
                 submitter=submitter,
                 author_email=_submitter_email(settings, submitter),
                 description=description,
             )
+
+        try:
+            try:
+                result = _submit_with(service)
+            except WriteDenied as denied:
+                # The fork resolved and the *push* was refused, so nothing has been created and
+                # the bot can take over cleanly. See ``bot_fallback_target``.
+                retry = bot_fallback_target(
+                    bot, settings.content_repo, submitter=submitter, reason=str(denied)
+                )
+                if retry is None or not target.is_cross_repo:
+                    raise
+                result = _submit_with(
+                    SubmissionService(
+                        request.app.state.allocator,
+                        retry.client,
+                        repo=settings.content_repo,
+                        base_branch=settings.default_branch,
+                        mode=SubmissionMode(settings.publish_mode),
+                        target=retry,
+                    )
+                )
         except InvalidGpml as exc:
             raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc
         except GitHubError as exc:
@@ -1142,14 +1169,38 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             # Off the event loop. Checking out a pathway scans the target repo's open pull
             # requests for a foreign writer, which on a busy repo is dozens of sequential
             # requests — long enough to stall every other request in the process if it ran here.
-            result = await run_in_threadpool(
-                service.update_pathway,
-                wpid=wpid,
-                gpml=content,
-                submitter=submitter,
-                author_email=_submitter_email(settings, submitter),
-                description=description,
-            )
+            try:
+                result = await run_in_threadpool(
+                    service.update_pathway,
+                    wpid=wpid,
+                    gpml=content,
+                    submitter=submitter,
+                    author_email=_submitter_email(settings, submitter),
+                    description=description,
+                )
+            except WriteDenied as denied:
+                # Same boundary as the submit route: create_branch is the first mutating call, so
+                # nothing has been written and the bot can take over. The update service releases
+                # the pathway lock on any failure, so the retry re-acquires it cleanly.
+                retry = bot_fallback_target(
+                    bot, settings.content_repo, submitter=submitter, reason=str(denied)
+                )
+                if retry is None or not target.is_cross_repo:
+                    raise
+                result = await run_in_threadpool(
+                    UpdateService(
+                        request.app.state.locks,
+                        retry.client,
+                        repo=settings.content_repo,
+                        base_branch=settings.default_branch,
+                        target=retry,
+                    ).update_pathway,
+                    wpid=wpid,
+                    gpml=content,
+                    submitter=submitter,
+                    author_email=_submitter_email(settings, submitter),
+                    description=description,
+                )
         except InvalidGpml as exc:
             raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc
         except LockUnavailable as exc:
