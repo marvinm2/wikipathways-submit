@@ -66,6 +66,10 @@ class PullRequestDetail:
     body: str
     labels: list[str]
     author: str
+    #: ``owner/name`` the head branch lives on, None meaning the base repo. Same meaning as on
+    #: ``PullRequest``. Carried here so a reconcile can *repair* a review row whose head repo was
+    #: never recorded — which is every cross-repository submission opened before 2026-08-04.
+    head_repo: str | None = None
 
 
 @dataclass(frozen=True)
@@ -927,6 +931,7 @@ class HttpGitHubClient(GitHubClient):
             body=data.get("body") or "",
             labels=[label["name"] for label in data.get("labels") or []],
             author=(data.get("user") or {}).get("login", ""),
+            head_repo=_head_repo_of(data, repo),
         )
 
     def get_pull_request_state(self, repo: str, pr_number: int) -> str | None:

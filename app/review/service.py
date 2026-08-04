@@ -32,7 +32,11 @@ from app.review.checklist import (
 from app.submit.gpml import PLACEHOLDER_GPML_PATH, PLACEHOLDER_WPID_STR
 from app.wpid import WpidAllocator
 
-logger = logging.getLogger(__name__)
+# ``wpsubmit.review``, not ``__name__``. Logging is configured on the ``wpsubmit`` parent, so a
+# logger named after the module (``app.review.service``) has no handler and writes nowhere — the
+# same silence that hid every application log line in production until 2026-08-04.
+# ``test_every_logger_is_under_the_wpsubmit_parent`` pins it.
+logger = logging.getLogger("wpsubmit.review")
 
 #: Hidden token embedded in the mirror comment so we update the same one instead of spamming.
 MIRROR_MARKER = "<!-- wikipathways-submit:mirror -->"
@@ -1466,6 +1470,23 @@ class CurationService:
             review.last_checked_at = utcnow()
             if detail is not None:
                 review.github_labels = list(detail.labels)
+                # Repair a head repo the row never learned. Until 2026-08-04 `open_pull_request`
+                # did not parse it, so every cross-repository submission recorded None and every
+                # branch-side lookup for it went to the base repo — where a fork's branch does
+                # not exist, so revise raises NoPendingSubmission. GitHub is the authority here
+                # and this read already has the answer in hand, so the rows heal themselves on
+                # the next dashboard load rather than needing anyone to touch the database.
+                #
+                # Only ever fills a blank. Overwriting would let a transient read reassign a
+                # branch that is being written to, and a head repo does not change over a pull
+                # request's life.
+                if review.head_repo is None and detail.head_repo is not None:
+                    logger.info(
+                        "review %s: recording head repo %s, which was never captured",
+                        pr_number,
+                        detail.head_repo,
+                    )
+                    review.head_repo = detail.head_repo
             if pipeline_run is not None:
                 review.pipeline_run = pipeline_run
             s.commit()

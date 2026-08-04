@@ -442,3 +442,32 @@ def test_open_pull_request_leaves_head_repo_none_for_a_same_repo_pull_request():
     pr = client.open_pull_request(REPO, head="submit/WP5637", base="main", title="t", body="b")
     assert pr.head_repo is None
     assert pr.head_branch == "submit/WP5637"
+
+
+def test_every_logger_is_under_the_wpsubmit_parent():
+    """Logging is configured on `wpsubmit`, so a logger outside it writes nowhere.
+
+    `app/review/service.py` used `__name__` and was therefore silent even after the handler was
+    added — the fix for one silence leaving another in place. A convention that is only true by
+    habit is one module away from being false, so it is asserted rather than remembered.
+    """
+    import ast
+    from pathlib import Path
+
+    offenders = []
+    for path in sorted((Path(__file__).parent.parent / "app").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "getLogger"
+                and node.args
+            ):
+                arg = node.args[0]
+                name = arg.value if isinstance(arg, ast.Constant) else None
+                if name != "wpsubmit" and not (
+                    isinstance(name, str) and name.startswith("wpsubmit.")
+                ):
+                    offenders.append(f"{path.name}:{node.lineno}")
+    assert offenders == [], f"loggers outside the wpsubmit tree write nowhere: {offenders}"
