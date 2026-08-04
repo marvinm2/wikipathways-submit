@@ -17,6 +17,7 @@ fork being had puts the submission back on the bot rather than failing it.
 """
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import httpx
@@ -274,6 +275,10 @@ def test_ensure_fork_reads_the_name_off_the_response_and_waits_for_readiness():
         calls.append(f"{request.method} {request.url.path}")
         if request.method == "POST":
             return httpx.Response(202, json={"full_name": "alice/sandbox-wp-db-1"})
+        if request.url.path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": "upstream-head"}})
+        if request.method == "PATCH":
+            return httpx.Response(200, json={"object": {"sha": "upstream-head"}})
         probes["n"] += 1
         if probes["n"] < 3:
             return httpx.Response(404, json={"message": "Not Found"})
@@ -293,9 +298,11 @@ def test_ensure_fork_reads_the_name_off_the_response_and_waits_for_readiness():
         client_module.time.sleep = original
 
     assert calls[0] == f"POST /repos/{REPO}/forks"
-    # Three probes until it answers, then the fast-forward to its parent.
+    # Three probes until it answers, then the fast-forward to its parent: read the parent's head,
+    # then point the fork's own ref at it.
     assert calls[1:4] == ["GET /repos/alice/sandbox-wp-db-1"] * 3
-    assert calls[4] == "POST /repos/alice/sandbox-wp-db-1/merge-upstream"
+    assert calls[4] == f"GET /repos/{REPO}/git/ref/heads/main"
+    assert calls[5] == "PATCH /repos/alice/sandbox-wp-db-1/git/refs/heads/main"
 
 
 def test_ensure_fork_raises_when_the_fork_never_becomes_readable():
@@ -618,28 +625,66 @@ def test_ensure_fork_brings_the_fork_level_with_its_parent():
     first removes the question instead of answering it.
     """
     calls: list[str] = []
+    patched: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(f"{request.method} {request.url.path}")
         if request.method == "POST" and request.url.path.endswith("/forks"):
-            return httpx.Response(202, json={"full_name": FORK})
+            return httpx.Response(
+                202, json={"full_name": FORK, "parent": {"default_branch": "main"}}
+            )
+        if request.url.path == f"/repos/{REPO}/git/ref/heads/main":
+            return httpx.Response(200, json={"object": {"sha": "parent-head"}})
+        if request.method == "PATCH":
+            patched.update(json.loads(request.content))
+            return httpx.Response(200, json={"object": {"sha": "parent-head"}})
         return httpx.Response(200, json={"full_name": FORK})
 
     client = HttpGitHubClient(
         token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
     )
     assert client.ensure_fork(REPO) == FORK
-    assert f"POST /repos/{FORK}/merge-upstream" in calls
+
+    # It must move the fork's own ref to the *parent's* head. `merge-upstream` cannot do this job
+    # (issue #29): it syncs against the network **source**, and a submitter's fork of an already-
+    # forked content repo is a fork of a fork, so it aimed at a third repository the branch is
+    # never cut from and had nothing to do.
+    assert f"PATCH /repos/{FORK}/git/refs/heads/main" in calls
+    assert not any("merge-upstream" in c for c in calls)
+    assert patched == {"sha": "parent-head", "force": False}
 
 
 def test_a_fork_that_cannot_fast_forward_still_submits():
     """A submitter's own commits on their default branch are theirs to keep. The sync is an
-    optimisation of the *next* step, not a precondition, so it must never fail the submission."""
+    optimisation of the *next* step, not a precondition, so it must never fail the submission.
+
+    `force: False` is what enforces that — GitHub refuses the non-fast-forward itself — so the
+    case to prove here is that its refusal is logged and swallowed, not raised."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path.endswith("/forks"):
             return httpx.Response(202, json={"full_name": FORK})
-        if request.url.path.endswith("/merge-upstream"):
-            return httpx.Response(409, json={"message": "merge conflict"})
+        if request.method == "PATCH":
+            return httpx.Response(422, json={"message": "Update is not a fast forward"})
+        if request.url.path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": "parent-head"}})
+        return httpx.Response(200, json={"full_name": FORK})
+
+    client = HttpGitHubClient(
+        token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    assert client.ensure_fork(REPO) == FORK  # no raise
+
+
+def test_a_sync_that_cannot_read_the_parent_still_submits():
+    """The read is as best-effort as the write. A malformed or refused answer from the parent
+    must degrade to "no sync" rather than take down a submission that would otherwise work."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/forks"):
+            return httpx.Response(202, json={"full_name": FORK})
+        if request.url.path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"unexpected": "shape"})
         return httpx.Response(200, json={"full_name": FORK})
 
     client = HttpGitHubClient(

@@ -402,9 +402,10 @@ class FakeGitHubClient(GitHubClient):
         fork = f"{self.login}/{repo.split('/', 1)[1]}"
         if (repo, fork) not in self.forks_created:
             self.forks_created.append((repo, fork))
-        # Stands in for `merge-upstream`: the fork is brought level with its parent's default
-        # branch on every call, which is what the real client now does and what makes a base
-        # commit the fork's own rather than merely visible through the network.
+        # Stands in for the ref fast-forward: the fork is brought level with its parent's default
+        # branch on every call, which is what the real client does and what makes a base commit
+        # the fork's own rather than merely visible through the network. Note *parent*, not the
+        # network source — the distinction `merge-upstream` gets wrong here (issue #29).
         if (repo, "main") in self.branches:
             self.branches[(fork, "main")] = self.branches[(repo, "main")]
         # A fork shares its parent's object database, so every commit reachable from the parent
@@ -762,13 +763,18 @@ class HttpGitHubClient(GitHubClient):
         """
         resp = self._client.post(f"/repos/{repo}/forks")
         self._raise_for(resp, f"ensure_fork({repo})")
-        full_name = resp.json().get("full_name")
+        payload = resp.json()
+        full_name = payload.get("full_name")
         if not full_name:
             raise GitHubError(f"ensure_fork({repo}) returned no full_name")
+        # The branch to bring level is the one the submission will be cut from, which is the
+        # *parent's* default — read off the response rather than assumed to be `main`, since a
+        # content repository is free to call it something else.
+        branch = (payload.get("parent") or {}).get("default_branch") or "main"
         for _ in range(_FORK_READY_ATTEMPTS):
             probe = self._client.get(f"/repos/{full_name}")
             if probe.status_code == 200:
-                self._sync_fork(full_name)
+                self._sync_fork(full_name, repo, branch)
                 return full_name
             time.sleep(_FORK_READY_DELAY_SECONDS)
         raise GitHubError(
@@ -794,8 +800,8 @@ class HttpGitHubClient(GitHubClient):
         except Exception:  # noqa: BLE001 - never mask the failure being classified
             return False
 
-    def _sync_fork(self, fork: str, branch: str = "main") -> None:
-        """Fast-forward the fork's default branch to its parent's, best effort.
+    def _sync_fork(self, fork: str, parent: str, branch: str) -> None:
+        """Fast-forward ``fork``'s ``branch`` to ``parent``'s head, best effort.
 
         A fork only holds the objects its parent had **at the moment it was created**. Everything
         pushed upstream afterwards is visible through the shared network for reads, but is not the
@@ -814,14 +820,41 @@ class HttpGitHubClient(GitHubClient):
         Best effort on purpose. A fork with local commits on its default branch cannot
         fast-forward, and that is the submitter's repository to keep as they like; the submission
         should proceed and fail later with something specific if it is going to fail at all.
+
+        **Not ``merge-upstream``, deliberately** (issue #29). That endpoint syncs against the
+        *network source*, not the immediate parent, which it names back in ``base_branch``: asking
+        it to sync ``mmarvinm2/sandbox-wp-db`` answers ``base_branch: wikipathways:main``, because
+        the deployment's target is itself a fork and a submitter's fork is therefore a fork of a
+        fork. Measured on the live API: that fork is one commit behind its parent — a clean
+        fast-forward — and simultaneously 24 commits *ahead* of the source, so there was never a
+        sync for ``merge-upstream`` to do. It could not bring the fork level with the repository
+        the branch is actually cut from, whatever it returned.
+
+        Updating the ref directly names the parent explicitly, so topology stops mattering.
+        ``force`` stays false: GitHub then refuses a non-fast-forward itself, which is exactly the
+        "their commits are theirs to keep" rule, enforced server-side rather than guessed at here.
         """
-        resp = self._client.post(f"/repos/{fork}/merge-upstream", json={"branch": branch})
+        log = logging.getLogger("wpsubmit.github")
+        try:
+            head = self.get_branch_sha(parent, branch)
+        except Exception as exc:  # noqa: BLE001 - a best-effort sync must never fail a submission
+            log.info("could not read %s@%s to sync %s (%s); continuing", parent, branch, fork, exc)
+            return
+        resp = self._client.patch(
+            f"/repos/{fork}/git/refs/heads/{branch}", json={"sha": head, "force": False}
+        )
         if resp.is_error:
-            logging.getLogger("wpsubmit.github").info(
-                "could not fast-forward %s@%s to its upstream (%s); continuing",
+            # The body, not just the status. Logging only the code is what left the 422 in issue
+            # #29 unexplained for a day — the same evidence-dropping that `create_branch` below
+            # was fixed for hours earlier, still present in its sibling.
+            log.info(
+                "could not fast-forward %s@%s to %s@%s (%s %s); continuing",
                 fork,
                 branch,
+                parent,
+                head[:7],
                 resp.status_code,
+                resp.text.strip(),
             )
 
     def _token_scopes(self) -> str:
