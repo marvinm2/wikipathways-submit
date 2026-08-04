@@ -875,7 +875,25 @@ class HttpGitHubClient(GitHubClient):
         )
         self._raise_for(resp, "open_pull_request")
         data = resp.json()
-        return PullRequest(number=data["number"], html_url=data["html_url"], head_branch=head)
+        # Read both off GitHub's answer rather than echoing the request. ``head`` is what was
+        # *asked for*, and for a cross-repository pull request that is ``owner:branch`` — so
+        # echoing it stored an owner-prefixed string in ``head_branch`` and left ``head_repo``
+        # permanently None, which is what happened to the first two fork submissions this app
+        # ever opened (PRs #23/#24, 2026-08-04). ``head_repo`` being None means every later
+        # branch-side lookup goes to the base repo, where a fork's branch does not exist, and
+        # **revise raises NoPendingSubmission** — a curator requesting changes leaves the
+        # submitter unable to answer, which is the loop this app exists to provide.
+        #
+        # ``FakeGitHubClient`` parsed both correctly all along, so the whole suite agreed while
+        # production did not. Fifth instance of that pattern here; the MockTransport test beside
+        # this one is the shape that catches it.
+        head_data = data.get("head") or {}
+        return PullRequest(
+            number=data["number"],
+            html_url=data["html_url"],
+            head_branch=head_data.get("ref") or head.rpartition(":")[2],
+            head_repo=_head_repo_of(data, repo),
+        )
 
     def create_issue_comment(self, repo: str, issue_number: int, body: str) -> None:
         resp = self._client.post(

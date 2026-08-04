@@ -377,3 +377,68 @@ def test_configuring_logging_twice_does_not_stack_handlers():
     _configure_logging(settings)
     _configure_logging(settings)
     assert len(_logging.getLogger("wpsubmit").handlers) == before
+
+
+# ---- what the fake could not catch ------------------------------------------------------------
+
+
+def test_open_pull_request_reads_the_head_off_githubs_answer_not_the_request():
+    """Regression for the first two fork submissions this app ever opened (PRs #23/#24).
+
+    `open_pull_request` echoed the `head` it was *asked for* and never parsed `head_repo`, so a
+    cross-repository pull request was recorded as if its branch were on the base repo. Every later
+    branch-side lookup then goes to the wrong repository and **revise raises NoPendingSubmission**
+    — a curator requesting changes leaves the submitter with no way to answer.
+
+    `FakeGitHubClient` parsed both correctly, which is exactly why the whole suite agreed while
+    production did not. The only thing that catches this is asserting against a real-shaped API
+    response.
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            201,
+            json={
+                "number": 23,
+                "html_url": "https://github.com/marvinm2/sandbox-wp-db/pull/23",
+                # GitHub answers with the branch alone in `head.ref`, and names the repository
+                # separately — it does not echo the `owner:branch` string it was sent.
+                "head": {
+                    "ref": "WP0001_MadhushriMSV_20260804-072022",
+                    "repo": {"full_name": "MadhushriMSV/sandbox-wp-db"},
+                },
+            },
+        )
+
+    client = HttpGitHubClient(
+        token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    pr = client.open_pull_request(
+        "marvinm2/sandbox-wp-db",
+        head="MadhushriMSV:WP0001_MadhushriMSV_20260804-072022",
+        base="main",
+        title="t",
+        body="b",
+    )
+    assert pr.head_repo == "MadhushriMSV/sandbox-wp-db"
+    # The branch alone, with no owner prefix: it is used as a ref against the head repo.
+    assert pr.head_branch == "WP0001_MadhushriMSV_20260804-072022"
+
+
+def test_open_pull_request_leaves_head_repo_none_for_a_same_repo_pull_request():
+    """None means "the content repo", which is what every non-fork submission must keep."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            201,
+            json={
+                "number": 9,
+                "html_url": "https://github.com/wikipathways/sandbox-wp-db/pull/9",
+                "head": {"ref": "submit/WP5637", "repo": {"full_name": REPO}},
+            },
+        )
+
+    client = HttpGitHubClient(
+        token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    pr = client.open_pull_request(REPO, head="submit/WP5637", base="main", title="t", body="b")
+    assert pr.head_repo is None
+    assert pr.head_branch == "submit/WP5637"
