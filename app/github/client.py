@@ -803,8 +803,13 @@ class HttpGitHubClient(GitHubClient):
         # unless the repository is named — which it was not, so the only report of this failure
         # reaching a human read `create_branch(update/WP5427) failed: 404` and did not say *where*.
         if resp.status_code in (403, 404):
+            # GitHub's own message included, not just the status. Dropping it was a mistake worth
+            # naming: the first report of this failure carried the body because it came through
+            # `_raise_for`, and the "better" error that replaced it kept the repository and the
+            # scopes and threw away the one field that says *what GitHub objected to* — which cost
+            # an hour of theorising against a 404 that could have been read directly.
             raise WriteDenied(
-                f"create_branch({new_branch}) on {repo}: {resp.status_code} "
+                f"create_branch({new_branch}) on {repo}: {resp.status_code} {resp.text.strip()} "
                 f"[token scopes: {self._token_scopes()}] — the acting token cannot write there. "
                 f"On a submitter's own fork this usually means their GitHub authorisation has "
                 f"lapsed or was granted a narrower scope than the app asks for."

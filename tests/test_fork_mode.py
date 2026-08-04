@@ -580,3 +580,27 @@ def test_the_scope_probe_never_replaces_the_error_it_is_describing():
         client.create_branch(FORK, "b", "sha1")
     assert "token scopes: unknown" in str(exc.value)
     assert FORK in str(exc.value)
+
+
+def test_a_denied_write_quotes_what_github_actually_said():
+    """The status code alone is not enough, and finding that out cost an hour.
+
+    The first report of this failure carried GitHub's body because it came through `_raise_for`.
+    The "better" error that replaced it kept the repository and added the token scopes — and
+    dropped the one field saying what GitHub objected to, which left a bare 404 to theorise
+    against. An error that removes evidence is worse than the one it replaced.
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/user":
+            return httpx.Response(200, json={}, headers={"x-oauth-scopes": "public_repo"})
+        return httpx.Response(404, json={"message": "Not Found", "status": "404"})
+
+    client = HttpGitHubClient(
+        token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    with pytest.raises(WriteDenied) as exc:
+        client.create_branch(FORK, "update/WP5427", "sha1")
+    text = str(exc.value)
+    assert "Not Found" in text          # what GitHub said
+    assert FORK in text                 # where
+    assert "public_repo" in text        # with what
