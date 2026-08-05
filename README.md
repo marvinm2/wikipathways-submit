@@ -40,6 +40,63 @@ altitude problem for both roles.
 - **Curate** (whitelisted ~20 curators) — dashboard with before/after render, checklist, and
   one-click approve-that-merges.
 
+## How information moves
+
+Every message exchanged during one submission, including who is notified and by what. Two things
+are easy to get wrong from prose alone and are worth reading off the diagram: the branch and pull
+request are opened with the **submitter's own token**, so the contribution is genuinely theirs;
+and the mirror comment is **edited in place** after its first post, which is why it is not the
+thing that notifies anyone.
+
+```mermaid
+sequenceDiagram
+    accTitle: Information Paths Through One Submission
+    accDescr: Messages exchanged between a submitter, the portal, the pull request, the content repository's workflows and a curator, from upload through to publication, showing which steps notify the submitter.
+
+    participant S as Submitter
+    participant P as Portal
+    participant G as Pull request
+    participant W as Repository workflows
+    participant C as Curator
+
+    S->>P: Sign in with GitHub, upload GPML
+    P-->>S: Quality report, before any pull request exists
+
+    Note over P,G: Opened with the submitter's own token,<br/>so the contribution is attributed to them.
+    P->>G: Fork, branch, commit, open pull request
+    P->>G: Acknowledgement naming the submitter
+    G-->>S: Email, as pull request author and by mention
+
+    G->>W: pull_request_target
+    W-->>G: Validation, metadata, testing verdicts, description
+    P->>G: Mirror comment with checklist and measurements
+    Note over P,G: Posted by the bot, then edited in place.<br/>Edits notify nobody, which is deliberate.
+
+    G-->>P: Repository verdicts, read back off a marker comment
+    C->>P: Reads the queue, before/after preview and checklist
+
+    alt Changes requested
+        C->>P: Request changes, with a note
+        P->>G: New comment naming the submitter and the curator
+        G-->>S: Email
+        S->>P: Upload a corrected file
+        P->>G: Second commit on the same pull request
+    else Approved
+        C->>P: Approve
+        Note over P,G: Applied by the bot, never a curator's<br/>personal token.
+        P->>G: accepted label
+        G->>W: Publish workflow
+        W-->>G: WPID and publish marker, pull request closed
+        G->>P: Webhook, pull request closed
+        P-->>C: Review settled, check-out lock released
+        P-->>S: Final state visible in the portal
+    end
+```
+
+Two identities act on GitHub, deliberately. The **submitter's OAuth token** pushes the branch and
+opens the pull request, so authorship is real. The **GitHub App** posts comments, applies the
+label and receives webhooks, because those must not be attributed to a person.
+
 ## Boundary
 
 This repo holds the app, dashboard, WPID/lock registry, GitHub App, and deployment. The only
