@@ -100,6 +100,36 @@ class BranchAlreadyExists(GitHubError):
     """The branch to be created already exists (e.g. a resubmission collided)."""
 
 
+class CredentialsRejected(GitHubError):
+    """GitHub refused the token itself — 401, not a permission or a missing object.
+
+    For this app's user identity this means exactly one thing: **the authorisation is gone.**
+    The user-facing credential is an OAuth App token, and those do not expire on a timer —
+    expiring user tokens with refresh tokens are a *GitHub App* feature, and a GitHub App user
+    token carries no scopes at all, whereas these report ``public_repo, read:user``. So the ways
+    one dies are all revocations: the user revoked the app, GitHub revoked it after seeing the
+    token in public, an admin revoked it, or it went a year unused.
+
+    None of those is a server fault, which is why the write paths map it to **401** rather than
+    the 502 every other ``GitHubError`` gets: telling a submitter the server is broken when the
+    fix is "sign in again" sends them to the wrong person. Issue #28 filed this as a token-refresh
+    problem; refreshing is not available for an OAuth App, and revocation is all that remains.
+
+    It stays a ``GitHubError`` subclass on purpose. Roughly twenty best-effort call sites swallow
+    ``GitHubError`` so a cosmetic action — a mirror comment, a reconcile — never fails the thing
+    it decorates, and those should go on swallowing this too. Breaking the inheritance would turn
+    every one of them into a login prompt.
+
+    ``identity`` says **whose** credential was refused, because the answers differ completely: a
+    submitter's OAuth token means "sign in again", while the bot's App installation token means
+    the deployment is misconfigured and no amount of signing in will help.
+    """
+
+    def __init__(self, message: str, *, identity: str = "user") -> None:
+        super().__init__(message)
+        self.identity = identity
+
+
 class WriteDenied(GitHubError):
     """The acting token may not write where it was asked to.
 
@@ -107,10 +137,14 @@ class WriteDenied(GitHubError):
     so a caller catching this knows nothing has been created yet and may safely retry under a
     different identity. That is what makes the bot fallback sound here and unsound later on.
 
-    Its own case: a submitter whose GitHub authorisation has lapsed since they signed in. The app
-    stores the OAuth token it was given and never refreshes it, so a long-lived session can hold a
-    token that still reads and no longer writes — which is exactly how this presented (2026-08-04:
-    reads fine, `POST /git/refs` 404, on a fork the submitter owns).
+    Its own case: a token that genuinely may read a repository and not write it.
+
+    **The 2026-08-04 incident this used to cite was not one.** "Reads fine, `POST /git/refs` 404,
+    on a fork the submitter owns" was issue #29 — the ref named a commit the fork did not hold —
+    and it was attributed here to an authorisation lapsing mid-session, which was wrong. A
+    genuinely dead token answers **401** to everything including reads, and that is
+    ``CredentialsRejected``, not this. Kept because the distinction is the useful part: this one
+    is worth a bot fallback, that one is worth asking the person to sign in again.
     """
 
 
@@ -130,9 +164,13 @@ class GitHubClient(ABC):
         response means ready.
 
         Raises ``GitHubError`` if no fork can be had. That is a routine outcome, not an
-        exceptional one — an organisation can forbid forking, and a token can be revoked between
-        login and submission — so the caller falls back to the bot identity rather than failing
-        the submission (``app.submit.targets``).
+        exceptional one — an organisation can forbid forking, GitHub can be down, a fork can still
+        be materialising — so the caller falls back to the bot identity rather than failing the
+        submission (``app.submit.targets``).
+
+        ``CredentialsRejected`` is the one exception and is **not** absorbed: a revoked
+        authorisation is permanent, so falling back would reattribute that person's every future
+        submission to the bot without ever telling them why (issue #28).
         """
 
     @abstractmethod
@@ -336,7 +374,18 @@ class FakeGitHubClient(GitHubClient):
         login: str = "submitter",
         deny_writes_to: set[str] | None = None,
         fork_can_sync: bool = True,
+        reject_credentials: bool = False,
+        identity: str = "user",
     ) -> None:
+        #: Models a revoked authorisation: GitHub answers 401 to *everything*, reads included,
+        #: which is what separates it from ``deny_writes_to`` (a token that reads and cannot
+        #: write). The distinction matters because only one of the two is fixed by signing in
+        #: again, and the app has to tell the submitter which (issue #28).
+        self.reject_credentials = reject_credentials
+        #: "user" or "bot", mirroring ``HttpGitHubClient.identity``. Without it this fake reports
+        #: every rejection as the user's even when standing in for the bot, and a test would then
+        #: watch a deployment fault be dressed up as a login prompt and call it a pass.
+        self.identity = identity
         #: Who this client is acting as, which is what ``ensure_fork`` names the fork after.
         self.login = login
         #: Whether ``ensure_fork`` manages to bring the fork level with its parent. False models
@@ -402,6 +451,10 @@ class FakeGitHubClient(GitHubClient):
         self._next_run = 1000
 
     def _maybe_fail(self, op: str) -> None:
+        if self.reject_credentials:
+            raise CredentialsRejected(
+                f'{op} failed: 401 {{"message":"Bad credentials"}}', identity=self.identity
+            )
         if op in self.fail_on:
             raise GitHubError(f"simulated failure in {op}")
 
@@ -753,6 +806,9 @@ class HttpGitHubClient(GitHubClient):
     token: str
     base_url: str = _GITHUB_API
     transport: httpx.BaseTransport | None = None  # injection seam for tests
+    #: "user" or "bot" — only used to say whose credential was refused on a 401, because the
+    #: remedies have nothing in common (sign in again vs fix the App configuration).
+    identity: str = "user"
     _client: httpx.Client = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -768,6 +824,14 @@ class HttpGitHubClient(GitHubClient):
         )
 
     def _raise_for(self, resp: httpx.Response, what: str) -> None:
+        # 401 is the token being rejected outright, which is a revoked authorisation rather than a
+        # server fault — separated here so it can reach the submitter as "sign in again" instead
+        # of a 502 (issue #28). Checked before `is_error` so it cannot be swallowed by the general
+        # case, and it carries GitHub's body like every other failure here does.
+        if resp.status_code == 401:
+            raise CredentialsRejected(
+                f"{what} failed: 401 {resp.text.strip()}", identity=self.identity
+            )
         if resp.is_error:
             raise GitHubError(f"{what} failed: {resp.status_code} {resp.text}")
 

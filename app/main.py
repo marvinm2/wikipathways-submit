@@ -41,7 +41,13 @@ from app.auth import GitHubApp, GithubOAuth, OAuthError, TokenCipher, TokenCiphe
 from app.config import Settings
 from app.curators import make_curator_registry
 from app.db import make_engine, make_session_factory
-from app.github import GitHubClient, GitHubError, HttpGitHubClient, WriteDenied
+from app.github import (
+    CredentialsRejected,
+    GitHubClient,
+    GitHubError,
+    HttpGitHubClient,
+    WriteDenied,
+)
 from app.locks import LockUnavailable, PathwayLockRegistry
 from app.models import Base, ReviewStatus
 from app.pipeline import DraftsReader
@@ -233,7 +239,7 @@ def get_bot_optional(request: Request) -> GitHubClient | None:
     bot_app: GitHubApp | None = request.app.state.bot_app
     if bot_app is None:
         return None
-    return HttpGitHubClient(bot_app.installation_token())
+    return HttpGitHubClient(bot_app.installation_token(), identity="bot")
 
 
 def get_bot_client(request: Request) -> GitHubClient:
@@ -431,7 +437,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         )
 
         def bot_provider() -> GitHubClient | None:
-            return HttpGitHubClient(bot_app.installation_token()) if bot_app else None
+            if bot_app is None:
+                return None
+            return HttpGitHubClient(bot_app.installation_token(), identity="bot")
 
         # Server-side reads that happen outside a request — the curator team lookup and the
         # open-PR scan behind the pathway lock — go through this rather than through a FastAPI
@@ -612,6 +620,56 @@ def build_app(settings: Settings | None = None) -> FastAPI:
         StaticFiles(directory=str(_ROOT / "static"), check_dir=False),
         name="static",
     )
+
+    @app.exception_handler(CredentialsRejected)
+    async def _credentials_rejected(request: Request, exc: CredentialsRejected) -> JSONResponse:
+        """A revoked authorisation is the submitter's to fix, so say so and clear the session.
+
+        Registered once rather than caught in each route: every write path has its own
+        ``except GitHubError -> 502``, and a revoked token satisfies all of them. Adding a
+        sibling clause to eight handlers would leave the ninth wrong. This is the one place the
+        distinction is made, and it is made *before* those clauses see it because a handler for a
+        specific type wins over the generic mapping.
+
+        The session is cleared so the next request re-authenticates instead of retrying a token
+        GitHub has already rejected — otherwise a submitter sees the same failure until the
+        cookie ages out, with nothing telling them to sign in.
+
+        Deliberately **not** 502: it was one, which is how issue #28 came to be filed as a
+        token-refresh bug. There is nothing to refresh — an OAuth App token has no expiry and no
+        refresh token — so the honest answer to a 401 is to ask for a fresh authorisation.
+        """
+        log = logging.getLogger("wpsubmit.auth")
+        if getattr(exc, "identity", "user") == "bot":
+            # The App's installation token was refused. Nothing the caller did, and signing in
+            # would not touch it — the private key, the App id or the installation is wrong.
+            log.error("the GitHub App's own credentials were rejected (%s)", exc)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": (
+                        "The app's own GitHub credentials were rejected, so this action cannot "
+                        "run. This is a server configuration problem, not something you can fix "
+                        "by signing in. Please report it."
+                    )
+                },
+            )
+        log.info(
+            "authorisation rejected for %s (%s); cleared the session",
+            request.session.get("gh_login") or "an anonymous caller",
+            exc,
+        )
+        request.session.clear()
+        return JSONResponse(
+            status_code=401,
+            content={
+                "detail": (
+                    "GitHub rejected your authorisation, which usually means it was revoked. "
+                    "Sign in again at /auth/login. If writes still fail afterwards, revoke the "
+                    "app at github.com/settings/applications and authorise it fresh."
+                )
+            },
+        )
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -1092,6 +1150,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
                 )
         except InvalidGpml as exc:
             raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc
+        except CredentialsRejected:
+            # 401, not 502: handled app-wide as 'sign in again' (issue #28).
+            raise
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         after_meta = parse_curation_metadata(content)
@@ -1209,6 +1270,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             ) from exc
         except PathwayNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except CredentialsRejected:
+            # 401, not 502: handled app-wide as 'sign in again' (issue #28).
+            raise
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         # Fetch the base version once — it is both the render 'before' and the baseline the
@@ -1308,6 +1372,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail={"errors": exc.reasons}) from exc
         except NoPendingSubmission as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except CredentialsRejected:
+            # 401, not 502: handled app-wide as 'sign in again' (issue #28).
+            raise
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         # Re-rendered before the review is re-opened, so the mirror comment ``revise`` posts
@@ -1348,6 +1415,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             content = github.get_file_content(
                 settings.content_repo, settings.default_branch, path
             )
+        except CredentialsRejected:
+            # 401, not 502: handled app-wide as 'sign in again' (issue #28).
+            raise
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         if content is not None:
@@ -1466,6 +1536,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PreviewNotReady as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except CredentialsRejected:
+            # 401, not 502: handled app-wide as 'sign in again' (issue #28).
+            raise
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return _detail(r)
@@ -1488,6 +1561,9 @@ def build_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ReviewNotActionable as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except CredentialsRejected:
+            # 401, not 502: handled app-wide as 'sign in again' (issue #28).
+            raise
         except GitHubError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return _detail(r)

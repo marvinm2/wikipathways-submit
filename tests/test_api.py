@@ -8,7 +8,12 @@ from fastapi.testclient import TestClient
 
 from app.auth import GithubOAuth
 from app.config import Settings
-from app.github import FakeGitHubClient
+from app.github import (
+    CredentialsRejected,
+    FakeGitHubClient,
+    GitHubError,
+    HttpGitHubClient,
+)
 from app.main import (
     build_app,
     get_bot_client,
@@ -1014,3 +1019,114 @@ def test_robots_txt_keeps_crawlers_off_the_oauth_and_preview_routes(client):
     body = r.text
     for path in ("/auth", "/previews", "/dashboard", "/api"):
         assert f"Disallow: {path}" in body
+
+
+# -- a revoked authorisation (issue #28) ---------------------------------------------------
+
+
+def test_a_revoked_authorisation_is_a_401_not_a_502(tmp_path):
+    """The submitter can fix this and the server cannot, so it must not read as a server fault.
+
+    Issue #28 filed this as tokens needing refresh. They cannot be refreshed: the user identity is
+    an **OAuth App** token, and expiring user tokens with refresh tokens are a GitHub *App*
+    feature (a GitHub App user token carries no scopes; these report `public_repo, read:user`).
+    An OAuth App token has no expiry, so every way one dies is a revocation — and the only useful
+    response to that is to ask for a fresh authorisation.
+    """
+    app, _current = _authed_app(tmp_path, fake=FakeGitHubClient(reject_credentials=True))
+    with TestClient(app) as c:
+        resp = c.post(
+            "/api/submit",
+            files={"file": ("upload.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        )
+
+    assert resp.status_code == 401, "a revoked token used to surface as 502 'GitHub call failed'"
+    detail = resp.json()["detail"]
+    assert "revoked" in detail
+    assert "/auth/login" in detail, "must say what to do, not just what went wrong"
+
+
+def test_a_revoked_authorisation_clears_the_session(tmp_path):
+    """Otherwise the submitter retries the same dead token until the cookie ages out, with
+    nothing anywhere telling them to sign in again."""
+    settings = _settings(database_url=f"sqlite:///{tmp_path / 'reg.db'}")
+    app = build_app(settings)
+    app.dependency_overrides[get_github_client] = lambda: FakeGitHubClient(
+        reject_credentials=True
+    )
+    app.dependency_overrides[get_current_user] = lambda: "alice"
+    with TestClient(app) as c:
+        c.cookies.set("session", "x")  # any session; the handler must empty it
+        before = c.post(
+            "/api/submit",
+            files={"file": ("upload.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        )
+        assert before.status_code == 401
+        # The session cookie is cleared or emptied, so /auth/me no longer claims a login.
+        me = c.get("/auth/me")
+    assert me.json().get("login") is None
+
+
+def test_the_real_client_turns_a_github_401_into_credentials_rejected():
+    """Against a real-shaped response, not the fake.
+
+    Every previous mistake of this kind here was one the fake agreed with — `open_pull_request`
+    echoing its request, `create_branch` treating a duplicate ref as a refusal. A MockTransport
+    test is the only kind that catches the class.
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"message": "Bad credentials"})
+
+    client = HttpGitHubClient(
+        token="revoked", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    with pytest.raises(CredentialsRejected) as exc:
+        client.get_branch_sha("owner/repo", "main")
+    # Carries GitHub's own words, per the standing rule that an error never drops its evidence.
+    assert "Bad credentials" in str(exc.value)
+
+
+def test_a_403_is_still_a_plain_github_error():
+    """Only 401 means the credential itself is rejected. A 403 is a permission or a rate limit —
+    signing in again does not help, so it must not be relabelled as if it would."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"message": "rate limit exceeded"})
+
+    client = HttpGitHubClient(
+        token="t", transport=httpx.MockTransport(handler), base_url="https://api.github.test"
+    )
+    with pytest.raises(GitHubError) as exc:
+        client.get_branch_sha("owner/repo", "main")
+    assert not isinstance(exc.value, CredentialsRejected)
+
+
+def test_the_bots_own_rejected_credentials_are_a_503_not_a_login_prompt(tmp_path):
+    """Telling a curator to sign in again when it is the *App's* key that is wrong sends them off
+    to do something that cannot possibly help, and hides a deployment fault behind a user error.
+
+    The approval has to be driven all the way to a legitimately mergeable state first, because
+    the gate refuses earlier for its own reasons (#27) and a 409 would pass a naive assertion
+    that merely checked "not 401"."""
+    app, current = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()["pr_number"]
+        current["user"] = "curator"
+        for item in c.get(f"/api/reviews/{pr}").json()["checklist"]:
+            if item["required"]:
+                c.post(f"/api/reviews/{pr}/checklist", data={"key": item["key"], "state": "pass"})
+        app.state._fake.previews[pr] = {"status": "ready"}
+        # Only now, with approval genuinely available, break the bot.
+        bot = FakeGitHubClient(
+            reject_credentials=True, login="wikipathways-bot", identity="bot"
+        )
+        app.dependency_overrides[get_bot_client] = lambda: bot
+        resp = c.post(f"/api/reviews/{pr}/approve")
+
+    assert resp.status_code == 503, "not 401 (would misdirect) and not 502 (hides the cause)"
+    detail = resp.json()["detail"]
+    assert "server configuration" in detail
+    assert "/auth/login" not in detail, "must not send them to sign in; it would not help"

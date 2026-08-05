@@ -24,7 +24,13 @@ import httpx
 import pytest
 
 from app.config import Settings
-from app.github import FakeGitHubClient, GitHubError, HttpGitHubClient, WriteDenied
+from app.github import (
+    CredentialsRejected,
+    FakeGitHubClient,
+    GitHubError,
+    HttpGitHubClient,
+    WriteDenied,
+)
 from app.locks import PathwayLockRegistry
 from app.submit import SubmissionService
 from app.submit.service import SubmissionMode
@@ -816,3 +822,35 @@ def test_an_inherited_update_branch_is_a_collision_not_a_refusal(session_factory
     assert result.branch != "update/WP554"
     assert (FORK, result.branch) in user.branches
     assert result.head_repo == FORK
+
+
+def test_a_revoked_authorisation_does_not_fall_back_to_the_bot():
+    """Issue #28's real complaint, and the one part of it that was a genuine defect.
+
+    Every other `ensure_fork` failure is transient or environmental, so a bot-authored pull
+    request beats losing the upload. A revoked authorisation is neither: the fallback would
+    reattribute that person's every future submission to the bot, silently and forever, with
+    nothing anywhere telling them to sign in — which is exactly what fork mode exists to prevent.
+    """
+    user = _user_client(reject_credentials=True)
+    with pytest.raises(CredentialsRejected):
+        resolve_write_target(
+            identity="fork",
+            user_client=user,
+            bot_client=FakeGitHubClient(login="wikipathways-bot"),
+            content_repo=REPO,
+            submitter="alice",
+        )
+
+
+def test_an_ordinary_fork_failure_still_falls_back_to_the_bot():
+    """The contrast that makes the case above a decision rather than an accident."""
+    user = _user_client(fail_on={"ensure_fork"})
+    target = resolve_write_target(
+        identity="fork",
+        user_client=user,
+        bot_client=FakeGitHubClient(login="wikipathways-bot"),
+        content_repo=REPO,
+        submitter="alice",
+    )
+    assert target.identity == "bot"

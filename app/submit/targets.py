@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from app.github import GitHubClient
+from app.github import CredentialsRejected, GitHubClient
 
 logger = logging.getLogger("wpsubmit.submit.targets")
 
@@ -112,10 +112,15 @@ def resolve_write_target(
     """Pick the write target for one submission, falling back when fork mode cannot be had.
 
     **The fallback is deliberately placed before the first write, and nowhere else.** Everything
-    that realistically stops fork mode happens here — an organisation that forbids forking, a
-    token revoked between login and submission, a fork that has not finished being created,
-    GitHub being down. Catching those costs nothing, because not one byte has been written yet,
-    and the submission proceeds as a bot push exactly as it does today.
+    that realistically stops fork mode happens here — an organisation that forbids forking, a fork
+    that has not finished being created, GitHub being down. Catching those costs nothing, because
+    not one byte has been written yet, and the submission proceeds as a bot push exactly as it
+    does today.
+
+    **A revoked authorisation is the exception** and is re-raised rather than absorbed. This
+    docstring used to list it among the things the fallback covers, which was the wrong call: it
+    is not transient, so the fallback would keep reattributing that person's every submission to
+    the bot, indefinitely and silently, with nothing ever telling them to sign in again (#28).
 
     Retrying *after* a write has begun is deliberately not done. A branch half-created on the
     fork and then re-attempted against the content repo is a different repository holding a
@@ -140,6 +145,14 @@ def resolve_write_target(
             return same_repo_target(user_client, content_repo, identity="user")
         try:
             fork = user_client.ensure_fork(content_repo)
+        except CredentialsRejected:
+            # Not a reason to fall back. Every other failure here is transient or environmental,
+            # and a bot-authored pull request is a fair trade for not losing the upload — but a
+            # revoked authorisation is neither, and quietly reattributing someone's contribution
+            # to the bot is precisely what fork mode exists to stop (issue #22). It surfaces as a
+            # 401 telling them to sign in again, which is a thing they can actually act on, and
+            # then their next attempt is theirs (issue #28).
+            raise
         except Exception as exc:  # noqa: BLE001 - any failure here means "use the bot instead"
             if bot_client is None:
                 # Nothing to fall back to. Pushing to the content repo as the submitter is what
