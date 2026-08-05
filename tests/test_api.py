@@ -21,6 +21,7 @@ from app.main import (
     get_current_user,
     get_github_client,
 )
+from app.review.service import MIRROR_MARKER, WELCOME_MARKER
 
 GOOD_GPML = (
     b'<Pathway xmlns="http://pathvisio.org/GPML/2013a" Name="Mitophagy" '
@@ -359,7 +360,7 @@ def test_submit_posts_mirror_comment(tmp_path):
     fake = app.state._fake
     repo = app.state.settings.content_repo
     assert (repo, pr) in fake.comments  # the bot mirrored the new submission
-    assert "curation" in next(iter(fake.comments[(repo, pr)].values())).lower()
+    assert "curation" in fake.comments[(repo, pr)][MIRROR_MARKER].lower()
 
 
 def test_approve_merges_via_bot_and_updates_mirror(tmp_path):
@@ -382,7 +383,7 @@ def test_approve_merges_via_bot_and_updates_mirror(tmp_path):
     repo = app.state.settings.content_repo
     assert pr in fake.merged  # merged through the bot identity
     # The mirror comment (single upserted comment) now reflects the merge.
-    mirror = next(iter(fake.comments[(repo, pr)].values()))
+    mirror = fake.comments[(repo, pr)][MIRROR_MARKER]
     assert "**merged**." in mirror and "**Approved and merged by @curator.**" in mirror
 
 
@@ -1130,3 +1131,81 @@ def test_the_bots_own_rejected_credentials_are_a_503_not_a_login_prompt(tmp_path
     detail = resp.json()["detail"]
     assert "server configuration" in detail
     assert "/auth/login" not in detail, "must not send them to sign in; it would not help"
+
+
+# -- telling the submitter something happened -----------------------------------------------
+
+
+def test_a_submission_gets_a_thank_you_that_names_the_submitter(tmp_path):
+    """A first-time contributor otherwise watches an automated status table appear and cannot
+    tell whether a person is coming.
+
+    The `@` mention is the functional part, not politeness: it is what makes GitHub email them
+    in the modes where the pull request belongs to the bot and they are not its author.
+    """
+    app, current = _authed_app(tmp_path)
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()["pr_number"]
+
+    fake = app.state._fake
+    repo = app.state.settings.content_repo
+    welcome = fake.comments[(repo, pr)][WELCOME_MARKER]
+    assert "@bob" in welcome
+    assert "curator will review it" in welcome
+    # It is a separate comment from the mirror, because the mirror is edited on every status
+    # change and editing notifies nobody.
+    assert MIRROR_MARKER in fake.comments[(repo, pr)]
+    assert welcome != fake.comments[(repo, pr)][MIRROR_MARKER]
+
+
+def test_the_thank_you_is_posted_once_not_once_per_upload(tmp_path):
+    """A re-upload must not re-thank them. Keyed by its own marker, so the second write edits
+    the first comment instead of adding another."""
+    app, current = _authed_app(tmp_path)
+    with TestClient(app) as c:
+        repo = app.state.settings.content_repo
+        current["user"] = "bob"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()["pr_number"]
+        before = len(app.state._fake.comments[(repo, pr)])
+        # Same pathway, uploaded again.
+        revised = c.post(f"/api/reviews/{pr}/revise",
+                         files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")})
+        assert revised.status_code == 201, revised.text
+
+    after = app.state._fake.comments[(repo, pr)]
+    assert len(after) == before, "a re-upload added another comment"
+    assert after[WELCOME_MARKER].count("Thanks for submitting") == 1
+
+
+def test_requesting_changes_names_the_submitter_so_it_reaches_them(tmp_path):
+    """It used to name only the curator. In fork mode the submitter is the pull request author
+    and would be notified anyway, but under `bot` and `user` identities the pull request is not
+    theirs and nothing would reach them at all."""
+    app, current = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()["pr_number"]
+        current["user"] = "curator"
+        asked_resp = c.post(
+            f"/api/reviews/{pr}/request-changes", data={"note": "Please annotate the nodes."}
+        )
+        assert asked_resp.status_code == 200, asked_resp.text
+        repo = app.state.settings.content_repo
+
+    fake = app.state._fake
+    bodies = fake.issue_comments[(repo, pr)]
+    asked = [b for b in bodies if "asked for changes" in b]
+    assert asked, "no change request comment was posted"
+    assert "@bob" in asked[0], "the submitter is not named, so GitHub may notify nobody"
+    assert "@curator" in asked[0]
+    assert "Please annotate the nodes." in asked[0]

@@ -17,6 +17,7 @@ from app.main import (
     get_github_client,
 )
 from app.models import Review, ReviewStatus
+from app.review.service import MIRROR_MARKER
 from tests.test_api import _login
 
 REPO = "wikipathways/sandbox-wp-db"
@@ -125,7 +126,7 @@ def test_mirror_comment_names_the_placeholder(pipeline_client):
     body = _submit(pipeline_client)
     fake = pipeline_client.app.state._fake
 
-    comment = next(iter(fake.comments[(REPO, body["pr_number"])].values()))
+    comment = fake.comments[(REPO, body["pr_number"])][MIRROR_MARKER]
     assert "WP0001 (unassigned)" in comment
 
 

@@ -41,6 +41,11 @@ logger = logging.getLogger("wpsubmit.review")
 #: Hidden token embedded in the mirror comment so we update the same one instead of spamming.
 MIRROR_MARKER = "<!-- wikipathways-submit:mirror -->"
 
+#: The one-time acknowledgement posted when a submission first arrives. Separate from the mirror
+#: on purpose: the mirror is *edited* on every status change, and editing a comment sends nobody a
+#: notification, so a message that has to actually reach the submitter cannot live in it.
+WELCOME_MARKER = "<!-- wikipathways-submit:welcome -->"
+
 #: The marker the target repo's publish workflow posts when it finishes (docs/sandbox-pipeline.md).
 #: A comment, not the PR description, because that repo's own pipeline rewrites the description
 #: wholesale and would erase anything written there.
@@ -119,6 +124,36 @@ _TERMINAL_FOR_MIRROR = (
     ReviewStatus.REJECTED,
     ReviewStatus.CLOSED,
 )
+
+
+def render_welcome_comment(review: Review, *, base_url: str = "") -> str:
+    """Thank the submitter and say what happens next, posted once when the pull request opens.
+
+    This is the app's only unprompted message to a submitter, and it exists because a first-time
+    contributor otherwise watches an automated status table appear and has no idea whether a person
+    is coming. It says the two things they cannot work out for themselves: that someone will look,
+    and that they do not need to do anything meanwhile.
+
+    Notification comes free and is the reason this is a comment rather than dashboard text. GitHub
+    subscribes a pull request's author to their own pull request, and in fork mode the author *is*
+    the submitter, so a new comment reaches them by email. The `@` mention covers the other modes,
+    where the pull request belongs to the bot and the submitter is not otherwise subscribed.
+    """
+    lines = [
+        WELCOME_MARKER,
+        f"Thanks for submitting this, @{review.submitter}.",
+        "",
+        "A curator will review it and reply here, so there is nothing further for you to do for "
+        "now. GitHub will email you when there is news, as long as you stay subscribed to this "
+        "pull request.",
+        "",
+        "If a curator asks for changes, upload the corrected file in the portal and it lands on "
+        "this same pull request. There is no need to open a new one.",
+    ]
+    if base_url:
+        where = f"{base_url.rstrip('/')}/reviews/{review.pr_number}"
+        lines += ["", f"You can follow the review at {where}."]
+    return "\n".join(lines)
 
 
 def render_mirror_comment(
@@ -414,6 +449,24 @@ class CurationService:
             except Exception:  # noqa: BLE001 - freeing disk must never fail a dashboard load
                 pass
 
+    def _maybe_welcome(self, review: Review) -> None:
+        """Best-effort acknowledgement, posted once per submission. Never fails the submission.
+
+        Upserted rather than created so a retry cannot post it twice: the first call creates the
+        comment, which is what notifies, and any later call quietly edits the same one.
+        """
+        if self._github is None:
+            return
+        try:
+            self._github.upsert_issue_comment(
+                self._repo,
+                review.pr_number,
+                render_welcome_comment(review, base_url=self._app_base_url),
+                marker=WELCOME_MARKER,
+            )
+        except (GitHubError, httpx.HTTPError):
+            pass
+
     def _maybe_mirror(self, review: Review) -> None:
         """Best-effort: sync the read-only PR mirror comment via the bot client.
 
@@ -499,6 +552,7 @@ class CurationService:
                 )
                 s.add(review)
                 s.commit()
+                self._maybe_welcome(review)
             else:
                 # A re-upload onto an existing pull request. The update flow reuses the branch
                 # and the PR, so this is the only place a revised *update* is seen — and without
@@ -677,7 +731,10 @@ class CurationService:
                 except (GitHubError, httpx.HTTPError):
                     pass
             if self._github is not None:
-                body = f"@{curator} asked for changes before this can be accepted."
+                body = (
+                    f"@{review.submitter} — @{curator} asked for changes before this can "
+                    f"be accepted."
+                )
                 if note.strip():
                     body += f"\n\n{note.strip()}"
                 body += (

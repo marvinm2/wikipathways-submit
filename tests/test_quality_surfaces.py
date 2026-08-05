@@ -17,7 +17,7 @@ from app.main import (
 )
 from app.preview.service import PreviewService
 from app.quality import inspect_gpml
-from app.review.service import render_mirror_comment
+from app.review.service import MIRROR_MARKER, render_mirror_comment
 from tests.test_quality_rules import GOOD, POOR
 
 
@@ -178,6 +178,6 @@ def test_the_mirror_carries_the_report_from_its_very_first_post(tmp_path):
     app.dependency_overrides[get_current_user] = lambda: "alice"
     with TestClient(app) as c:
         pr = c.post("/api/submit", files=_upload(POOR)).json()["pr_number"]
-    posted = list(fake.comments[(settings.content_repo, pr)].values())
-    assert posted, "no mirror comment was posted at all"
-    assert "What the portal measured" in posted[0]
+    posted = fake.comments[(settings.content_repo, pr)]
+    assert MIRROR_MARKER in posted, "no mirror comment was posted at all"
+    assert "What the portal measured" in posted[MIRROR_MARKER]
