@@ -397,6 +397,20 @@ The `synchronize` event that revision raised then ran workflow 1 **all ten jobs 
 > the fix and watching two tests fail, which is the only thing that makes a regression test worth
 > having: the reverted code passed the *previous* suite in full.
 >
+> **Proven live the same day — PR #35, and #29 is closed.** `mmarvinm2` updated WP5427: the pull
+> request is cross-repository and **authored by that account with no fallback**, the commit's
+> parent is `828ba1f` (the fork's own head, not `a4bc119`), the diff is **one file** despite the
+> fork being a commit behind, and workflow 1 went green on **all ten jobs** under a real
+> `pull_request_target` event. The fork was in exactly the state that produced the 404, so this is
+> a before-and-after on the defect rather than an argument from a different account. **The sync
+> still fails in this topology and no longer matters** — both log lines appear and the submission
+> succeeds, which is what demoting it to an optimisation was for. All three write paths —
+> submit, revise, update — are now proven from a contributor's fork.
+>
+> `mmarvinm2` was **never restricted**, contrary to what was written here yesterday. Every failing
+> probe had named `a4bc119`, the one object GitHub refuses, so none of them said anything about
+> the account.
+>
 > The reusable lesson is the shape of the list above: four consecutive explanations each fitted
 > every observation available when it was formed, and each died to one new measurement. The ones
 > that died fastest were the ones that named a *property of the actor* (this token, this account,
