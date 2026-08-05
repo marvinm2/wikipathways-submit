@@ -1030,6 +1030,7 @@ class CurationService:
                     f"PR #{pr_number} is {_plain(review.status)}; it cannot be rejected"
                 )
             wpid = review.wpid
+            submitter = review.submitter
             was_approved = review.status == ReviewStatus.APPROVED
 
         # Record the decision *before* touching GitHub. Removing the `accepted` label below
@@ -1044,7 +1045,10 @@ class CurationService:
             s.commit()
             self._free_preview(review.pr_number)
 
-        body = f"@{curator} rejected this submission."
+        # Names the submitter, not just the curator: a rejection is the message that most
+        # needs to reach them, and under the bot and user identities the pull request is
+        # not theirs, so nothing else would notify them (issue #28 reasoning).
+        body = f"@{submitter} — @{curator} rejected this submission."
         if note.strip():
             body += f"\n\n{note.strip()}"
         try:

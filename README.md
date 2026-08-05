@@ -42,28 +42,37 @@ altitude problem for both roles.
 
 ## How information moves
 
-Every message exchanged during one submission, including who is notified and by what. Two things
+Every message exchanged during one submission, including who is notified and by what. Three things
 are easy to get wrong from prose alone and are worth reading off the diagram: the branch and pull
-request are opened with the **submitter's own token**, so the contribution is genuinely theirs;
-and the mirror comment is **edited in place** after its first post, which is why it is not the
-thing that notifies anyone.
+request are opened with the **submitter's own token**, so the contribution is genuinely theirs; the
+mirror comment is **edited in place** after its first post, which is why it is not the thing that
+notifies anyone; and every fallback happens **before the first write**, so a submission never ends
+up half-made across two repositories.
 
 ```mermaid
 sequenceDiagram
     accTitle: Information Paths Through One Submission
-    accDescr: Messages exchanged between a submitter, the portal, the pull request, the content repository's workflows and a curator, from upload through to publication, showing which steps notify the submitter.
+    accDescr: Messages exchanged between a submitter, the portal, the pull request, the content repository's workflows and a curator, covering the fork fallback at submission time and all three review outcomes, and showing which steps notify the submitter.
 
-    participant S as Submitter
-    participant P as Portal
-    participant G as Pull request
-    participant W as Repository workflows
-    participant C as Curator
+    participant S as 👤 Submitter
+    participant P as 🖥️ Portal
+    participant G as 🌐 Pull request
+    participant W as ⚙️ Repository workflows
+    participant C as 👥 Curator
 
     S->>P: Sign in with GitHub, upload GPML
     P-->>S: Quality report, before any pull request exists
 
-    Note over P,G: Opened with the submitter's own token,<br/>so the contribution is attributed to them.
-    P->>G: Fork, branch, commit, open pull request
+    alt Submitter can write to their fork
+        Note over P,G: Opened with the submitter's own token,<br/>so the contribution is attributed to them.
+        P->>G: Fork, branch, commit, open pull request
+    else ⚠️ Fork write refused
+        Note over P,G: Falls back before the first write, so nothing<br/>is left half-made across two repositories.
+        P->>G: Bot opens the pull request instead
+    else 🔐 Authorisation revoked
+        P-->>S: Sign in again. No pull request is opened.
+    end
+
     P->>G: Acknowledgement naming the submitter
     G-->>S: Email, as pull request author and by mention
 
@@ -75,13 +84,20 @@ sequenceDiagram
     G-->>P: Repository verdicts, read back off a marker comment
     C->>P: Reads the queue, before/after preview and checklist
 
-    alt Changes requested
+    alt 🔄 Changes requested
         C->>P: Request changes, with a note
         P->>G: New comment naming the submitter and the curator
         G-->>S: Email
         S->>P: Upload a corrected file
         P->>G: Second commit on the same pull request
-    else Approved
+    else ❌ Rejected
+        C->>P: Reject, with a reason
+        P->>G: Comment naming the submitter and the curator
+        G-->>S: Email
+        P->>G: rejected label
+        G->>W: Rejection workflow deletes drafts, closes the pull request
+        P-->>P: WPID returned to the pool, check-out lock released
+    else ✅ Approved
         C->>P: Approve
         Note over P,G: Applied by the bot, never a curator's<br/>personal token.
         P->>G: accepted label
@@ -94,8 +110,9 @@ sequenceDiagram
 ```
 
 Two identities act on GitHub, deliberately. The **submitter's OAuth token** pushes the branch and
-opens the pull request, so authorship is real. The **GitHub App** posts comments, applies the
-label and receives webhooks, because those must not be attributed to a person.
+opens the pull request, so authorship is real. The **GitHub App** posts comments, applies labels
+and receives webhooks, because those must not be attributed to a person. A rejection returns the
+WPID to the pool; a publication keeps it, because by then it is a real WikiPathways identifier.
 
 ## Boundary
 

@@ -1209,3 +1209,26 @@ def test_requesting_changes_names_the_submitter_so_it_reaches_them(tmp_path):
     assert "@bob" in asked[0], "the submitter is not named, so GitHub may notify nobody"
     assert "@curator" in asked[0]
     assert "Please annotate the nodes." in asked[0]
+
+
+def test_rejection_names_the_submitter_too(tmp_path):
+    """A rejection is the message that most needs to reach the person who submitted, and under
+    the bot and user identities the pull request is not theirs, so nothing else would."""
+    app, current = _authed_app(tmp_path, curators=["curator"])
+    with TestClient(app) as c:
+        current["user"] = "bob"
+        pr = c.post(
+            "/api/submit",
+            files={"file": ("u.gpml", io.BytesIO(GOOD_GPML), "application/xml")},
+        ).json()["pr_number"]
+        current["user"] = "curator"
+        resp = c.post(f"/api/reviews/{pr}/reject", data={"note": "Duplicate of WP123."})
+        assert resp.status_code == 200, resp.text
+        repo = app.state.settings.content_repo
+
+    posted = app.state._fake.issue_comments[(repo, pr)]
+    rejected = [b for b in posted if "rejected this submission" in b]
+    assert rejected, "no rejection comment was posted"
+    assert "@bob" in rejected[0], "the submitter is not named, so GitHub may notify nobody"
+    assert "@curator" in rejected[0]
+    assert "Duplicate of WP123." in rejected[0]
