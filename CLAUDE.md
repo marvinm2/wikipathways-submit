@@ -380,9 +380,22 @@ The `synchronize` event that revision raised then ran workflow 1 **all ten jobs 
 > network **root**, so in production a submitter's fork is first-level, its source *is* the content
 > repository, and `merge-upstream` syncs it correctly. The sandbox target is itself a fork, so
 > submitters get forks **of forks**, where `merge-upstream` aims at a third repository and a direct
-> ref update cannot substitute. `_sync_fork` now picks its method from the topology
-> (see [[reference_merge_upstream_targets_network_source]]). **Update-in-fork has therefore never
-> been tested on a representative topology** — the testbed, not the app, is what has been failing.
+> ref update cannot substitute.
+>
+> **Fixed on 2026-08-05 by not needing the sync at all: a fork's branch is now cut from the
+> fork's own head** (`WriteTarget.base_repo`), which is native by definition and therefore legal
+> on any topology. `_sync_fork` also picks its method from the topology now and still runs, but as
+> an optimisation that keeps the base recent rather than a precondition. A stale base is safe
+> *here* because GPML is never line-merged and a pull request's diff is computed against the merge
+> base — so the "silent revert" the old note feared was not a real risk either. Live at
+> `sha256:f3736681…` (from `76df5cb`); rollback target `sha256:15fefbdd…`, a plain digest change
+> with no migration and no new secret.
+>
+> `FakeGitHubClient` could not express any of this, so 509 tests agreed with a write path GitHub
+> rejects — **the sixth time the fake has been the more capable of the two**. It now refuses a ref
+> at a commit the repository does not hold and takes `fork_can_sync=False`. Confirmed by reverting
+> the fix and watching two tests fail, which is the only thing that makes a regression test worth
+> having: the reverted code passed the *previous* suite in full.
 >
 > The reusable lesson is the shape of the list above: four consecutive explanations each fitted
 > every observation available when it was formed, and each died to one new measurement. The ones
