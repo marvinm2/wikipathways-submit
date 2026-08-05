@@ -610,10 +610,27 @@ the fork-specific setup and is the one to read when a run goes red. `sandbox-wor
 repaired copies staged for a pull request to that repo — **not opened yet**, and not part of this
 app; the fork already runs them.
 
-## Open decisions (still unresolved — scaffolding-plan §0, proposal §9)
+## Open decisions (scaffolding-plan §0, proposal §9)
 
-- Final repo name (`wikipathways-curator` vs `wikipathways-submit` vs `pathway-portal`).
-- License (likely Apache-2.0 to match org software norm; content is CC0 but this is code).
-- Curator whitelist mechanism: GitHub Team vs repo-tracked config file.
+Settled 2026-08-05:
+
+- **Name: `pathway-portal`.** Applied to the packaging metadata, the page title, the FastAPI app
+  and the docs. The **env prefix is deliberately not a flag day**: `Settings` reads `PORTAL_*`
+  first and falls back to `WPSUBMIT_*`, so the live service can migrate its variables and secrets
+  whenever, or never (`tests/test_config.py`). The **GHCR image is still
+  `ghcr.io/marvinm2/wikipathways-submit`** — renaming it mints a fresh package that defaults to
+  *private*, which would break the pull on TGX2 and so needs a visibility change alongside a
+  coordinated redeploy. Worth doing, not worth doing casually.
+- **Licence: Apache-2.0** (`LICENSE`, `NOTICE`), matching the org's software norm. It covers the
+  code only; pathway content stays CC0, which `NOTICE` says explicitly so the two are never
+  conflated.
+- **Curator whitelist: a GitHub Team** (`app/curators.py`, `*_CURATOR_TEAM='org/slug'`),
+  TTL-cached and fail-closed, with the config list as fallback. Closed by issue #9.
+- **Lock / reservation TTLs**: set from measurement rather than guesswork, and every expiry logs
+  how long the thing was actually held so they can be corrected again. Closed by issue #23.
+
+Still open:
+
 - Bot merge vs `main` branch protection interaction.
-- Lock / reservation TTLs (tune against real submitter behaviour).
+- Whether to detach the sandbox from its parent so the testbed stops being a fork of a fork
+  (a GitHub Support request; see the 2026-08-05 notes).

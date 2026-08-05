@@ -4,11 +4,40 @@ from __future__ import annotations
 import logging
 
 from pydantic import model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, EnvSettingsSource, SettingsConfigDict
+
+#: The prefix this project was born with, kept readable indefinitely. The rename to
+#: ``pathway-portal`` (2026-08-05) would otherwise have been a flag day: every environment
+#: variable on the live swarm service, plus the Docker secrets, would have had to change in the
+#: same breath as the image, and a typo in that window takes the service down for a cosmetic gain.
+#: Reading both instead means the deployment migrates whenever it likes, or never.
+_LEGACY_ENV_PREFIX = "WPSUBMIT_"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="WPSUBMIT_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="PORTAL_", env_file=".env", extra="ignore")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        """Read ``PORTAL_*`` first, then fall back to ``WPSUBMIT_*`` for anything unset.
+
+        Order matters and is the whole point: a deployment that sets both during a migration gets
+        the new name, so the cutover is a no-op rather than a coin toss.
+        """
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            EnvSettingsSource(settings_cls, env_prefix=_LEGACY_ENV_PREFIX),
+            file_secret_settings,
+        )
 
     # Registry datastore. SQLite for dev; PostgreSQL in production (see scaffolding-plan §0).
     database_url: str = "sqlite:///./registry.db"

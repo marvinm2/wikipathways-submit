@@ -1,7 +1,4 @@
-# wikipathways-curator
-
-> **Provisional name** — decide the final repo name before `gh repo create` (candidates:
-> `wikipathways-curator`, `wikipathways-submit`, `pathway-portal`).
+# Pathway Portal
 
 A hosted web app that is the front door for **submitting and curating WikiPathways pathways**
 now that all content lives on GitHub. It lets anyone submit a new pathway or an update without
@@ -9,9 +6,20 @@ touching git, opens a real pull request against
 [`wikipathways/wikipathways-database`](https://github.com/wikipathways/wikipathways-database),
 assigns the WPID, and gives curators a review dashboard with a rendered before/after preview.
 
-**Status:** planning. See [`docs/design-proposal.md`](docs/design-proposal.md) for the full
-rationale (grounded in a 3-month PR audit) and [`docs/scaffolding-plan.md`](docs/scaffolding-plan.md)
+**Status: deployed for testing, not yet in production.** It runs at
+[upload.wikipathways.org](https://upload.wikipathways.org) against a sandbox fork, where the whole
+lifecycle — submit, revise, update, review, approve, publish — has been driven end to end against
+live GitHub, including by third-party contributors from their own forks. It is **not** announced
+and has no production users. Before it can serve the real content repository, two pre-existing
+workflow defects there need fixing (see [`sandbox-workflows/`](sandbox-workflows/)), the curator
+list needs to be more than one person, and submitters need notifying when changes are requested.
+
+See [`docs/design-proposal.md`](docs/design-proposal.md) for the rationale, grounded in a
+three-month audit of 51 pull requests, and [`docs/scaffolding-plan.md`](docs/scaffolding-plan.md)
 for the build plan.
+
+Licensed under [Apache-2.0](LICENSE). Note this covers the **code**; WikiPathways pathway content
+is published separately under CC0.
 
 ## Why
 
