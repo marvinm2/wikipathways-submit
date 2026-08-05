@@ -103,6 +103,11 @@ class SubmissionService:
         """Where branches and file writes go — the fork in fork mode, otherwise the content repo."""
         return self._target.branch_repo
 
+    @property
+    def _base_repo(self) -> str:
+        """Where a new branch's base commit is read from. See ``WriteTarget.base_repo``."""
+        return self._target.base_repo
+
     def submit_new_pathway(
         self,
         *,
@@ -154,9 +159,9 @@ class SubmissionService:
 
                 # 4. Branch off the latest base.
                 try:
-                    # Base from the content repo, branch on the branch repo — see the note in
-                    # ``_submit_pipeline`` for why those must not be the same read in fork mode.
-                    base_sha = self._github.get_branch_sha(self._repo, self._base_branch)
+                    # Base and branch both on the branch repo — a ref can only point at a commit
+                    # that repository holds. See ``WriteTarget.base_repo``.
+                    base_sha = self._github.get_branch_sha(self._base_repo, self._base_branch)
                     self._github.create_branch(self._branch_repo, branch, base_sha)
                 except BranchAlreadyExists:
                     collided.append(wpid)
@@ -242,11 +247,12 @@ class SubmissionService:
         gpml_out = assign_wpid_str(gpml, PLACEHOLDER_WPID_STR, author=submitter)
         path = PLACEHOLDER_GPML_PATH
 
-        # Read the base from the **content repo**, never from the branch repo. In fork mode those
-        # differ, and a submitter's fork can be a year stale — cutting from its default branch
-        # would silently revert everything merged upstream since. A fork shares its parent's
-        # object database, so a ref created there at the upstream head resolves fine.
-        base_sha = self._github.get_branch_sha(self._repo, self._base_branch)
+        # Read the base from the **branch repo**, which in fork mode is the submitter's fork. The
+        # note that used to be here said the opposite, on the reasoning that a shared object
+        # database makes the upstream head resolvable from a fork. It is resolvable — `GET
+        # commits/<sha>` returns it — but it is not a legal ref target there, and GitHub says so
+        # with a 404 that reads exactly like a permission failure. See ``WriteTarget.base_repo``.
+        base_sha = self._github.get_branch_sha(self._base_repo, self._base_branch)
         for attempt in range(1, _BRANCH_COLLISION_RETRIES + 1):
             branch = self._pipeline_branch(submitter, suffix=attempt)
             try:

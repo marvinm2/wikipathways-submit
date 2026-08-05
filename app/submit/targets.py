@@ -48,6 +48,35 @@ class WriteTarget:
         return self.branch_repo != self.content_repo
 
     @property
+    def base_repo(self) -> str:
+        """Which repository a new branch's base commit is read from.
+
+        **The branch repository, which in fork mode is the submitter's fork, not the content
+        repo.** This reverses what the app did until 2026-08-05, and the reason is not a
+        preference: GitHub refuses to point a ref at a commit the repository does not itself hold.
+        A commit merely readable through the shared fork network answers **404** — as distinct
+        from 422 ``Object does not exist`` for a commit outside the network, and 201 for the
+        repository's own. So cutting a fork's branch from the *content* repo's head is only
+        possible while the fork happens to be level with it, which is true for a few minutes after
+        the fork is created and false ever after. That is the whole of issue #29, and it presented
+        as a permission problem for a day because 404 is also what GitHub says to a write you may
+        not make.
+
+        The fork's own head is native by definition, so this works on any topology and needs no
+        sync to have succeeded first. ``ensure_fork`` still fast-forwards where it can, which keeps
+        the base recent; this makes the write possible when it could not.
+
+        A stale base is safe here in a way it would not be in a normal codebase, and that is a
+        property of *this* repository rather than a general one: GPML is never line-merged and
+        derived files are regenerated, so the uploaded file replaces its predecessor wholesale
+        rather than being reconciled against it. GitHub computes the pull request's diff against
+        the merge base, so an old base does not drag unrelated files into the change. What a stale
+        base cannot protect against is two people editing one pathway, and that is what the
+        check-out lock is for.
+        """
+        return self.branch_repo
+
+    @property
     def head_repo(self) -> str | None:
         """What ``Review.head_repo`` should record — None meaning the content repo itself."""
         return self.branch_repo if self.is_cross_repo else None

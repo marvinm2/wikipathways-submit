@@ -335,9 +335,17 @@ class FakeGitHubClient(GitHubClient):
         previews: dict[int, dict] | None = None,
         login: str = "submitter",
         deny_writes_to: set[str] | None = None,
+        fork_can_sync: bool = True,
     ) -> None:
         #: Who this client is acting as, which is what ``ensure_fork`` names the fork after.
         self.login = login
+        #: Whether ``ensure_fork`` manages to bring the fork level with its parent. False models
+        #: the case the app cannot avoid — a fork of a fork, where `merge-upstream` aims at the
+        #: network source and a direct ref update is refused (issue #29) — leaving the fork
+        #: holding only the objects the test seeded on it. Without this the fake mirrors every
+        #: parent branch onto the fork, so a fork is *never* observably behind and no test can
+        #: reach the failure that took a day to find.
+        self.fork_can_sync = fork_can_sync
         #: Repositories this identity may read but not write — a lapsed authorisation, or a token
         #: scoped narrower than the caller assumed. ``create_branch`` is where that first shows.
         self.deny_writes_to = set(deny_writes_to or ())
@@ -402,15 +410,20 @@ class FakeGitHubClient(GitHubClient):
         fork = f"{self.login}/{repo.split('/', 1)[1]}"
         if (repo, fork) not in self.forks_created:
             self.forks_created.append((repo, fork))
-        # Stands in for the ref fast-forward: the fork is brought level with its parent's default
-        # branch on every call, which is what the real client does and what makes a base commit
-        # the fork's own rather than merely visible through the network. Note *parent*, not the
-        # network source — the distinction `merge-upstream` gets wrong here (issue #29).
+        # Stands in for the sync: the fork is brought level with its parent's default branch,
+        # which is what makes a base commit the fork's own rather than merely visible through the
+        # network. Note *parent*, not the network source — the distinction `merge-upstream` gets
+        # wrong for a fork of a fork (issue #29).
+        #
+        # `fork_can_sync=False` models the topology where that cannot be done. Reachability is
+        # NOT mirrored in that case, and deliberately: a fork does share its parent's object
+        # database for *reads*, but a shared object is not a legal ref target, and treating the
+        # two as equivalent is precisely the assumption that made this fake agree with a write
+        # path GitHub rejects.
+        if not self.fork_can_sync:
+            return fork
         if (repo, "main") in self.branches:
             self.branches[(fork, "main")] = self.branches[(repo, "main")]
-        # A fork shares its parent's object database, so every commit reachable from the parent
-        # is reachable from the fork. Mirroring the base branch is what makes a branch cut from
-        # the *upstream* head resolvable here, which is the whole point of doing it that way.
         for (r, branch), sha in list(self.branches.items()):
             if r == repo:
                 self.branches.setdefault((fork, branch), sha)
@@ -438,6 +451,18 @@ class FakeGitHubClient(GitHubClient):
             raise WriteDenied(f"create_branch({new_branch}) on {repo}: denied")
         if (repo, new_branch) in self.branches:
             raise BranchAlreadyExists(f"{new_branch} already exists in {repo}")
+        # A ref may only point at a commit *this* repository holds. A commit that is merely
+        # readable through a shared fork network is refused with 404 — the failure that took a day
+        # to identify in issue #29, and that this fake could not express at all, so 509 tests
+        # agreed with a write path GitHub rejected. Sixth time the fake has been the more capable
+        # of the two; modelling it here is what stops there being a seventh.
+        held = {sha for (r, _), sha in self.branches.items() if r == repo}
+        if held and from_sha not in held:
+            raise WriteDenied(
+                f"create_branch({new_branch}) on {repo}: 404 — {from_sha} is not an object "
+                f"{repo} holds. A commit readable through the fork network is not a legal ref "
+                f"target; cut from the branch repo's own head (WriteTarget.base_repo)."
+            )
         self.branches[(repo, new_branch)] = from_sha
 
     def get_file_sha(self, repo: str, ref: str, path: str) -> str | None:

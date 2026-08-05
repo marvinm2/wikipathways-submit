@@ -108,11 +108,18 @@ def test_submission_branches_on_the_fork_and_opens_a_cross_repo_pull_request():
     assert result.head_repo == FORK
 
 
-def test_the_branch_is_cut_from_upstream_not_from_the_stale_fork():
-    """The guarantee the whole update flow rests on, across the fork boundary.
+def test_the_branch_is_cut_from_the_forks_own_head():
+    """Reversed on 2026-08-05, and the reversal is the point (issue #29).
 
-    A contributor who forked a year ago has a default branch a year behind. Cutting from it would
-    make every submission a silent revert of everything merged since.
+    This test used to assert the opposite — cut from upstream, never from the fork — on the
+    reasoning that a stale fork would make every submission "a silent revert of everything merged
+    since". Both halves of that were wrong. GitHub will not point a ref at a commit the repository
+    does not hold, even one readable through the shared fork network: it answers **404**, which is
+    also what it says to a write you may not make, which is why this cost a day. And a stale base
+    does not revert anything, because a pull request's diff is computed against the merge base, so
+    only the file actually changed appears in it.
+
+    The fork's own head is native by definition, so the write is legal on any topology.
     """
     user = _user_client()
     target = _fork_target(user)
@@ -121,7 +128,63 @@ def test_the_branch_is_cut_from_upstream_not_from_the_stale_fork():
 
     result = _service(user, target).submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
 
-    assert user.branches[(FORK, result.branch)] == "upstream-head"
+    assert user.branches[(FORK, result.branch)] == "stale-fork-head"
+    # Still opened against the content repo's base branch, so GitHub does the three-way work.
+    assert user.pull_meta[result.pr_number]["base"] == "main"
+
+
+def test_a_fork_that_could_not_be_synced_still_submits_as_the_submitter():
+    """The regression test for issue #29, and the one the previous fake could not express.
+
+    A fork of a fork cannot be synced: `merge-upstream` aims at the network source and a direct
+    ref update is refused. So the fork stays behind, and the content repo's head is a commit it
+    does not hold — readable through the shared network, but **not a legal ref target**. Cutting
+    from it there is refused with 404, which sends a submission that should have been the
+    submitter's own down the bot fallback.
+
+    Cutting from the fork's own head is legal on any topology, which is what this pins. The
+    assertion that matters is `identity == "fork"`: a bot fallback here would still produce a
+    working pull request, so a test that only checked the submission succeeded would pass while
+    the feature was broken — which is exactly how this survived unnoticed.
+    """
+    user = _user_client(fork_can_sync=False)
+    # The fork holds only its own, older commit. The upstream head is nowhere in it.
+    user.branches[(FORK, "main")] = "stale-fork-head"
+    target = _fork_target(user)
+    assert target.identity == "fork", "precondition: fork mode resolved"
+
+    result = _service(user, target).submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
+
+    assert user.branches[(FORK, result.branch)] == "stale-fork-head"
+    assert result.head_repo == FORK, "must stay the submitter's own PR, not fall back to the bot"
+
+
+def test_the_fake_refuses_a_ref_at_a_commit_the_repo_does_not_hold():
+    """Pins the fake's own fidelity, because the bug it now models is invisible without it.
+
+    GitHub answers ref creation three ways and only one of them is an error the old fake could
+    produce. This is the middle case: an object that exists elsewhere in the network but not here.
+    """
+    user = _user_client(fork_can_sync=False)
+    user.branches[(FORK, "main")] = "stale-fork-head"
+
+    with pytest.raises(WriteDenied) as exc:
+        user.create_branch(FORK, "some-branch", "upstream-head")
+    assert "not an object" in str(exc.value)
+
+    user.create_branch(FORK, "fine-branch", "stale-fork-head")  # its own head: no raise
+
+
+def test_a_same_repo_submission_still_cuts_from_the_content_repo():
+    """`base_repo` is `branch_repo`, and outside fork mode those are the same repository — so the
+    reversal above must be invisible to every other mode. Guards against 'fixed fork mode, moved
+    the base out from under `user`/`bot`/the demo'."""
+    user = _user_client()
+    target = same_repo_target(user, REPO)
+
+    result = _service(user, target).submit_new_pathway(gpml=GOOD_GPML, submitter="alice")
+
+    assert user.branches[(REPO, result.branch)] == "upstream-head"
 
 
 def test_the_fork_is_ensured_once_and_reused():

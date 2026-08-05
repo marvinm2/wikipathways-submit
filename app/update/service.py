@@ -67,6 +67,11 @@ class UpdateService:
         return self._target.branch_repo
 
     @property
+    def _base_repo(self) -> str:
+        """Where a new branch's base commit is read from. See ``WriteTarget.base_repo``."""
+        return self._target.base_repo
+
+    @property
     def _head_repo(self) -> str | None:
         """What ``find_open_pr`` must be told, so a fork branch is not searched for on the base."""
         return self._target.head_repo
@@ -128,7 +133,9 @@ class UpdateService:
             # existing pathway keeps its original authorship.
             gpml_out = assign_wpid(gpml, wpid, author=submitter)
             branch = f"update/{wpid_str}"
-            base_sha = self._github.get_branch_sha(self._repo, self._base_branch)
+            # From the branch repo — the fork in fork mode — because a ref can only point at a
+            # commit that repository holds. See ``WriteTarget.base_repo``.
+            base_sha = self._github.get_branch_sha(self._base_repo, self._base_branch)
             try:
                 self._github.create_branch(self._branch_repo, branch, base_sha)
             except BranchAlreadyExists:
