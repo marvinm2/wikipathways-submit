@@ -19,11 +19,18 @@
        for someone signing in to upload one file — and it scared off a real colleague. There is no
        narrower option: OAuth scopes are account-wide, so `public_repo` is the least the app can
        ask for and still push a branch (issue #30). Naming it before the redirect is the whole
-       mitigation; the surprise is what does the damage, not the scope. #}
+       mitigation; the surprise is what does the damage, not the scope. The *why* now lives in the
+       OAuth App's description, which GitHub renders on the consent screen itself, so this only
+       has to stop that screen being a surprise.
+
+       Two constraints on any rewording. Keep "public repositories": it is GitHub's own phrase on
+       that screen, and the reassurance only attaches if the two read as the same thing. Keep
+       everything else free of git vocabulary — pull request, branch, fork mean nothing to the
+       biologists this is for. #}
     <span class="hero__cta-note">
-      Sign in with your GitHub account to submit or review. GitHub will ask for access to your
-      public repositories: that is the narrowest access it offers an app of this kind, and the
-      portal only uses it to push the pathway you upload and open its pull request.
+      Sign in with your GitHub account to submit or review. GitHub will then ask you to allow
+      access to your public repositories. It offers no smaller option, and this site only uses
+      it to submit the pathway you upload.
     </span>
     </div>
   </div>
